@@ -1,6 +1,5 @@
 use crate::config_var;
 
-static DB: tokio::sync::OnceCell<mongodb::Client> = tokio::sync::OnceCell::const_new();
 const NAME: &str = "db";
 
 pub async fn connect() -> mongodb::Database {
