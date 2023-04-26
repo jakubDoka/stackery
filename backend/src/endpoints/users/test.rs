@@ -10,23 +10,19 @@ use uuid::Uuid;
 
 use crate::{db, search_client::SearchUser, SearcherClient};
 
-pub async fn setup(searcher: impl Into<Option<SearcherClient>>) -> TestClient<impl Endpoint> {
+pub async fn setup(searcher: SearcherClient<SearchUser>) -> TestClient<impl Endpoint> {
     let db = db::connect().await;
     static DB_SETUP_ONCE: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
     DB_SETUP_ONCE
         .get_or_init(|| async {
-            db.collection::<()>(super::Users::TABLE)
+            db.collection::<()>(bf_shared::db::user::COLLECTION)
                 .drop(None)
                 .await
                 .unwrap();
         })
         .await;
 
-    let users = OpenApiService::new(
-        super::Users::new(db, searcher.into().unwrap_or_default()).await,
-        "users",
-        "1.0.0",
-    );
+    let users = OpenApiService::new(super::Users::new(db, searcher).await, "users", "1.0.0");
     TestClient::new(
         Route::new()
             .nest("/", users)
@@ -35,11 +31,7 @@ pub async fn setup(searcher: impl Into<Option<SearcherClient>>) -> TestClient<im
 }
 
 async fn register(client: &TestClient<impl Endpoint>, name: &str) -> TestResponse {
-    client
-        .post("/register")
-        .form(&[("name", name)])
-        .send()
-        .await
+    client.post("/").form(&[("name", name)]).send().await
 }
 
 #[tokio::test]
@@ -48,12 +40,14 @@ async fn test_register() {
 
     let mut searcher = SearcherClient::default();
     searcher
-        .expect_add_user()
-        .with(predicate::eq(user))
+        .expect_add()
+        .with(predicate::eq(SearchUser {
+            name: user.to_owned(),
+        }))
         .returning(|_| Ok(()));
     let client = setup(searcher).await;
 
-    let too_long = "a".repeat(super::MAX_NAME_LEN + 1);
+    let too_long = "a".repeat(bf_shared::db::MAX_NAME_LENGTH + 1);
     register(&client, too_long.as_str())
         .await
         .assert_status(StatusCode::BAD_REQUEST);
@@ -77,8 +71,10 @@ async fn test_login_logout() {
 
     let mut searcher = SearcherClient::default();
     searcher
-        .expect_add_user()
-        .with(predicate::eq(user))
+        .expect_add()
+        .with(predicate::eq(SearchUser {
+            name: user.to_owned(),
+        }))
         .returning(|_| Ok(()));
     let client = setup(searcher).await;
 
@@ -110,11 +106,7 @@ async fn test_login_logout() {
 }
 
 async fn delete(client: &TestClient<impl Endpoint>, cookie: &HeaderValue) -> TestResponse {
-    client
-        .delete("/delete")
-        .header("cookie", cookie)
-        .send()
-        .await
+    client.delete("/").header("cookie", cookie).send().await
 }
 
 #[tokio::test]
@@ -123,11 +115,13 @@ async fn test_delete() {
 
     let mut searcher = SearcherClient::default();
     searcher
-        .expect_add_user()
-        .with(predicate::eq(user))
+        .expect_add()
+        .with(predicate::eq(SearchUser {
+            name: user.to_owned(),
+        }))
         .returning(|_| Ok(()));
     searcher
-        .expect_delete_user()
+        .expect_delete()
         .with(predicate::eq(user))
         .returning(|_| Ok(()));
 

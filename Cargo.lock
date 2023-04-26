@@ -199,6 +199,7 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "bcrypt",
+ "bf-shared",
  "meilisearch-sdk",
  "mockall",
  "mockall_double",
@@ -243,6 +244,20 @@ dependencies = [
  "getrandom",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "beef"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
+
+[[package]]
+name = "bf-shared"
+version = "0.1.0"
+dependencies = [
+ "poem-openapi",
+ "serde",
 ]
 
 [[package]]
@@ -874,21 +889,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dioxus-router"
-version = "0.3.0"
-source = "git+https://github.com/DioxusLabs/dioxus#9b02b2169f38ba9344a4f32de22d1ab7a41242a4"
-dependencies = [
- "dioxus",
- "futures-channel",
- "futures-util",
- "log",
- "serde",
- "serde_urlencoded",
- "thiserror",
- "url",
-]
-
-[[package]]
 name = "dioxus-rsx"
 version = "0.0.3"
 source = "git+https://github.com/DioxusLabs/dioxus#9b02b2169f38ba9344a4f32de22d1ab7a41242a4"
@@ -1135,12 +1135,18 @@ checksum = "6c2141d6d6c8512188a7891b4b01590a45f6dac67afb4f255c4124dbb86d4eaa"
 name = "frontend"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.0",
+ "bcrypt",
+ "bf-shared",
  "dioxus",
  "dioxus-logger",
- "dioxus-router",
  "dioxus-web",
+ "getrandom",
+ "html-escape",
  "log",
  "reqwest",
+ "serde",
+ "stac",
  "thiserror",
  "web-sys",
 ]
@@ -1293,8 +1299,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c85e1d9ab2eadba7e5040d4e09cbd6d072b76a557ad64e797c2cb9d4da21d7e4"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1439,6 +1447,15 @@ dependencies = [
  "libc",
  "match_cfg",
  "winapi",
+]
+
+[[package]]
+name = "html-escape"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d1ad449764d627e22bfd7cd5e8868264fc9236e07c752972b4080cd351cb476"
+dependencies = [
+ "utf8-width",
 ]
 
 [[package]]
@@ -1908,6 +1925,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c000ca4d908ff18ac99b93a062cb8958d331c3220719c52e77cb19cc6ac5d2c1"
+dependencies = [
+ "logos-derive",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc487311295e0002e452025d6b580b77bb17286de87b57138f3b5db711cded68"
+dependencies = [
+ "beef",
+ "fnv",
+ "proc-macro2",
+ "quote",
+ "regex-syntax",
+ "syn 2.0.15",
+]
+
+[[package]]
+name = "logos-derive"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbfc0d229f1f42d790440136d941afd806bc9e949e2bcb8faa813b0f00d1267e"
+dependencies = [
+ "logos-codegen",
+]
+
+[[package]]
 name = "longest-increasing-subsequence"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2282,6 +2331,12 @@ checksum = "7940cf2ca942593318d07fcf2596cdca60a85c9e7fab408a5e21a4f9dcd40d87"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "parity-wasm"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1ad0aff30c1da14b1254fcb2af73e1fa9a28670e584a626f53a369d0e157304"
 
 [[package]]
 name = "parking"
@@ -2883,6 +2938,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoped-arena"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "645d0fd2f2d53abbe078b38ece982935064936e916bb2d696cf059e9d50f1d66"
+
+[[package]]
 name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3247,6 +3308,15 @@ dependencies = [
  "futures-io",
  "futures_codec",
  "memchr",
+]
+
+[[package]]
+name = "stac"
+version = "0.1.0"
+dependencies = [
+ "logos",
+ "parity-wasm",
+ "scoped-arena",
 ]
 
 [[package]]
@@ -3809,6 +3879,12 @@ dependencies = [
  "idna 0.3.0",
  "percent-encoding",
 ]
+
+[[package]]
+name = "utf8-width"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5190c9442dcdaf0ddd50f37420417d219ae5261bbf5db120d0f9bab996c9cba1"
 
 [[package]]
 name = "uuid"

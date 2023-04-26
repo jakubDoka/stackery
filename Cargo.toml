@@ -7,5 +7,7 @@ edition = "2021"
 members = [
 	"frontend",
 	"backend",
+	"bf-shared",
+	"stac",
 ]
 

@@ -1,0 +1,111 @@
+macro_rules! define_lexer {
+    (
+        subpatterns {$(
+            $subpattern:ident = $subpattern_repr:literal
+        )*}
+        tokens {$(
+            $token:ident = $token_repr:literal
+        )*}
+
+        regexes {$(
+            $regex:ident = $regex_repr:literal
+        )*}
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
+        #[logos(skip r"[ \t\n\r]+")]
+        #[repr(C)]
+        $(#[logos(subpattern $subpattern = $subpattern_repr)])*
+        pub enum Token {
+            $(#[token($token_repr)] $token,)*
+
+            $(#[regex($regex_repr)] $regex,)*
+        }
+
+        impl Token {
+            pub const TOKEN_COUNT: usize = [$($token_repr,)* $($regex_repr,)*].len();
+        }
+    };
+
+    (@token_repr $token:ident = $token_repr:literal) => {
+        $token_repr
+    };
+
+    (@token_repr $token:ident) => {
+        stringify!($token)
+    };
+}
+
+define_lexer! {
+    subpatterns {
+        ident_start = r"[a-zA-Z_]"
+        ident_content = r"[a-zA-Z0-9_]*"
+    }
+
+    tokens {
+        Import = "use"
+        Signature = "fn"
+        Decompose = "="
+    }
+
+    regexes {
+        Use = r"(?&ident_start)(?&ident_content)"
+        Decl = r":(?&ident_start)(?&ident_content)"
+        Bind = r"\$(?&ident_start)(?&ident_content)"
+        Str = r#""([^"]|\\")*""#
+        Int = r"[0-9]+"
+        Comment = r"//.*"
+    }
+}
+
+impl Token {
+    pub fn lexer(input: &str) -> logos::Lexer<Token> {
+        logos::Logos::lexer(input)
+    }
+
+    pub fn id(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Theme {
+    pub colors: [u32; Token::TOKEN_COUNT],
+}
+
+impl Theme {
+    pub fn color_of(&self, token: Token) -> u32 {
+        self.colors[token.id()]
+    }
+}
+
+#[macro_export]
+macro_rules! theme {
+    ($($($token:ident)* = $color:expr),* $(,)?) => {
+        $crate::Theme::from([$($(($crate::Token::$token, $color),)*)*])
+    };
+}
+
+impl From<[(Token, u32); Token::TOKEN_COUNT]> for Theme {
+    fn from(palette: [(Token, u32); Token::TOKEN_COUNT]) -> Self {
+        let mut colors = [u32::MAX; Token::TOKEN_COUNT];
+
+        for (token, color) in palette {
+            colors[token.id()] = color;
+        }
+
+        Self { colors }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        let keywords = 0x5FD7FF;
+        theme! {
+            Use = 0x5FD7FF,
+            Ident = 0xd0d0d0,
+            Str = 0x98C379,
+            Int = 0xb38600,
+            Comment = 0x7C8A92,
+        }
+    }
+}

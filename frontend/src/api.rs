@@ -1,9 +1,11 @@
+pub mod posts;
 pub mod users;
 
 static CLIENT: std::sync::LazyLock<reqwest::Client> =
     std::sync::LazyLock::new(|| reqwest::Client::new());
 
-const OTHER_MESSAGE: &str = "something whent wrong (get f***ed I guess)";
+const OTHER_MESSAGE: &str =
+    concat!("something went wrong (for dev: check browser console for logs)",);
 
 #[macro_export]
 macro_rules! reqwest_error_handler {
@@ -20,8 +22,8 @@ macro_rules! reqwest_error_handler {
 #[macro_export]
 macro_rules! reqwest_unexpected_status {
     ($response:expr, $error:ident) => {{
-        eprintln!("unexpected status code: {}", $response.status());
-        eprintln!("response body: {}", $response.text().await.unwrap());
+        log::error!("unexpected status code: {}", $response.status());
+        log::error!("response body: {}", $response.text().await.unwrap());
         Err($error::Other)
     }};
 }

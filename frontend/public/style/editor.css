@@ -1,0 +1,103 @@
+.editor[theme='dark'] {
+  --keyword: #ff79c6;
+  --string: #f1fa8c;
+  --number: #bd93f9;
+  --comment: #6272a4;
+  --ident: #f8f8f2;
+  --punctation: #f8f8f2;
+  --declaration: #50fa7b;
+  --error: #ff5555;
+
+  --error-background: #aa0000;
+}
+
+.editor[theme='light'] {
+  --keyword: #6e00ff;
+  --string: #ffc400;
+  --number: #00b0ff;
+  --comment: #8e8e8e;
+  --ident: #2e2e2e;
+  --punctation: #2e2e2e;
+  --declaration: #00c853;
+  --error: #ff5555;
+  
+  --error-background: #aa0000;
+}
+
+.editor {
+  --tab-size: 2;
+}
+
+.Import { color: var(--keyword) }
+.Str { color: var(--string); }
+.Int { color: var(--number); }
+.Comment { color: var(--comment); }
+.Use { color: var(--ident); }
+.Declare, .Bind { color: var(--declaration); }
+.Decompose, .ListSep, .ListEnd { color: var(--punctation); }
+.Error { color: var(--error); }
+
+.AnalyzerError {
+  color: var(--text);
+  background-color: var(--error-background);
+}
+
+
+.editor {
+  background-color: var(--item-background);
+  transition: border var(--transition-speed) ease-in-out;
+  border: 0px solid var(--item-background);
+  margin-bottom: var(--spacing);
+}
+
+.editor:focus-within, .editor:hover {
+  outline: none;
+  border: var(--border-width) solid var(--highlight);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  tab-size: var(--tab-size);
+  padding-left: 3px;
+  border-radius: 0px;
+}
+
+pre * {
+  border-radius: 0px;
+}
+
+.editor-content {
+  display: flex;
+}
+
+.editor-content-code {
+  flex: 1;
+}
+
+.editor-content-numbers {
+  border-right: 1px solid var(--highlight);
+  margin-right: 3px;
+  padding-right: 3px;
+  flex: 0;
+}
+
+.editor-mode {
+  margin: 3px;
+  background-color: var(--background);
+}
+
+.cursor-nor {
+  background: var(--highlight);
+  border-radius: 0px;
+}
+
+.cursor-ins {
+  border-left: 1px solid var(--highlight);
+  box-sizing: border-box;
+}
+
+.cursor-fnd {
+  border-bottom: 1px solid var(--highlight);
+  box-sizing: border-box;
+}

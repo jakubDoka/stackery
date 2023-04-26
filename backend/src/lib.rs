@@ -1,4 +1,4 @@
-#![feature(once_cell)]
+#![feature(lazy_cell)]
 
 #[macro_export]
 macro_rules! http_try {
@@ -38,8 +38,12 @@ pub async fn run() {
     }
 
     let db = db::connect().await;
-    let searcher = SearcherClient::new().await;
-    let router = endpoints::router(db, searcher).await;
+
+    let search_client = search_client::connect();
+    let users = SearcherClient::new(&search_client).await;
+    let posts = SearcherClient::new(&search_client).await;
+
+    let router = endpoints::router(db, users, posts).await;
 
     let listener = poem::listener::TcpListener::bind(HOST.as_str());
 
