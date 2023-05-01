@@ -199,7 +199,6 @@ impl EditingState {
                     };
 
                     a.check(code, status).await;
-
                     errors.set(a.errors().collect());
                 });
             }

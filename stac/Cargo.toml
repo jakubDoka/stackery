@@ -7,5 +7,4 @@ edition = "2021"
 
 [dependencies]
 logos = "0.13.0"
-parity-wasm = "0.45.0"
 scoped-arena = { version = "0.4.1", features = ["alloc", "allocator_api"] }

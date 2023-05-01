@@ -17,11 +17,13 @@ pub use {
 
 use dioxus::prelude::*;
 
+use crate::navbar::use_app_state;
+
 use self::editor::{CodeDisplayer, DisplayState};
 
 pub trait SearchResult {
     fn key(&self) -> &str;
-    fn render<'a, T>(&'a self, cx: Scope<'a, T>) -> Element<'a> {
+    fn render<'a>(&'a self, cx: &'a ScopeState) -> Element<'a> {
         cx.render(rsx! { self.key() })
     }
 }
@@ -37,13 +39,14 @@ impl SearchResult for bf_shared::search::post::Model {
         &self.name
     }
 
-    fn render<'a, T>(&'a self, cx: Scope<'a, T>) -> Element<'a> {
-        let displayer = use_state(cx, || {
+    fn render<'a>(&'a self, cx: &'a ScopeState) -> Element<'a> {
+        let displayer = {
             let mut d = CodeDisplayer::default();
             let state = DisplayState::from_str(&self.code);
             d.display(state, None);
             d.into_string()
-        });
+        };
+        let app_state = use_app_state(cx);
 
         cx.render(rsx! { div {
             class: "post-search-result",
@@ -56,7 +59,8 @@ impl SearchResult for bf_shared::search::post::Model {
                 "by: {self.author}"
             }
             pre {
-                class: "post-code",
+                class: "post-code editor",
+                "theme": "{app_state.theme()}",
                 dangerous_inner_html: "{displayer}"
             }
         } })
@@ -78,7 +82,8 @@ where
 
     #[inline_props]
     fn SearchResult<'a, T: SearchResult + 'static>(cx: Scope, data: &'a T) -> Element {
-        cx.render(rsx! { data.render(cx) })
+        let element = data.render(cx);
+        cx.render(rsx! { element })
     }
 
     cx.render(rsx! {
@@ -328,6 +333,7 @@ where
             div { class: "form-state", "{state.get()}" }
             div {
                 class: "form-issues",
+                hidden: field_issues.get().is_empty(),
                 for issue in field_issues.get().iter() {
                     div { class: "form-error", issue.as_str() }
                 }

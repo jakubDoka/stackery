@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use bf_shared::db;
 use dioxus::core::IntoDynNode;
 
 use crate::pages::{Name, Password};
@@ -151,7 +152,8 @@ crate::reqwest_error_handler!(LogoutError);
 
 pub async fn search(query: String) -> Result<Vec<String>, SearchError> {
     let response = super::CLIENT
-        .get(crate::url!("users/search?query={query}"))
+        .get(crate::url!("users/search"))
+        .query(&[("query", query)])
         .send()
         .await?;
 
@@ -174,3 +176,47 @@ impl<'a> IntoDynNode<'a> for SearchError {
 }
 
 crate::reqwest_error_handler!(SearchError);
+
+pub async fn get_state() -> Result<db::session::AppState, GetStateError> {
+    let response = super::CLIENT.get(crate::url!("users/state")).send().await?;
+
+    match response.status() {
+        reqwest::StatusCode::OK => Ok(response.json().await?),
+        reqwest::StatusCode::UNAUTHORIZED => Err(GetStateError::Unauthorized),
+        _ => crate::reqwest_unexpected_status!(response, GetStateError),
+    }
+}
+
+#[derive(Copy, Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum GetStateError {
+    #[error("not even logged in")]
+    Unauthorized,
+    #[error("{OTHER_MESSAGE}")]
+    Other,
+}
+
+crate::reqwest_error_handler!(GetStateError);
+
+pub async fn set_state(state: &db::session::AppState) -> Result<(), SetStateError> {
+    let state = serde_json::to_string(state).unwrap();
+
+    let response = super::CLIENT
+        .post(crate::url!("users/state"))
+        .header(reqwest::header::CONTENT_TYPE, "text/plain")
+        .body(state)
+        .send()
+        .await?;
+
+    match response.status() {
+        reqwest::StatusCode::OK => Ok(()),
+        _ => crate::reqwest_unexpected_status!(response, SetStateError),
+    }
+}
+
+#[derive(Copy, Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SetStateError {
+    #[error("{OTHER_MESSAGE}")]
+    Other,
+}
+
+crate::reqwest_error_handler!(SetStateError);

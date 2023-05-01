@@ -1,4 +1,4 @@
-use crate::use_theme;
+use crate::navbar::use_app_state;
 
 use self::state::{EditingContext, EditingState};
 use super::InputData;
@@ -32,23 +32,23 @@ impl InputData for Code {
         };
         let editor = &*cx.use_hook(|| RefCell::new(Editor::default()));
         use_memo(cx, ctx.errors, |_| editor.borrow_mut().redraw(ctx));
-        let theme = use_theme(cx);
+        let app_state = use_app_state(cx);
 
         cx.render(rsx! { div {
             class: "editor",
-            "theme": "{theme}",
+            "theme": "{app_state.theme()}",
             onfocus: move |_| editor.borrow_mut().set_focused(true, ctx),
             onfocusout: move |_| editor.borrow_mut().set_focused(false, ctx),
             onkeydown: move |e| editor.borrow_mut().oninput(e, ctx),
             prevent_default: "onkeydown",
             tabindex: 0,
 
-            input {
-                r#type: Self::TYPE,
+            textarea {
                 name: name,
                 hidden: true,
                 value: "{editor.borrow().state.code()}"
             }
+
             div {
                 class: "editor-content",
                 pre {

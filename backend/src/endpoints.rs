@@ -8,41 +8,33 @@ use poem::{
 use poem_openapi::OpenApiService;
 use uuid::Uuid;
 
+use self::users::Sessions;
+
 mod posts;
 mod users;
 
 #[macro_export]
 macro_rules! auth {
-    ($db:expr, $session:expr, $response_name:ident) => {
-        http_try!($crate::endpoints::auth_session(&$db, $session).await,
+    ($self:expr, $session:expr, $response_name:ident) => {
+        http_try!($crate::endpoints::auth_session(&$self.sessions, $session).await,
             $response_name::Unauthorized,
             trace(e) "failed to verify session"; "ERROR" => e.to_string())
     };
 }
 
 async fn auth_session(
-    db: &mongodb::Database,
+    sessions: &Sessions,
     session: &Session,
 ) -> Result<SessionCredentials, &'static str> {
     let creds = session
         .get::<SessionCredentials>(api::session::KEY)
         .ok_or("no session")?;
 
-    #[derive(serde::Deserialize)]
-    struct Session {}
-
-    match db
-        .collection::<Session>(db::session::COLLECTION)
-        .find_one(doc! { db::session::ID: creds.salt.to_string() }, None)
-        .await
-    {
-        Ok(Some(Session {})) => Ok(creds),
-        Ok(None) => Err("session expired"),
-        Err(e) => {
-            crate::log!(error, "failed to select session"; "ERROR" => e.to_string());
-            Err("internal server error")
-        }
+    if !sessions.is_active(creds.salt) {
+        return Err("session expired");
     }
+
+    Ok(creds)
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -57,9 +49,15 @@ pub async fn router(
     users: SearcherClient<SearchUser>,
     posts: SearcherClient<bf_shared::search::post::Model>,
 ) -> impl Endpoint {
+    let sessions = Sessions::new();
+
     let mut route = Route::new();
-    route = endpoint("users", users::Users::new(db.clone(), users).await, route);
-    route = endpoint("posts", posts::Posts::new(db, posts).await, route);
+    route = endpoint(
+        "users",
+        users::Users::new(db.clone(), users, sessions.clone()).await,
+        route,
+    );
+    route = endpoint("posts", posts::Posts::new(db, posts, sessions).await, route);
     route
         .nest("/", static_files())
         .with(CookieSession::new(users::cookie_config()))
@@ -76,5 +74,5 @@ fn endpoint<T: poem_openapi::OpenApi + 'static>(name: &str, service: T, route: R
 }
 
 fn static_files() -> impl Endpoint {
-    poem::endpoint::StaticFilesEndpoint::new(".").index_file("index.html")
+    poem::endpoint::StaticFilesEndpoint::new("public").index_file("index.html")
 }

@@ -101,8 +101,28 @@ pub struct Source {
     marked: bool,
 }
 
+impl Source {
+    pub fn deps(&self) -> impl Iterator<Item = (&str, SourceId)> + '_ {
+        self.deps.iter().map(|(id, dep)| (id.as_str(), *dep))
+    }
+
+    pub fn source(&self) -> &str {
+        &self.code
+    }
+
+    pub fn code_start(&self) -> ParserContext {
+        self.code_start.clone()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceId(usize);
+
+impl SourceId {
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
 
 #[derive(Default)]
 struct Sources {

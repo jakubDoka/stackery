@@ -8,7 +8,7 @@ use poem::{
 use poem_openapi::OpenApiService;
 use uuid::Uuid;
 
-use crate::{db, search_client::SearchUser, SearcherClient};
+use crate::{db, endpoints::users::Sessions, search_client::SearchUser, SearcherClient};
 
 pub async fn setup(searcher: SearcherClient<SearchUser>) -> TestClient<impl Endpoint> {
     let db = db::connect().await;
@@ -22,7 +22,11 @@ pub async fn setup(searcher: SearcherClient<SearchUser>) -> TestClient<impl Endp
         })
         .await;
 
-    let users = OpenApiService::new(super::Users::new(db, searcher).await, "users", "1.0.0");
+    let users = OpenApiService::new(
+        super::Users::new(db, searcher, Sessions::new()).await,
+        "users",
+        "1.0.0",
+    );
     TestClient::new(
         Route::new()
             .nest("/", users)

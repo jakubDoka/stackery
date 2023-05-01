@@ -6,12 +6,14 @@ macro_rules! define_lexer {
         tokens {$(
             $token:ident = $token_repr:literal
         )*}
-
         regexes {$(
             $regex:ident = $regex_repr:literal
         )*}
+        operators {$(
+            ($($op:literal)*) = $prec:literal
+        )*}
     ) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
+        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
         #[logos(skip r"[ \t\n\r]+")]
         #[repr(C)]
         $(#[logos(subpattern $subpattern = $subpattern_repr)])*
@@ -19,6 +21,12 @@ macro_rules! define_lexer {
             $(#[token($token_repr)] $token,)*
 
             $(#[regex($regex_repr)] $regex,)*
+
+            $($(#[token($op, |_| $prec)])*)*
+            Op(u8),
+
+            #[default]
+            Eof,
         }
 
         impl Token {
@@ -28,6 +36,8 @@ macro_rules! define_lexer {
                 match self {
                     $(Self::$token => stringify!($token),)*
                     $(Self::$regex => stringify!($regex),)*
+                    Self::Op(_) => "operator",
+                    Self::Eof => "end of file",
                 }
             }
         }
@@ -50,20 +60,24 @@ define_lexer! {
 
     tokens {
         Import = "use"
-        Decompose = "="
         ListSep = ","
         ListEnd = ";"
+        Bind = ":"
+        Func = "fn"
+        Call = "@"
     }
 
     regexes {
         Use = r"(?&ident_start)(?&ident_content)*"
-        Declare = r"@(?&ident_content)+"
-        Bind = r"\$(?&ident_content)+"
-
         Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
 
         Comment = r"//.*"
+    }
+
+    operators {
+        ("*" "/") = 3
+        ("+" "-") = 4
     }
 }
 
@@ -72,9 +86,5 @@ impl Token {
 
     pub fn lexer(input: &str) -> logos::Lexer<Token> {
         logos::Logos::lexer(input)
-    }
-
-    pub fn id(self) -> usize {
-        self as usize
     }
 }

@@ -48,6 +48,10 @@ impl<'ctx> ErrorBuilder<'ctx> {
         self.error.message.push_str(&message.to_string());
         self
     }
+
+    pub fn terminate(self) -> Option<!> {
+        None
+    }
 }
 
 impl Drop for ErrorBuilder<'_> {

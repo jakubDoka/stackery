@@ -8,12 +8,15 @@ use crate::SearcherClient;
 
 use bf_shared::*;
 
+use super::users::Sessions;
+
 #[cfg(test)]
 mod test;
 
 pub struct Posts {
     db: mongodb::Database,
     searcher: SearcherClient<bf_shared::search::post::Model>,
+    sessions: Sessions,
 }
 
 #[poem_openapi::OpenApi]
@@ -21,13 +24,18 @@ impl Posts {
     pub async fn new(
         db: mongodb::Database,
         searcher: SearcherClient<bf_shared::search::post::Model>,
+        sessions: Sessions,
     ) -> Self {
-        Self { db, searcher }
+        Self {
+            db,
+            searcher,
+            sessions,
+        }
     }
 
     #[oai(method = "post", path = "/")]
     async fn create(&self, session: &Session, post: Json<api::post::Model>) -> CreateResponse {
-        let session = crate::auth!(self.db, session, CreateResponse);
+        let session = crate::auth!(self, session, CreateResponse);
 
         let Json(api::post::Model { name, code }) = post;
 

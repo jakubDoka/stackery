@@ -1,6 +1,6 @@
-# compile frontend only if --frontend flag is passed
-
-# download meilisearch if it does not exist in this directory
+killall mongod
+killall meilisearch
+killall backend
 
 if [ "$1" = "frontend" ] || [ "$1" = "all" ]; then
     cd frontend
@@ -13,8 +13,10 @@ if [ "$1" = "backend" ] || [ "$1" = "all" ]; then
 fi
 
 mkdir build
-cp -r frontend/dist/* build/
-cp target/wasm32-unknown-unknown/debug/frontend.wasm build/
+mkdir build/public
+mkdir build/app-state
+
+cp -r frontend/dist/* build/public/
 cp target/debug/backend build
 
 cd build
@@ -24,10 +26,6 @@ if [ ! -f meilisearch ]; then
 fi
 
 mkdir db
-
-killall mongod
-killall meilisearch
-killall backend
 
 mongod --dbpath db &
 ./meilisearch &

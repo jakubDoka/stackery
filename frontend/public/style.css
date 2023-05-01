@@ -49,15 +49,8 @@ html, body {
     color var(--transition-speed) ease-in-out;
 }
 
-.route-active {
-  transition: transform var(--transition-speed);
-  height: 0;
-}
-
 .route-hidden {
-  transform: scale(1, 0);
-  transition: transform var(--transition-speed);
-  height: 0;
+  display: none;
 }
 
 .form {
@@ -65,15 +58,22 @@ html, body {
   padding: var(--spacing);
 }
 
+.form-fields {
+  margin-bottom: var(--spacing);
+}
+
 .form-field {
   display: block;
-  padding: 8px;
   font-size: var(--form-font-size);
   border: none;
   background-color: var(--item-background);
-  margin-bottom: var(--spacing);
   box-sizing: border-box;
-  transition: background-color var(--transition-speed) ease-in-out;
+  padding: calc(var(--spacing) / 2);
+  width: 100%;
+}
+
+.form-fields .form-field {
+  margin-bottom: var(--spacing);
 }
 
 .form-field:focus, .form-field:hover {
@@ -90,19 +90,18 @@ html, body {
   font-weight: bold;
   background-color: var(--item-background);
   border: none;
-  transition: background-color var(--transition-speed) ease-in-out;
 }
 
 .form-submit:hover {
   background-color: var(--highlight);
 }
 
-.form-state {
+.form-state:not(:empty) {
   color: var(--text);
   margin-top: var(--spacing);
 }
 
-.form-issues {
+.form-issues:not(:empty) {
   margin-top: var(--spacing);
 }
 
@@ -158,60 +157,3 @@ html, body {
   background-color: var(--highlight);
 }
 
-.editor {
-  background-color: var(--item-background);
-  transition: border var(--transition-speed) ease-in-out;
-  border: 0px solid var(--item-background);
-  margin-bottom: var(--spacing);
-}
-
-.editor:focus-within, .editor:hover {
-  outline: none;
-  border: var(--border-width) solid var(--highlight);
-}
-
-pre {
-  margin: 0;
-  white-space: pre-wrap;
-  padding-left: 3px;
-  border-radius: 0px;
-}
-
-pre * {
-  border-radius: 0px;
-}
-
-.editor-content {
-  display: flex;
-}
-
-.editor-content-code {
-  flex: 1;
-}
-
-.editor-content-numbers {
-  border-right: 1px solid var(--highlight);
-  margin-right: 3px;
-  padding-right: 3px;
-  flex: 0;
-}
-
-.editor-mode {
-  margin: 3px;
-  background-color: var(--background);
-}
-
-.cursor-nor {
-  background: var(--highlight);
-  border-radius: 0px;
-}
-
-.cursor-ins {
-  border-left: 1px solid var(--highlight);
-  box-sizing: border-box;
-}
-
-.cursor-fnd {
-  border-bottom: 1px solid var(--highlight);
-  box-sizing: border-box;
-}

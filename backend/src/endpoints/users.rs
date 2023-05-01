@@ -1,33 +1,73 @@
 use crate::{search_client::SearchUser, SearcherClient};
-use bf_shared::*;
-use mongodb::{
-    bson::{doc, Document},
-    options::CreateIndexOptions,
-    IndexModel,
-};
+use bf_shared::{db::session::AppState, *};
+use mongodb::bson::{doc, Document};
 use poem::{
+    middleware::SizeLimit,
     session::{CookieConfig, Session},
     web::cookie::{CookieKey, SameSite},
+    Endpoint, EndpointExt,
 };
 use poem_openapi::{
+    __private::serde_json,
     param::Query,
-    payload::{Form, Json},
+    payload::{Form, Json, PlainText},
 };
-use uuid::Uuid;
 
+pub use session::Sessions;
+
+use self::session::AppStateManager;
+
+mod session;
 #[cfg(test)]
 mod test;
 
 pub struct Users {
     db: mongodb::Database,
     searcher: SearcherClient<SearchUser>,
+    sessions: Sessions,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, poem_openapi::Object)]
+struct UpdateState {
+    text: String,
+}
+
+fn size_limit(e: impl Endpoint) -> impl Endpoint {
+    e.with(SizeLimit::new(db::session::AppState::DRAFT_MAX_SIZE))
 }
 
 #[poem_openapi::OpenApi]
 impl Users {
-    pub async fn new(db: mongodb::Database, searcher: SearcherClient<SearchUser>) -> Self {
-        Self::create_session_ttl(&db).await;
-        Self { db, searcher }
+    pub async fn new(
+        db: mongodb::Database,
+        searcher: SearcherClient<SearchUser>,
+        sessions: Sessions,
+    ) -> Self {
+        Self {
+            db,
+            searcher,
+            sessions,
+        }
+    }
+
+    #[oai(path = "/state", method = "get")]
+    async fn state(&self, session: &Session) -> GetStateResponse {
+        let creds = crate::auth!(self, session, GetStateResponse);
+
+        let Some(state) = AppStateManager::load_app_state(&creds.name).await else {
+            return GetStateResponse::Ok(PlainText(serde_json::to_string(&AppState::new(&creds.name)).unwrap()));
+        };
+
+        GetStateResponse::Ok(PlainText(state))
+    }
+
+    #[oai(path = "/state", method = "post", transform = "size_limit")]
+    async fn update_state(&self, session: &Session, state: PlainText<String>) -> PostStateResponse {
+        let creds = crate::auth!(self, session, PostStateResponse);
+
+        AppStateManager::store_app_state(&creds.name, state.0).await;
+
+        PostStateResponse::Ok
     }
 
     #[oai(path = "/login", method = "post")]
@@ -61,7 +101,7 @@ impl Users {
         let credentials = super::SessionCredentials {
             name: name.to_string(),
             password_hash,
-            salt: Uuid::new_v4(),
+            salt: self.sessions.create().await,
         };
 
         let session_record = doc! { db::session::ID: credentials.salt.to_string() };
@@ -78,7 +118,7 @@ impl Users {
 
     #[oai(path = "/logout", method = "post")]
     async fn logout(&self, session: &Session) -> LogoutResopnse {
-        let creds = crate::auth!(self.db, session, LogoutResopnse);
+        let creds = crate::auth!(self, session, LogoutResopnse);
 
         http_try!(
             self.sessions::<()>().delete_one(doc! { db::session::ID: creds.salt.to_string() }, None).await,
@@ -87,6 +127,9 @@ impl Users {
         );
 
         session.purge();
+
+        self.sessions.remove(creds.salt);
+
         LogoutResopnse::Ok
     }
 
@@ -139,7 +182,7 @@ impl Users {
 
     #[oai(path = "/", method = "delete")]
     async fn delete(&self, session: &Session) -> DeleteResponse {
-        let credentials = crate::auth!(self.db, session, DeleteResponse);
+        let credentials = crate::auth!(self, session, DeleteResponse);
         self.logout(session).await;
 
         let doc = doc! { db::user::NAME: credentials.name.clone() };
@@ -170,20 +213,6 @@ impl Users {
         SearchResponse::Ok(Json(results.into_iter().map(|i| i.name).collect()))
     }
 
-    async fn create_session_ttl(db: &mongodb::Database) {
-        db.collection::<()>(db::session::COLLECTION)
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { db::session::ID: 1 })
-                    .build(),
-                CreateIndexOptions::builder()
-                    .max_time(db::session::DURATION)
-                    .build(),
-            )
-            .await
-            .expect("failed to create index");
-    }
-
     fn users<T>(&self) -> mongodb::Collection<T> {
         self.db.collection(db::user::COLLECTION)
     }
@@ -209,6 +238,24 @@ pub fn cookie_config() -> CookieConfig {
         .secure(true)
         .same_site(SameSite::Lax)
         .max_age(std::time::Duration::from_secs(60 * 60))
+}
+
+#[derive(poem_openapi::ApiResponse)]
+enum GetStateResponse {
+    #[oai(status = 200)]
+    Ok(PlainText<String>),
+    // Not logged in
+    #[oai(status = 401)]
+    Unauthorized,
+}
+
+#[derive(poem_openapi::ApiResponse)]
+enum PostStateResponse {
+    #[oai(status = 200)]
+    Ok,
+    // Not logged in
+    #[oai(status = 401)]
+    Unauthorized,
 }
 
 #[derive(poem_openapi::ApiResponse)]
