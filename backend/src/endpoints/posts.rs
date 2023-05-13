@@ -107,6 +107,10 @@ impl Posts {
     async fn search(&self, query: Query<String>) -> SearchResponse {
         let Query(query) = query;
 
+        if query.is_empty() {
+            return SearchResponse::Ok(Json(Vec::new()));
+        }
+
         let search_result = http_try!(self.searcher.search(&query).await,
             SearchResponse::InternalServerError,
             error "failed to search posts");

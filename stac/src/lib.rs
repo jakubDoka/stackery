@@ -7,12 +7,12 @@
     return_position_impl_trait_in_trait,
     never_type,
     int_roundings,
-    if_let_guard
+    if_let_guard,
+    inline_const
 )]
 
 mod codegen;
 mod errors;
-mod interpreter;
 mod lexer;
 mod loader;
 mod parser;

@@ -10,5 +10,8 @@ members = [
 	"bf-shared",
 	"stac",
 ]
+exclude = [
+	"wasm-emit"
+]
 
 
