@@ -1,6 +1,6 @@
 use core::{mem::ManuallyDrop, num::NonZeroU32};
 
-use crate::{module::DataSection, *};
+use crate::*;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -22,20 +22,23 @@ pub enum SectionId {
 
 pub struct IndexSpaceOffset(usize);
 
-pub struct VecSectionEncoder<'a, T, B: Backend> {
+impl IndexSpaceOffset {
+    pub(super) fn new(arg: usize) -> Self {
+        Self(arg as usize)
+    }
+}
+
+pub struct VecSectionEncoder<'a, T: VecSection, B: Backend> {
     size: IntegerId,
-    inner: VecEncoder<'a, T, B>,
+    pub(super) inner: VecEncoder<'a, T::Element<'a, B>, B>,
     index_offset: usize,
 }
 
-impl<'a, T, B: Backend> VecSectionEncoder<'a, T, B> {
+impl<'a, T: VecSection, B: Backend> VecSectionEncoder<'a, T, B> {
     pub fn new(
         mut encoder: Encoder<'a, B>,
         IndexSpaceOffset(index_offset): IndexSpaceOffset,
-    ) -> Self
-    where
-        T: VecSection,
-    {
+    ) -> Self {
         encoder.byte(T::ID as u8);
         Self {
             size: encoder.register_integer(),
@@ -44,33 +47,30 @@ impl<'a, T, B: Backend> VecSectionEncoder<'a, T, B> {
         }
     }
 
-    pub fn push(&mut self, value: T) -> T::Index
+    pub fn push(&mut self, value: T::Element<'a, B>) -> T::Index
     where
-        T: VecSection + Encode,
+        T::Element<'a, B>: Encode,
     {
         let index = T::Index::new(self.inner.written() + self.index_offset);
         self.inner.push(value);
         index
     }
 
-    pub fn finish(mut self) -> T::Range
-    where
-        T: VecSection,
-    {
+    pub fn finish(mut self) -> T {
         let start = self.inner.inner().integers.offset(self.size) - 1;
         let current_len = self.inner.inner().output.len();
         self.inner.inner().update_byte_range(self.size);
-        T::Range::new(start, current_len, self.inner.written(), Guard(()))
+        T::new(start, current_len, self.inner.written(), Guard(()))
     }
 
-    pub fn encoder(&'a mut self) -> (T::Index, T)
+    pub fn encoder<'b>(&'b mut self) -> (T::Index, T::Element<'b, B>)
     where
-        T: NestedEncode<'a, B> + VecSection,
+        T: NestedEncode,
     {
-        (
-            T::Index::new(self.inner.written() + self.index_offset),
-            self.inner.encoder(),
-        )
+        (T::Index::new(self.inner.written() + self.index_offset), {
+            self.inner.inc_written();
+            T::new_encoder(self.inner.inner(), Guard(()))
+        })
     }
 }
 
@@ -79,6 +79,10 @@ pub struct DataEncoder<'a, B: Backend> {
 }
 
 impl<'a, B: Backend> DataEncoder<'a, B> {
+    pub(super) fn new(encoder: Encoder<'a, B>) -> Self {
+        Self { inner: encoder }
+    }
+
     pub fn active(mut self, mem: Option<Memidx>) -> ActiveDataEncoder<'a, B> {
         match mem {
             Some(Memidx::ZERO) | None => {
@@ -104,12 +108,6 @@ impl<'a, B: Backend> DataEncoder<'a, B> {
     }
 }
 
-impl<'a, B: Backend> NestedEncode<'a, B> for DataEncoder<'a, B> {
-    fn new(encoder: Encoder<'a, B>, _: Guard) -> Self {
-        Self { inner: encoder }
-    }
-}
-
 impl<'a, B: Backend> Drop for DataEncoder<'a, B> {
     fn drop(&mut self) {
         self.inner.byte(0x00); // default variant
@@ -119,11 +117,6 @@ impl<'a, B: Backend> Drop for DataEncoder<'a, B> {
 }
 
 impl<B: Backend> Sealed for DataEncoder<'_, B> {}
-impl<B: Backend> VecSection for DataEncoder<'_, B> {
-    const ID: SectionId = SectionId::Data;
-    type Index = Dataidx;
-    type Range = DataSection;
-}
 
 pub struct ActiveDataEncoder<'a, B: Backend> {
     inner: ManuallyDrop<ExprEncoder<'a, B>>,
@@ -163,20 +156,18 @@ pub struct CodeEncoder<'a, B: Backend> {
 }
 
 impl<'a, B: Backend> CodeEncoder<'a, B> {
+    pub(super) fn new(mut encoder: Encoder<'a, B>) -> Self {
+        Self {
+            size: encoder.register_integer(),
+            inner: encoder,
+        }
+    }
+
     pub fn locals(mut self) -> CodeLocalsEncoder<'a, B> {
         CodeLocalsEncoder {
             size: self.inner.register_integer(),
             current: None,
             inner: VecEncoder::new(take_field_and_leak(self, |s| ptr::addr_of!(s.inner))),
-        }
-    }
-}
-
-impl<'a, B: Backend> NestedEncode<'a, B> for CodeEncoder<'a, B> {
-    fn new(mut encoder: Encoder<'a, B>, _: Guard) -> Self {
-        Self {
-            size: encoder.register_integer(),
-            inner: encoder,
         }
     }
 }
@@ -190,11 +181,6 @@ impl<'a, B: Backend> Drop for CodeEncoder<'a, B> {
 }
 
 impl<B: Backend> Sealed for CodeEncoder<'_, B> {}
-impl<B: Backend> VecSection for CodeEncoder<'_, B> {
-    const ID: SectionId = SectionId::Code;
-    type Index = ();
-    type Range = CodeSection;
-}
 
 pub struct CodeLocalsEncoder<'a, B: Backend> {
     size: IntegerId,
@@ -286,7 +272,7 @@ pub struct GlobalEncoder<'a, B: Backend> {
 }
 
 impl<'a, B: Backend> GlobalEncoder<'a, B> {
-    fn new(encoder: Encoder<'a, B>) -> Self {
+    pub(super) fn new(encoder: Encoder<'a, B>) -> Self {
         Self { inner: encoder }
     }
 
@@ -298,44 +284,25 @@ impl<'a, B: Backend> GlobalEncoder<'a, B> {
 
 impl<B: Backend> Sealed for GlobalEncoder<'_, B> {}
 
-impl<B: Backend> VecSection for GlobalEncoder<'_, B> {
-    const ID: SectionId = SectionId::Global;
-    type Index = Globalidx;
-    type Range = GlobalSection;
-}
-
-impl<'a, B: Backend> NestedEncode<'a, B> for GlobalEncoder<'a, B> {
-    fn new(encoder: Encoder<'a, B>, _: Guard) -> Self {
-        Self::new(encoder)
-    }
-}
-
 pub struct FuncEncoder<'a, B: Backend> {
     encoder: VecEncoder<'a, Valtype, B>,
 }
 
 impl<'a, B: Backend> FuncEncoder<'a, B> {
+    pub(super) fn new(mut encoder: Encoder<'a, B>) -> Self {
+        encoder.byte(0x60);
+        Self {
+            encoder: VecEncoder::new(encoder),
+        }
+    }
+
     pub fn returns(mut self) -> VecEncoder<'a, Valtype, B> {
         self.encoder.flush();
         take_field_and_leak(self, |s| ptr::addr_of!(s.encoder))
     }
 }
 
-impl<'a, B: Backend> NestedEncode<'a, B> for FuncEncoder<'a, B> {
-    fn new(mut encoder: Encoder<'a, B>, _: Guard) -> Self {
-        encoder.byte(0x60);
-        Self {
-            encoder: VecEncoder::new(encoder),
-        }
-    }
-}
-
 impl<B: Backend> Sealed for FuncEncoder<'_, B> {}
-impl<B: Backend> VecSection for FuncEncoder<'_, B> {
-    const ID: SectionId = SectionId::Type;
-    type Index = Typeidx;
-    type Range = TypeSection;
-}
 
 impl<'a, B: Backend> Deref for FuncEncoder<'a, B> {
     type Target = VecEncoder<'a, Valtype, B>;
@@ -358,12 +325,6 @@ impl<B: Backend> Drop for FuncEncoder<'_, B> {
 }
 
 pub type Memtype = Limits;
-
-impl VecSection for Memtype {
-    const ID: SectionId = SectionId::Memory;
-    type Index = Memidx;
-    type Range = MemorySection;
-}
 
 #[derive(Clone, Copy)]
 pub enum Limits {
@@ -402,12 +363,6 @@ impl Encode for Tabletype {
     }
 }
 
-impl VecSection for Tabletype {
-    const ID: SectionId = SectionId::Table;
-    type Index = Tableidx;
-    type Range = TableSection;
-}
-
 #[derive(Clone, Copy)]
 pub struct Globaltype {
     pub content_type: Valtype,
@@ -420,12 +375,6 @@ impl Encode for Globaltype {
         encoder.encode(self.content_type);
         encoder.byte(if self.mutable { 0x01 } else { 0x00 });
     }
-}
-
-impl VecSection for Typeidx {
-    const ID: SectionId = SectionId::Func;
-    type Index = Funcidx;
-    type Range = TypeSection;
 }
 
 #[derive(Clone, Copy)]
@@ -467,11 +416,6 @@ impl Encode for Import<'_> {
 }
 
 impl Sealed for Import<'_> {}
-impl VecSection for Import<'_> {
-    const ID: SectionId = SectionId::Import;
-    type Index = ();
-    type Range = ImportSection;
-}
 
 #[derive(Clone, Copy)]
 pub struct Export<'a> {
@@ -485,12 +429,6 @@ impl Encode for Export<'_> {
         encoder.encode(self.name);
         self.desc.encode(encoder);
     }
-}
-
-impl VecSection for Export<'_> {
-    const ID: SectionId = SectionId::Export;
-    type Index = ();
-    type Range = ExportSection;
 }
 
 impl Sealed for () {}
@@ -570,7 +508,7 @@ pub struct CustomSection<'a> {
 impl<'a> CustomSection<'a> {
     pub(crate) fn len(&self) -> usize {
         let inner_len = self.inner_len();
-        inner_len + b128::unsigned_integer_length(inner_len as u64) + 1
+        1 + b128::unsigned_integer_length(inner_len as u64) + inner_len
     }
 
     pub(crate) fn inner_len(&self) -> usize {
@@ -648,5 +586,18 @@ impl Encode for MemArg {
     fn encode<B: Backend>(self, mut encoder: Encoder<B>) {
         encoder.encode(self.align);
         encoder.encode(self.offset);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_custom_section_len() {
+        use super::CustomSection;
+        let section = CustomSection {
+            name: "test",
+            bytes: &[0x01, 0x02, 0x03],
+        };
+        assert_eq!(section.len(), 1 + 1 + 1 + 4 + 1 + 3);
     }
 }

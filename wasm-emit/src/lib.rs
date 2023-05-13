@@ -1,36 +1,47 @@
-#![no_std]
+//#![no_std]
 
 use core::{
     marker::PhantomData,
-    mem,
+    mem::{self, MaybeUninit},
     ops::{Deref, DerefMut},
     ptr,
     slice::SliceIndex,
 };
 
+#[cfg(any(feature = "alloc", test))]
+extern crate alloc;
+
 pub mod b128;
 
+#[cfg(any(feature = "alloc", test))]
+mod alloc_stuff;
 mod expr;
 mod module;
 mod sections;
+#[cfg(test)]
+mod tests;
 mod types;
 mod vec;
 
 pub use {
     expr::{ExprEncoder, IfExprEncoder, Laneidx, Memarg, MultiByteInstr, OneByteInstr},
     module::{
-        CodeSection, DataSection, Dataidx, ElementSection, Elemidx, ExportSection, Funcidx,
-        FunctionSection, GlobalSection, Globalidx, ImportSection, Labelidx, Localidx, Memidx,
-        MemorySection, Module, TableSection, Tableidx, TypeSection, Typeidx,
+        CodeSection, DataSection, Dataidx, Elemidx, ExportSection, Funcidx, FunctionSection,
+        GlobalSection, Globalidx, ImportSection, Labelidx, Localidx, Memidx, MemorySection, Module,
+        TableSection, Tableidx, TypeSection, Typeidx,
     },
     sections::{
         ActiveDataEncoder, BlockType, CodeBodyEncoder, CodeEncoder, CodeLocalsEncoder,
-        CustomSection, DataEncoder, ElemKind, ExportDesc, FuncEncoder, GlobalEncoder, Globaltype,
-        ImportDesc, SectionId, VecSectionEncoder,
+        CustomSection, DataEncoder, ElemKind, Export, ExportDesc, FuncEncoder, GlobalEncoder,
+        Globaltype, Import, ImportDesc, IndexSpaceOffset, MemArg, Memtype, SectionId, Tabletype,
+        VecSectionEncoder,
     },
     types::{Numtype, Reftype, Valtype, Vectype},
     vec::VecEncoder,
 };
+
+#[cfg(any(feature = "alloc", test))]
+pub use alloc_stuff::DefaultBackend;
 
 pub trait Encode: Copy + Sealed {
     fn encode<B: Backend>(self, encoder: Encoder<B>);
@@ -68,7 +79,6 @@ pub trait Integers {
 }
 
 pub trait Buffer {
-    fn reserve(&mut self, additional: usize);
     fn extend(&mut self, slice: &[u8]);
     fn push(&mut self, byte: u8);
     fn data(&self) -> &[u8];
@@ -79,17 +89,15 @@ pub trait Buffer {
 }
 
 pub trait Backend {
-    type Integers: Integers;
-    type Buffer: Buffer;
+    type Integers: Integers + 'static;
+    type Buffer: Buffer + 'static;
 }
 
 pub trait VecSection: Sealed {
     const ID: SectionId;
     type Index: Index;
-    type Range: Range;
-}
+    type Element<'a, B: Backend>;
 
-pub trait Range: Sealed {
     fn new(start: usize, end: usize, entity_count: usize, _: Guard) -> Self;
 
     fn start(&self) -> usize;
@@ -102,8 +110,8 @@ pub trait Index: Sealed + Copy {
 
 pub trait Sealed {}
 
-pub trait NestedEncode<'a, B: Backend> {
-    fn new(encoder: Encoder<'a, B>, guard: Guard) -> Self;
+pub trait NestedEncode: VecSection {
+    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B>;
 }
 
 pub struct Guard(());
@@ -113,9 +121,52 @@ pub struct Encoder<'a, B: Backend> {
     output: &'a mut B::Buffer,
 }
 
+impl<B: Backend> Drop for Encoder<'_, B> {
+    fn drop(&mut self) {}
+}
+
 impl<'a, B: Backend> Encoder<'a, B> {
     pub fn new(integers: &'a mut B::Integers, output: &'a mut B::Buffer) -> Self {
         Self { integers, output }
+    }
+
+    pub fn types(&mut self) -> VecSectionEncoder<'_, TypeSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    }
+
+    pub fn imports(&mut self) -> VecSectionEncoder<'_, ImportSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    }
+
+    pub fn functions(
+        &mut self,
+        iso: IndexSpaceOffset,
+    ) -> VecSectionEncoder<'_, FunctionSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), iso)
+    }
+
+    pub fn tables(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, TableSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), iso)
+    }
+
+    pub fn memories(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, MemorySection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), iso)
+    }
+
+    pub fn globals(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, GlobalSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), iso)
+    }
+
+    pub fn exports(&mut self) -> VecSectionEncoder<'_, ExportSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    }
+
+    pub fn codes(&mut self) -> VecSectionEncoder<'_, CodeSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    }
+
+    pub fn data(&mut self) -> VecSectionEncoder<'_, DataSection, B> {
+        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
     }
 
     fn stack_borrow(&mut self) -> Encoder<'_, B> {
@@ -144,6 +195,7 @@ impl<'a, B: Backend> Encoder<'a, B> {
 
 fn take_field_and_leak<T, F>(value: T, addr_fn: impl FnOnce(&T) -> *const F) -> F {
     let addr = addr_fn(&value);
+    let uninit = unsafe { ptr::read(addr as *const MaybeUninit<F>) };
     mem::forget(value);
-    unsafe { ptr::read(addr) }
+    unsafe { uninit.assume_init() }
 }

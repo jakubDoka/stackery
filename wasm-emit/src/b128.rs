@@ -25,8 +25,7 @@ impl Iterator for B128Iter {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.init_zero {
-            self.init_zero = false;
+        if mem::take(&mut self.init_zero) && self.value == 0 {
             return Some(0);
         }
 

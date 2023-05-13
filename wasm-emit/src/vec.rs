@@ -25,12 +25,8 @@ impl<'a, T, B: Backend> VecEncoder<'a, T, B> {
         self.written += 1;
     }
 
-    pub fn encoder<'b>(&'b mut self) -> T
-    where
-        T: NestedEncode<'b, B>,
-    {
+    pub(super) fn inc_written<'b>(&'b mut self) {
         self.written += 1;
-        T::new(self.inner.stack_borrow(), Guard(()))
     }
 
     pub(super) fn write_len(&mut self) {

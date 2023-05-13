@@ -8,5 +8,12 @@ edition = "2021"
 [dependencies]
 
 [features]
+default = ["alloc"]
 alloc = []
 
+[dev-dependencies]
+wasmparser = "0.104.0"
+
+# [build-dependencies]
+# document_tree = "0.4.0"
+# rst_parser = "0.4.0"

@@ -39,7 +39,8 @@ indices! {
 }
 
 macro_rules! sections {
-    ($($name:ident)*) => {$(
+    ($lt:lifetime $b:ident $($name:ident, $id:ident, $idx:ty, $ty:ty;)*) => {$(
+        #[derive(Default)]
         pub struct $name {
             start: usize,
             end: usize,
@@ -55,7 +56,10 @@ macro_rules! sections {
         }
 
         impl Sealed for $name {}
-        impl Range for $name {
+        impl VecSection for $name {
+            const ID: SectionId = SectionId::$id;
+            type Index = $idx;
+            type Element<$lt, $b: Backend> = $ty;
             fn new(start: usize, end: usize, entity_count: usize, _: Guard) -> Self {
                 Self { start, end, entity_count }
             }
@@ -76,18 +80,49 @@ impl Memidx {
 }
 
 sections! {
-    TypeSection
-    ImportSection
-    FunctionSection
-    TableSection
-    MemorySection
-    GlobalSection
-    ExportSection
-    ElementSection
-    CodeSection
-    DataSection
+    'a B
+    TypeSection, Type, Typeidx, FuncEncoder<'a, B>;
+    ImportSection, Import, (), Import<'a>;
+    FunctionSection, Func, Funcidx, Typeidx;
+    TableSection, Table, Tableidx, Tabletype;
+    MemorySection, Memory, Memidx, Memtype;
+    GlobalSection, Global, Globalidx, GlobalEncoder<'a, B>;
+    ExportSection, Export, (), Export<'a>;
+    CodeSection, Code, Funcidx, CodeEncoder<'a, B>;
+    DataSection, Data, Dataidx, DataEncoder<'a, B>;
 }
 
+impl NestedEncode for TypeSection {
+    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+        FuncEncoder::new(encoder)
+    }
+}
+
+impl NestedEncode for GlobalSection {
+    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+        GlobalEncoder::new(encoder)
+    }
+}
+
+impl NestedEncode for CodeSection {
+    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+        CodeEncoder::new(encoder)
+    }
+}
+
+impl NestedEncode for DataSection {
+    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+        DataEncoder::new(encoder)
+    }
+}
+
+impl ImportSection {
+    pub fn index_space_offset(&self) -> IndexSpaceOffset {
+        IndexSpaceOffset::new(self.entity_count)
+    }
+}
+
+#[derive(Default)]
 pub struct Module<'a> {
     pub custom_sections: &'a [CustomSection<'a>],
     pub types: TypeSection,
@@ -98,21 +133,22 @@ pub struct Module<'a> {
     pub globals: GlobalSection,
     pub exports: ExportSection,
     pub start: Option<Start>,
-    pub elements: ElementSection,
+    pub elements: TypeSection, // TODO: use ElementSection
     pub include_data_count: bool,
     pub codes: CodeSection,
     pub data: DataSection,
 }
 
-pub trait EmitBuffer {
-    fn ensure_capacity(&mut self, amount: usize) -> &mut [u8];
+pub trait EmmitBuffer {
+    fn ensure_capacity(&mut self, amount: usize) -> *mut u8;
+    unsafe fn set_len(&mut self, len: usize);
 }
 
 impl<'a> Module<'a> {
     pub fn emmit<B: Backend>(
         &self,
         encoder: Encoder<B>,
-        buffer: &mut impl EmitBuffer,
+        buffer: &mut impl EmmitBuffer,
     ) -> Result<(), EmmitError> {
         if self.functions.entity_count != self.codes.entity_count {
             return Err(EmmitError::UnmatchedFuncCount(
@@ -121,10 +157,16 @@ impl<'a> Module<'a> {
             ));
         }
 
+        let (buffer_start, buffer_end) = unsafe {
+            let len = self.compute_size(encoder.integers);
+            let buffer = buffer.ensure_capacity(len);
+            (buffer, buffer.add(len))
+        };
         let mut encoder = ModuleEncoder {
             integers: encoder.integers.data(),
             encoded: encoder.output.data(),
-            buffer: buffer.ensure_capacity(self.compute_size(encoder.integers)),
+            buffer_start,
+            buffer_end,
         };
 
         encoder.preface();
@@ -149,6 +191,10 @@ impl<'a> Module<'a> {
 
         for section in self.custom_sections {
             encoder.write_custom_section(section);
+        }
+
+        unsafe {
+            buffer.set_len(buffer_end.offset_from(buffer_start) as usize);
         }
 
         Ok(())
@@ -177,6 +223,7 @@ impl<'a> Module<'a> {
     }
 }
 
+#[derive(Debug)]
 pub enum EmmitError {
     UnmatchedFuncCount(usize, usize),
 }
@@ -184,7 +231,8 @@ pub enum EmmitError {
 struct ModuleEncoder<'a> {
     integers: &'a [Integer],
     encoded: &'a [u8],
-    buffer: &'a mut [u8],
+    buffer_start: *mut u8,
+    buffer_end: *mut u8,
 }
 
 impl<'a> ModuleEncoder<'a> {
@@ -193,7 +241,7 @@ impl<'a> ModuleEncoder<'a> {
         self.write_slice(&[1, 0, 0, 0]);
     }
 
-    fn write_section(&mut self, section: &impl Range) {
+    fn write_section(&mut self, section: &impl VecSection) {
         let start = section.start();
         let end = section.end();
 
@@ -228,19 +276,30 @@ impl<'a> ModuleEncoder<'a> {
     }
 
     fn write_slice(&mut self, slice: &[u8]) {
-        let buffer = mem::take(&mut self.buffer);
-        buffer[..slice.len()].copy_from_slice(slice);
-        self.buffer = &mut buffer[slice.len()..];
+        let len = slice.len();
+
+        debug_assert!(unsafe { self.buffer_end.offset_from(self.buffer_start) } as usize >= len);
+
+        unsafe {
+            self.buffer_start
+                .copy_from_nonoverlapping(slice.as_ptr(), len);
+        }
+
+        self.buffer_start = unsafe { self.buffer_start.add(len) };
     }
 
     fn write_integer(&mut self, integer: u64) {
-        let buffer = mem::take(&mut self.buffer);
+        debug_assert!(
+            unsafe { self.buffer_end.offset_from(self.buffer_start) } as usize
+                >= b128::unsigned_integer_length(integer)
+        );
 
-        let mut iter = buffer.iter_mut();
-        let encoder = B128Iter::new(integer);
-        iter.by_ref().zip(encoder).for_each(|(b, i)| *b = i);
-
-        self.buffer = iter.into_slice();
+        for byte in B128Iter::new(integer) {
+            unsafe {
+                self.buffer_start.write(byte);
+                self.buffer_start = self.buffer_start.add(1);
+            }
+        }
     }
 
     fn write_start_section(&mut self, start: &Option<Start>) {
@@ -266,5 +325,11 @@ impl<'a> ModuleEncoder<'a> {
         self.write_slice(section.name.as_bytes());
         self.write_integer(section.bytes.len() as u64);
         self.write_slice(section.bytes);
+    }
+}
+
+impl Drop for ModuleEncoder<'_> {
+    fn drop(&mut self) {
+        debug_assert_eq!(unsafe { self.buffer_end.offset_from(self.buffer_start) }, 0);
     }
 }
