@@ -1,4 +1,6 @@
-use std::{
+#![no_std]
+
+use core::{
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},

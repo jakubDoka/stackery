@@ -1,4 +1,4 @@
-use std::{mem::ManuallyDrop, num::NonZeroU32};
+use core::{mem::ManuallyDrop, num::NonZeroU32};
 
 use crate::{module::DataSection, *};
 
