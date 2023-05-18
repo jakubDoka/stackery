@@ -109,6 +109,16 @@ html, body {
   color: var(--error);
 }
 
+.search-result-selected {
+  color: var(--highlight);
+  transition: color 0s ease-in-out;
+  cursor: pointer;
+}
+
+.search-result {
+  cursor: pointer;
+}
+
 .navbar {
   display: flex;
   justify-content: space-between;
@@ -157,3 +167,8 @@ html, body {
   background-color: var(--highlight);
 }
 
+.user-profile {
+  margin-top: var(--spacing);
+  background: var(--item-background);
+  padding: var(--spacing);
+}

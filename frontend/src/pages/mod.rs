@@ -7,23 +7,39 @@ mod editor;
 mod home;
 mod login;
 mod post;
+mod profile;
 mod register;
 mod search;
 
-pub use {
-    about::About, editor::Code, home::Home, login::Login, post::Post, register::Register,
-    search::Search,
-};
+pub use {editor::CodeEditor, login::Login, post::Post, register::Register, search::Search};
 
 use dioxus::prelude::*;
+use little_md::{CodeCategory, CodeCategorySyntaxConfig, LogosSyntax, ToCodeCategory};
 
 use crate::navbar::use_app_state;
 
 use self::editor::{CodeDisplayer, DisplayState};
 
+#[inline_props]
+fn Code<'a>(cx: Scope<'a>, content: &'a str, classes: Option<&'a str>) -> Element<'a> {
+    let displayer = {
+        let mut d = CodeDisplayer::default();
+        let state = DisplayState::from_str(content);
+        d.display(state, None);
+        d.into_string()
+    };
+    let app_state = use_app_state(cx);
+
+    cx.render(rsx! { pre {
+       class: format_args!("{} code-theme md-code-block", classes.unwrap_or("")),
+       "theme": "{app_state.theme()}",
+       dangerous_inner_html: "{displayer}"
+    } })
+}
+
 pub trait SearchResult {
     fn key(&self) -> &str;
-    fn render<'a>(&'a self, cx: &'a ScopeState) -> Element<'a> {
+    fn render<'a>(&'a self, cx: &'a ScopeState, _: &'a UseState<String>) -> Element<'a> {
         cx.render(rsx! { self.key() })
     }
 }
@@ -34,55 +50,65 @@ impl SearchResult for String {
     }
 }
 
-impl SearchResult for bf_shared::search::post::Model {
-    fn key(&self) -> &str {
-        &self.name
-    }
+pub trait SearchResultView<D: SearchResult> {
+    const ACTIVE: bool = true;
+    fn render<'a>(&'a self, cx: &'a ScopeState, result: Option<&D>) -> Element<'a>;
+}
 
-    fn render<'a>(&'a self, cx: &'a ScopeState) -> Element<'a> {
-        let displayer = {
-            let mut d = CodeDisplayer::default();
-            let state = DisplayState::from_str(&self.code);
-            d.display(state, None);
-            d.into_string()
-        };
-        let app_state = use_app_state(cx);
-
-        cx.render(rsx! { div {
-            class: "post-search-result",
-            div {
-                class: "post-name",
-                "{self.name}"
-            }
-            div {
-                class: "post-author",
-                "by: {self.author}"
-            }
-            pre {
-                class: "post-code editor",
-                "theme": "{app_state.theme()}",
-                dangerous_inner_html: "{displayer}"
-            }
-        } })
+impl<D: SearchResult> SearchResultView<D> for () {
+    const ACTIVE: bool = false;
+    fn render<'a>(&'a self, cx: &'a ScopeState, _: Option<&D>) -> Element<'a> {
+        cx.render(rsx!(()))
     }
 }
 
 #[inline_props]
-fn SearchBar<'a, F, R, E, D>(cx: Scope, desc: &'a str, fetcher: F) -> Element
+fn SearchBar<'a, F, R, E, D, V>(cx: Scope, desc: &'a str, fetcher: F, view: V) -> Element
 where
     F: Fn(String) -> R + 'static + Clone,
     R: Future<Output = Result<Vec<D>, E>> + 'static,
     E: ToString + 'static,
     D: 'static + SearchResult,
+    V: SearchResultView<D> + 'a,
 {
-    let results = use_state::<Vec<D>>(cx, || vec![]);
     let selection = use_state::<usize>(cx, || 0);
     let query = use_state(cx, || String::new());
     let error = use_state(cx, || None::<E>);
+    let searching = use_state(cx, || true);
+    let results = use_state(cx, || Vec::new());
+
+    let fut_error = error.clone();
+    let fut_results = results.clone();
+    use_future!(cx, |query, searching| {
+        let fetcher = fetcher.clone();
+        async move {
+            if query.is_empty() {
+                return;
+            }
+
+            if !*searching.get() {
+                return;
+            }
+
+            match fetcher(query.get().clone()).await {
+                Ok(res) => {
+                    fut_error.set(None);
+                    fut_results.set(res);
+                }
+                Err(e) => {
+                    fut_error.set(Some(e));
+                }
+            };
+        }
+    });
 
     #[inline_props]
-    fn SearchResult<'a, T: SearchResult + 'static>(cx: Scope, data: &'a T) -> Element {
-        let element = data.render(cx);
+    fn SearchResult<'a, T: SearchResult + 'static>(
+        cx: Scope<'a>,
+        data: &'a T,
+        query: &'a UseState<String>,
+    ) -> Element<'a> {
+        let element = data.render(cx, query);
         cx.render(rsx! { element })
     }
 
@@ -93,23 +119,18 @@ where
                 class: "form-field",
                 r#type: "text",
                 placeholder: *desc,
-                value: query.get().as_str(),
+                value: query.as_str(),
                 oninput: move |e| {
                     let value = e.value.clone();
-                    let fetcher = fetcher.clone()(value.clone());
-                    let results = results.clone();
-                    let error = error.clone();
                     query.set(value);
-                    async move {
-                        match fetcher.await {
-                            Ok(res) => results.set(res),
-                            Err(e) => error.set(Some(e)),
-                        };
-                    }
+                    searching.set(true);
                 },
                 onkeydown: move |e| {
-                    let len = results.get().len();
+                    if !*searching.get() {
+                        return;
+                    }
 
+                    let len = results.len();
                     if len == 0 {
                         return;
                     }
@@ -123,6 +144,7 @@ where
                             if let Some(res) = results.get().get(current) {
                                 query.set(res.key().to_string());
                             }
+                            searching.set(false);
                             current
                         }
                         _ => return,
@@ -130,7 +152,10 @@ where
 
                     selection.set(new_selection % len);
                     e.stop_propagation();
-                }
+                },
+                onfocus: move |_| {
+                    searching.set(true);
+                },
             }
             div {
                 class: "form-error",
@@ -139,6 +164,7 @@ where
             }
             div {
                 class: "search-results",
+                hidden: !searching.get() && V::ACTIVE,
                 for (i, res) in results.iter().enumerate() {
                     div {
                         class: if i == *selection.get() {
@@ -146,9 +172,19 @@ where
                         } else {
                             "search-result"
                         },
-                        SearchResult { data: res }
+                        onmouseenter: move |_| selection.set(i),
+                        onclick: move |_| {
+                            query.set(res.key().to_string());
+                            searching.set(false);
+                        },
+                        SearchResult { data: res, query: query }
                     }
                 }
+            }
+            div {
+                class: "search-result-view",
+                hidden: **searching || !V::ACTIVE,
+                view.render(cx, results.get().get(*selection.get()).filter(|_| !searching))
             }
         }
     })
@@ -156,7 +192,7 @@ where
 
 pub trait FormModel: Default {
     fn render(cx: &ScopeState) -> Element;
-    fn parse(values: &HashMap<String, String>, errors: &mut Vec<String>) -> Option<Self>;
+    fn parse(values: &HashMap<String, Vec<String>>, errors: &mut Vec<String>) -> Option<Self>;
 }
 
 pub trait InputData: Sized {
@@ -242,15 +278,16 @@ macro_rules! form_model {
                 })
             }
 
-            fn parse(values: &std::collections::HashMap<String, String>, errors: &mut Vec<String>) -> Option<Self> {
+            fn parse(values: &std::collections::HashMap<String, Vec<String>>, errors: &mut Vec<String>) -> Option<Self> {
                 errors.clear();
                 $(
                     let $field = values.get(stringify!($field)).filter(|i| !i.is_empty()).ok_or_else(|| {
                         format!("missing field: {}", stringify!($field))
                     }).and_then(|value| {
-                        <$type as $crate::pages::InputData>::parse(value).map_err(|e| {
-                            format!("invalid field: {}: {}", stringify!($field), e)
-                        })
+                        <$type as $crate::pages::InputData>::parse(value.first().map_or("", String::as_str))
+                            .map_err(|e| {
+                                format!("invalid field: {}: {}", stringify!($field), e)
+                            })
                     }).map_err(|e| {
                         errors.push(e);
                     });
@@ -341,4 +378,91 @@ where
             div { class: "form-children", children }
         }
     })
+}
+
+struct StacSyntaxConfig;
+
+impl ToCodeCategory for StacSyntaxConfig {
+    const NAME: &'static str = "stac";
+
+    type Token = stac::Token;
+
+    fn to_code_category(s: Result<Self::Token, ()>) -> CodeCategory {
+        let Ok(s) = s else {return CodeCategory::Error;};
+        match s {
+            stac::Token::ListSep
+            | stac::Token::ListEnd
+            | stac::Token::Bind
+            | stac::Token::Op(_) => CodeCategory::Punctuation,
+            stac::Token::Import | stac::Token::Func | stac::Token::Call => CodeCategory::Keyword,
+            stac::Token::Str => CodeCategory::String,
+            stac::Token::Int => CodeCategory::Number,
+            stac::Token::Comment => CodeCategory::Comment,
+            stac::Token::Eof => CodeCategory::Error,
+            stac::Token::Use => CodeCategory::Ident,
+        }
+    }
+}
+
+fn grammar_syntax() -> CodeCategorySyntaxConfig<impl ToCodeCategory> {
+    #[derive(logos::Logos, Clone, Copy, Debug, PartialEq, Eq)]
+    #[logos(skip r"\s+")]
+    enum Token {
+        #[regex(r"//.*")]
+        Comment,
+
+        #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
+        Ident,
+
+        #[regex(r"'[^']*'")]
+        Regex,
+
+        #[regex(r"[|,()\[\]{}=]")]
+        Punctuation,
+    }
+
+    struct Config;
+
+    impl ToCodeCategory for Config {
+        const NAME: &'static str = "grammar";
+
+        type Token = Token;
+
+        fn to_code_category(s: Result<Self::Token, ()>) -> CodeCategory {
+            let Ok(s) = s else {return CodeCategory::Error;};
+            match s {
+                Token::Comment => CodeCategory::Comment,
+                Token::Ident => CodeCategory::Ident,
+                Token::Regex => CodeCategory::String,
+                Token::Punctuation => CodeCategory::Punctuation,
+            }
+        }
+    }
+
+    CodeCategorySyntaxConfig::<Config>::new()
+}
+
+pub fn translate_md(md: &str) -> String {
+    let mut stac_syntax = LogosSyntax::new(CodeCategorySyntaxConfig::<StacSyntaxConfig>::new());
+    let mut grammar_syntax = LogosSyntax::new(grammar_syntax());
+    let config = little_md::Config {
+        syntaxes: &mut [&mut stac_syntax, &mut grammar_syntax],
+        ..Default::default()
+    };
+
+    let mut buf = String::new();
+    little_md::emmit(md, config, &mut buf);
+
+    buf
+}
+
+#[inline_props]
+pub fn MdPage<'a>(cx: Scope, md: &'a str) -> Element {
+    let state = use_app_state(cx);
+    let translated = use_memo(cx, (), |()| translate_md(md));
+    cx.render(rsx! { div {
+        class: "code-theme",
+        "theme": "{state.theme()}",
+        dangerous_inner_html: translated.as_ref()
+    } })
 }

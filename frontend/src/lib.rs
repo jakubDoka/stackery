@@ -32,8 +32,8 @@ pub fn App(cx: Scope) -> Element {
             "theme": "{app_state.theme()}",
 
             navbar::Navbar {}
-            Route { to: "/", pages::Home {} }
-            Route { to: "/about", pages::About {} }
+            Route { to: "/", pages::MdPage { md: include_str!("pages/home.md") } }
+            Route { to: "/about", pages::MdPage { md: include_str!("pages/about.md") } }
             Route { to: "/register", pages::Register {} }
             Route { to: "/login", pages::Login {} }
             Route { to: "/search", pages::Search {} }

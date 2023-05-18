@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crate::{b128::B128Iter, sections::Start, *};
 
 macro_rules! indices {
@@ -38,6 +40,14 @@ indices! {
     Labelidx
 }
 
+impl Memidx {
+    pub(super) const ZERO: Self = Self(0);
+}
+
+impl Tableidx {
+    pub(super) const ZERO: Self = Self(0);
+}
+
 macro_rules! sections {
     ($lt:lifetime $b:ident $($name:ident, $id:ident, $idx:ty, $ty:ty;)*) => {$(
         #[derive(Default)]
@@ -75,10 +85,6 @@ macro_rules! sections {
     )*};
 }
 
-impl Memidx {
-    pub(super) const ZERO: Self = Self(0);
-}
-
 sections! {
     'a B
     TypeSection, Type, Typeidx, FuncEncoder<'a, B>;
@@ -88,38 +94,27 @@ sections! {
     MemorySection, Memory, Memidx, Memtype;
     GlobalSection, Global, Globalidx, GlobalEncoder<'a, B>;
     ExportSection, Export, (), Export<'a>;
+    ElemSection, Elem, Elemidx, ElemEncoder<'a, B>;
     CodeSection, Code, Funcidx, CodeEncoder<'a, B>;
     DataSection, Data, Dataidx, DataEncoder<'a, B>;
 }
 
-impl NestedEncode for TypeSection {
-    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
-        FuncEncoder::new(encoder)
-    }
+macro_rules! impl_nested_encode {
+    ($($name:ident => $encoder:ident)*) => {$(
+        impl NestedEncode for $name {
+            fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+                $encoder::new(encoder)
+            }
+        }
+    )*};
 }
 
-impl NestedEncode for GlobalSection {
-    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
-        GlobalEncoder::new(encoder)
-    }
-}
-
-impl NestedEncode for CodeSection {
-    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
-        CodeEncoder::new(encoder)
-    }
-}
-
-impl NestedEncode for DataSection {
-    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
-        DataEncoder::new(encoder)
-    }
-}
-
-impl ImportSection {
-    pub fn index_space_offset(&self) -> IndexSpaceOffset {
-        IndexSpaceOffset::new(self.entity_count)
-    }
+impl_nested_encode! {
+    TypeSection => FuncEncoder
+    GlobalSection => GlobalEncoder
+    ElemSection => ElemEncoder
+    CodeSection => CodeEncoder
+    DataSection => DataEncoder
 }
 
 #[derive(Default)]
@@ -133,7 +128,7 @@ pub struct Module<'a> {
     pub globals: GlobalSection,
     pub exports: ExportSection,
     pub start: Option<Start>,
-    pub elements: TypeSection, // TODO: use ElementSection
+    pub elements: ElemSection,
     pub include_data_count: bool,
     pub codes: CodeSection,
     pub data: DataSection,
@@ -252,8 +247,7 @@ impl<'a> ModuleEncoder<'a> {
 
         let section_integers_end = self
             .integers
-            .binary_search_by_key(&end, |i| i.offset)
-            .map(|i| i + 1)
+            .binary_search_by(|i| i.offset.cmp(&end).then(Ordering::Less))
             .unwrap_or_else(|i| i);
 
         let section_integers = &self.integers[section_integers_start..section_integers_end];

@@ -9,9 +9,21 @@ members = [
 	"backend",
 	"bf-shared",
 	"stac",
-]
-exclude = [
-	"wasm-emit"
+	"wasm-emit",
+	"little-md",
 ]
 
 
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+
+[profile.backend]
+inherits = "release"
+lto = true
+opt-level = 3
+codegen-units = 1
+strip = true

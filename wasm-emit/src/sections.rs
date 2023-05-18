@@ -14,42 +14,104 @@ pub enum SectionId {
     Global,
     Export,
     Start,
-    Element,
+    Elem,
     Code,
     Data,
     DataCount,
 }
 
-pub struct IndexSpaceOffset(usize);
+#[derive(Clone, Copy)]
+pub struct IndexSpaceOffsets {
+    functions: usize,
+    tables: usize,
+    memories: usize,
+    globals: usize,
+}
 
-impl IndexSpaceOffset {
-    pub(super) fn new(arg: usize) -> Self {
-        Self(arg as usize)
+impl IndexSpaceOffsets {
+    pub(super) fn new() -> Self {
+        Self {
+            functions: 0,
+            tables: 0,
+            memories: 0,
+            globals: 0,
+        }
     }
 }
 
-pub struct VecSectionEncoder<'a, T: VecSection, B: Backend> {
+pub trait IndexSpace: VecSection {}
+impl IndexSpace for FunctionSection {}
+impl IndexSpace for TableSection {}
+impl IndexSpace for MemorySection {}
+impl IndexSpace for GlobalSection {}
+
+pub trait ImportItem: Into<ImportDesc> {
+    type Index: Index;
+    fn counter(offsets: &mut IndexSpaceOffsets, _: Guard) -> &mut usize;
+}
+
+impl ImportItem for Typeidx {
+    type Index = Funcidx;
+    fn counter(offsets: &mut IndexSpaceOffsets, _: Guard) -> &mut usize {
+        &mut offsets.functions
+    }
+}
+
+impl ImportItem for Tabletype {
+    type Index = Tableidx;
+    fn counter(offsets: &mut IndexSpaceOffsets, _: Guard) -> &mut usize {
+        &mut offsets.tables
+    }
+}
+
+impl ImportItem for Memtype {
+    type Index = Memidx;
+    fn counter(offsets: &mut IndexSpaceOffsets, _: Guard) -> &mut usize {
+        &mut offsets.memories
+    }
+}
+
+impl ImportItem for Globaltype {
+    type Index = Globalidx;
+    fn counter(offsets: &mut IndexSpaceOffsets, _: Guard) -> &mut usize {
+        &mut offsets.globals
+    }
+}
+
+pub struct VecSectionEncoder<'a, 'b, T: VecSection, B: Backend> {
     size: IntegerId,
-    pub(super) inner: VecEncoder<'a, T::Element<'a, B>, B>,
+    pub(super) inner: VecEncoder<'a, T::Element<'b, B>, B>,
     index_offset: usize,
 }
 
-impl<'a, T: VecSection, B: Backend> VecSectionEncoder<'a, T, B> {
-    pub fn new(
-        mut encoder: Encoder<'a, B>,
-        IndexSpaceOffset(index_offset): IndexSpaceOffset,
-    ) -> Self {
+impl<'a, 'b, T: VecSection, B: Backend> VecSectionEncoder<'a, 'b, T, B> {
+    pub(super) fn new(mut encoder: Encoder<'a, B>) -> Self {
         encoder.byte(T::ID as u8);
         Self {
             size: encoder.register_integer(),
             inner: VecEncoder::new(encoder),
-            index_offset,
+            index_offset: 0,
         }
     }
 
-    pub fn push(&mut self, value: T::Element<'a, B>) -> T::Index
+    pub(super) fn with_index_offset<I: ImportItem>(
+        mut encoder: Encoder<'a, B>,
+        mut offsets: IndexSpaceOffsets,
+    ) -> Self
     where
-        T::Element<'a, B>: Encode,
+        T: IndexSpace,
+    {
+        encoder.byte(T::ID as u8);
+        Self {
+            size: encoder.register_integer(),
+            inner: VecEncoder::new(encoder),
+            index_offset: *I::counter(&mut offsets, Guard(())),
+        }
+    }
+
+    pub fn push(&mut self, value: T::Element<'b, B>) -> T::Index
+    where
+        T::Element<'b, B>: Encode,
     {
         let index = T::Index::new(self.inner.written() + self.index_offset);
         self.inner.push(value);
@@ -63,7 +125,7 @@ impl<'a, T: VecSection, B: Backend> VecSectionEncoder<'a, T, B> {
         T::new(start, current_len, self.inner.written(), Guard(()))
     }
 
-    pub fn encoder<'b>(&'b mut self) -> (T::Index, T::Element<'b, B>)
+    pub fn encoder<'c>(&'c mut self) -> (T::Index, T::Element<'c, B>)
     where
         T: NestedEncode,
     {
@@ -71,6 +133,39 @@ impl<'a, T: VecSection, B: Backend> VecSectionEncoder<'a, T, B> {
             self.inner.inc_written();
             T::new_encoder(self.inner.inner(), Guard(()))
         })
+    }
+}
+
+pub struct ImportSectionEncoder<'a, 'b, B: Backend> {
+    inner: VecSectionEncoder<'a, 'b, ImportSection, B>,
+    index_offsets: IndexSpaceOffsets,
+}
+
+impl<'a, 'b, B: Backend> ImportSectionEncoder<'a, 'b, B> {
+    pub(super) fn new(encoder: Encoder<'a, B>) -> Self {
+        Self {
+            inner: VecSectionEncoder::new(encoder),
+            index_offsets: IndexSpaceOffsets::new(),
+        }
+    }
+
+    pub fn import<I: ImportItem>(&mut self, name: &'b str, module: &'b str, item: I) -> I::Index {
+        let func = Import {
+            module,
+            name,
+            desc: item.into(),
+        };
+
+        self.inner.push(func);
+
+        let counter = I::counter(&mut self.index_offsets, Guard(()));
+        *counter += 1;
+
+        I::Index::new(*counter - 1)
+    }
+
+    pub fn finish(self) -> (ImportSection, IndexSpaceOffsets) {
+        (self.inner.finish(), self.index_offsets)
     }
 }
 
@@ -500,6 +595,30 @@ impl Encode for ImportDesc {
     }
 }
 
+impl From<Memtype> for ImportDesc {
+    fn from(ty: Memtype) -> Self {
+        Self::Mem(ty)
+    }
+}
+
+impl From<Globaltype> for ImportDesc {
+    fn from(ty: Globaltype) -> Self {
+        Self::Global(ty)
+    }
+}
+
+impl From<Tabletype> for ImportDesc {
+    fn from(ty: Tabletype) -> Self {
+        Self::Table(ty)
+    }
+}
+
+impl From<Typeidx> for ImportDesc {
+    fn from(idx: Typeidx) -> Self {
+        Self::Type(idx)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct CustomSection<'a> {
     pub name: &'a str,
@@ -531,16 +650,15 @@ impl Encode for CustomSection<'_> {
 }
 
 #[derive(Clone, Copy)]
+#[repr(u8)]
 pub enum ElemKind {
-    FuncRef,
+    FuncRef = 0x0,
 }
 
 impl Sealed for ElemKind {}
 impl Encode for ElemKind {
     fn encode<B: Backend>(self, mut encoder: Encoder<B>) {
-        match self {
-            ElemKind::FuncRef => encoder.byte(0x0),
-        }
+        encoder.byte(self as u8);
     }
 }
 
@@ -599,5 +717,206 @@ mod tests {
             bytes: &[0x01, 0x02, 0x03],
         };
         assert_eq!(section.len(), 1 + 1 + 1 + 4 + 1 + 3);
+    }
+}
+
+pub struct ElemEncoder<'a, B: Backend> {
+    id: IntegerId,
+    inner: Encoder<'a, B>,
+}
+
+impl<'a, B: Backend> ElemEncoder<'a, B> {
+    const PASSIVE_RESULT_ID: u8 = 0b01000100;
+    const DECLARATIVE_RESULT_ID: u8 = 0b00010001;
+    pub fn new(mut inner: Encoder<'a, B>) -> Self {
+        ElemEncoder {
+            id: inner.register_integer(),
+            inner,
+        }
+    }
+
+    fn as_parts(self) -> (IntegerId, Encoder<'a, B>) {
+        let id = self.id;
+        let inner = take_field_and_leak(self, |s| ptr::addr_of!(s.inner));
+        (id, inner)
+    }
+
+    pub fn active(self, table: Tableidx) -> ActiveElemEncoder<'a, B> {
+        let (id, inner) = self.as_parts();
+        ActiveElemEncoder::new(inner, table, id)
+    }
+
+    pub fn passive_funcs(self, kind: ElemKind) -> FuncsElemEncoder<'a, B> {
+        let (id, inner) = self.as_parts();
+        FuncsElemEncoder::new(inner, kind, id, Self::PASSIVE_RESULT_ID)
+    }
+
+    pub fn declarative_funcs(self, kind: ElemKind) -> FuncsElemEncoder<'a, B> {
+        let (id, inner) = self.as_parts();
+        FuncsElemEncoder::new(inner, kind, id, Self::DECLARATIVE_RESULT_ID)
+    }
+
+    pub fn passive_exprs(self, kind: Reftype) -> ExprsElemEncoder<'a, B> {
+        let (id, inner) = self.as_parts();
+        ExprsElemEncoder::new(inner, kind, id, Self::PASSIVE_RESULT_ID)
+    }
+
+    pub fn declarative_exprs(self, kind: Reftype) -> ExprsElemEncoder<'a, B> {
+        let (id, inner) = self.as_parts();
+        ExprsElemEncoder::new(inner, kind, id, Self::DECLARATIVE_RESULT_ID)
+    }
+}
+
+impl<'a, B: Backend> Drop for ElemEncoder<'a, B> {
+    fn drop(&mut self) {
+        self.inner.integers.update(self.id, 1);
+        self.inner.encode(ElemKind::FuncRef);
+        self.inner.byte(0); // func count
+    }
+}
+
+pub struct ActiveElemEncoder<'a, B: Backend> {
+    id: IntegerId,
+    result_id: u8,
+    inner: ManuallyDrop<ExprEncoder<'a, B>>,
+}
+
+impl<'a, B: Backend> ActiveElemEncoder<'a, B> {
+    const ZERO_TABLE_RESULT_ID: u8 = 0b10001000;
+    const NON_ZERO_TABLE_RESULT_ID: u8 = 0b00100010;
+
+    fn new(mut inner: Encoder<'a, B>, table: Tableidx, id: IntegerId) -> Self {
+        if table != Tableidx::ZERO {
+            inner.encode(table);
+        }
+        ActiveElemEncoder {
+            id,
+            result_id: if table == Tableidx::ZERO {
+                Self::ZERO_TABLE_RESULT_ID
+            } else {
+                Self::NON_ZERO_TABLE_RESULT_ID
+            },
+            inner: ManuallyDrop::new(ExprEncoder::new(inner)),
+        }
+    }
+
+    pub fn funcs(self, kind: ElemKind) -> FuncsElemEncoder<'a, B> {
+        let Self { id, result_id, .. } = self;
+        let inner = take_field_and_leak(self, |s| ptr::addr_of!(s.inner));
+        let inner = ManuallyDrop::into_inner(inner).finish();
+        FuncsElemEncoder::new(inner, kind, id, result_id)
+    }
+
+    pub fn exprs(self, kind: Reftype) -> ExprsElemEncoder<'a, B> {
+        let Self { id, result_id, .. } = self;
+        let inner = take_field_and_leak(self, |s| ptr::addr_of!(s.inner));
+        let inner = ManuallyDrop::into_inner(inner).finish();
+        ExprsElemEncoder::new(inner, kind, id, result_id)
+    }
+}
+
+impl<'a, B: Backend> Deref for ActiveElemEncoder<'a, B> {
+    type Target = ExprEncoder<'a, B>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a, B: Backend> DerefMut for ActiveElemEncoder<'a, B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<'a, B: Backend> Drop for ActiveElemEncoder<'a, B> {
+    fn drop(&mut self) {
+        let mut inner = unsafe { ManuallyDrop::take(&mut self.inner).finish() };
+        if self.result_id == Self::ZERO_TABLE_RESULT_ID {
+            inner.integers.update(self.id, 0);
+            inner.byte(0); // func count
+        } else {
+            inner.integers.update(self.id, 2);
+            inner.encode(ElemKind::FuncRef);
+            inner.byte(0); // func count
+        }
+    }
+}
+
+pub struct FuncsElemEncoder<'a, B: Backend> {
+    id: IntegerId,
+    result_id: u8,
+    inner: VecEncoder<'a, Funcidx, B>,
+}
+
+impl<'a, B: Backend> FuncsElemEncoder<'a, B> {
+    fn new(mut inner: Encoder<'a, B>, kind: ElemKind, id: IntegerId, result_id: u8) -> Self {
+        if result_id != ActiveElemEncoder::<B>::ZERO_TABLE_RESULT_ID {
+            inner.encode(kind);
+        }
+
+        FuncsElemEncoder {
+            id,
+            result_id: result_id & 0b11110000,
+            inner: VecEncoder::new(inner),
+        }
+    }
+}
+
+impl<'a, B: Backend> Deref for FuncsElemEncoder<'a, B> {
+    type Target = VecEncoder<'a, Funcidx, B>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a, B: Backend> DerefMut for FuncsElemEncoder<'a, B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<'a, B: Backend> Drop for FuncsElemEncoder<'a, B> {
+    fn drop(&mut self) {
+        debug_assert!(self.result_id.is_power_of_two());
+        self.inner
+            .inner()
+            .integers
+            .update(self.id, self.result_id.leading_zeros() as usize);
+    }
+}
+
+pub struct ExprsElemEncoder<'a, B: Backend> {
+    id: IntegerId,
+    result_id: u8,
+    inner: VecEncoder<'a, ExprEncoder<'a, B>, B>,
+}
+
+impl<'a, B: Backend> ExprsElemEncoder<'a, B> {
+    fn new(mut inner: Encoder<'a, B>, kind: Reftype, id: IntegerId, result_id: u8) -> Self {
+        if result_id != ActiveElemEncoder::<B>::ZERO_TABLE_RESULT_ID {
+            inner.encode(kind);
+        }
+
+        ExprsElemEncoder {
+            id,
+            result_id: result_id & 0b00001111,
+            inner: VecEncoder::new(inner),
+        }
+    }
+
+    pub fn expr(&mut self) -> ExprEncoder<B> {
+        self.inner.inc_written();
+        ExprEncoder::new(self.inner.inner())
+    }
+}
+
+impl<'a, B: Backend> Drop for ExprsElemEncoder<'a, B> {
+    fn drop(&mut self) {
+        debug_assert!(self.result_id.is_power_of_two());
+        self.inner
+            .inner()
+            .integers
+            .update(self.id, self.result_id.leading_zeros() as usize);
     }
 }

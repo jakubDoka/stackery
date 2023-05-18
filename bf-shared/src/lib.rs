@@ -265,4 +265,143 @@ pub mod search {
             }
         }
     }
+
+    #[derive(Clone, Copy)]
+    pub struct Query<'a> {
+        pub reminder: &'a str,
+        pub expects_field: bool,
+    }
+
+    impl<'a> Query<'a> {
+        pub fn new(query: &'a str) -> Self {
+            Self {
+                reminder: query,
+                expects_field: true,
+            }
+        }
+
+        pub fn get_field(mut self, name: &str) -> Option<&'a str> {
+            self.find_map(|(n, v)| if n == name { Some(v) } else { None })
+        }
+
+        pub fn reminder(&self) -> &'a str {
+            self.reminder
+        }
+
+        pub fn set_field(mut self, filed_name: &str, new_value: &str) -> String {
+            let mut query = String::new();
+            let mut set = false;
+            for (name, value) in self.by_ref() {
+                query.push('\\');
+                query.push_str(name);
+                query.push(' ');
+
+                if name == filed_name {
+                    query.push_str(new_value);
+                    set = true;
+                } else {
+                    query.push_str(value);
+                }
+
+                query.push(' ');
+            }
+
+            if !set {
+                query.push('\\');
+                query.push_str(filed_name);
+                query.push(' ');
+                query.push_str(new_value);
+                query.push(' ');
+            }
+
+            query.push_str(self.reminder);
+
+            query
+        }
+    }
+
+    impl<'a> Iterator for Query<'a> {
+        type Item = (&'a str, &'a str);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if !self.expects_field {
+                return None;
+            }
+
+            let Some(next) = self.reminder.strip_prefix('\\') else {
+                self.expects_field = false;
+                return None;
+            };
+
+            fn is_field_char(c: char) -> bool {
+                c.is_ascii_alphanumeric() || c == '_'
+            }
+
+            let end = next
+                .find(|c| !is_field_char(c))
+                .unwrap_or_else(|| next.len());
+
+            let (field, reminder) = next.split_at(end);
+            let reminder = reminder.trim_start();
+
+            if !reminder.starts_with('"') {
+                let (query, reminder) = reminder.split_once(' ').unwrap_or((reminder, ""));
+                self.reminder = reminder;
+                return Some((field, query));
+            }
+
+            let end = reminder
+                .char_indices()
+                .skip(1) // skip leading '"'
+                .scan(false, |in_escape, (i, c)| {
+                    let res = !*in_escape && c == '"';
+                    *in_escape = !*in_escape && c == '\\';
+                    Some((i + 1, res))
+                })
+                .find_map(|(i, end)| end.then_some(i))
+                .unwrap_or(reminder.len());
+
+            let (query, reminder) = reminder.split_at(end);
+
+            self.reminder = reminder.trim_start();
+
+            Some((field, query))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_query() {
+            let mut query = Query::new("\\name hello \\author \"hello world\" reminder");
+
+            assert_eq!(query.next(), Some(("name", "hello")));
+            assert_eq!(query.next(), Some(("author", "\"hello world\"")));
+            assert_eq!(query.next(), None);
+
+            assert_eq!(query.reminder(), "reminder");
+        }
+
+        #[test]
+        fn test_query_reconstruct() {
+            let query = Query::new("\\name hello \\author \"hello world\" reminder");
+
+            assert_eq!(
+                query.set_field("name", "world"),
+                "\\name world \\author \"hello world\" reminder"
+            );
+
+            assert_eq!(
+                query.set_field("author", "world"),
+                "\\name hello \\author world reminder"
+            );
+
+            assert_eq!(
+                query.set_field("code", "world"),
+                "\\name hello \\author \"hello world\" \\code world reminder"
+            );
+        }
+    }
 }

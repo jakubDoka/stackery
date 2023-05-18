@@ -15,7 +15,7 @@ macro_rules! config_var {
     )*};
 
     (@default $default:expr) => {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) || true {
             Some($default)
         } else {
             None

@@ -11,7 +11,7 @@ title = "stackery"
 watch_path = ["src", "public"]
 
 [web.resource]
-style = ["/style.css", "/style/editor.css"]
+style = ["/style.css", "/style/editor.css", "/style/md.css"]
 script = []
 
 [web.resource.dev]

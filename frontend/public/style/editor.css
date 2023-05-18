@@ -1,23 +1,23 @@
-.editor[theme='dark'] {
+.code-theme[theme='dark'] {
   --keyword: #ff79c6;
   --string: #f1fa8c;
   --number: #bd93f9;
   --comment: #6272a4;
   --ident: #f8f8f2;
-  --punctation: #f8f8f2;
+  --punctation: #a8a8a2;
   --declaration: #50fa7b;
   --error: #ff5555;
 
   --error-background: #aa0000;
 }
 
-.editor[theme='light'] {
+.code-theme[theme='light'] {
   --keyword: #6e00ff;
   --string: #ffc400;
   --number: #00b0ff;
   --comment: #8e8e8e;
   --ident: #2e2e2e;
-  --punctation: #2e2e2e;
+  --punctation: #4e4e4e;
   --declaration: #00c853;
   --error: #ff5555;
   
@@ -28,14 +28,14 @@
   --tab-size: 2;
 }
 
-.Import { color: var(--keyword) }
-.Str { color: var(--string); }
-.Int { color: var(--number); }
-.Comment { color: var(--comment); }
-.Use { color: var(--ident); }
-.Declare, .Bind { color: var(--declaration); }
-.Decompose, .ListSep, .ListEnd { color: var(--punctation); }
-.Error { color: var(--error); }
+.code-keyword { color: var(--keyword) }
+.code-string { color: var(--string); }
+.code-number { color: var(--number); }
+.code-comment { color: var(--comment); }
+.code-ident { color: var(--ident); }
+.code-declaration { color: var(--declaration); }
+.code-punctation { color: var(--punctation); }
+.code-error { color: var(--error); }
 
 .AnalyzerError {
   color: var(--text);

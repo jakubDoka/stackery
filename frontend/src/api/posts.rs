@@ -2,7 +2,7 @@ use std::fmt;
 
 use reqwest::StatusCode;
 
-use crate::pages::{Code, Name};
+use crate::pages::{CodeEditor, Name};
 
 pub async fn create(post: CreateModel) -> Result<CreateResult, CreateError> {
     let response = super::CLIENT
@@ -22,7 +22,7 @@ pub async fn create(post: CreateModel) -> Result<CreateResult, CreateError> {
 
 crate::form_model!(CreateModel {
     name: Name,
-    code: Code,
+    code: CodeEditor,
 });
 
 pub struct CreateResult;
@@ -90,3 +90,23 @@ pub enum SearchError {
 }
 
 crate::reqwest_error_handler!(SearchError);
+
+pub async fn for_user(name: String) -> Result<Vec<bf_shared::search::post::Model>, ForUserError> {
+    let response = super::CLIENT
+        .get(crate::url!("posts/for-user/{}", name))
+        .send()
+        .await?;
+
+    match response.status() {
+        StatusCode::OK => Ok(response.json().await?),
+        _ => crate::reqwest_unexpected_status!(response, ForUserError),
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ForUserError {
+    #[error("{}", super::OTHER_MESSAGE)]
+    Other,
+}
+
+crate::reqwest_error_handler!(ForUserError);

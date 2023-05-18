@@ -4,7 +4,7 @@ pub struct VecEncoder<'a, T, B: Backend> {
     size: IntegerId,
     inner: Encoder<'a, B>,
     written: usize,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<*const T>,
 }
 
 impl<'a, T, B: Backend> VecEncoder<'a, T, B> {

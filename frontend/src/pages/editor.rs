@@ -13,9 +13,9 @@ pub use display::{CodeDisplayer, DisplayState};
 
 #[derive(Default, serde::Serialize, Clone)]
 #[serde(transparent)]
-pub struct Code(pub String);
+pub struct CodeEditor(pub String);
 
-impl InputData for Code {
+impl InputData for CodeEditor {
     type Error = bf_shared::db::post::CodeError;
 
     const TYPE: &'static str = "text";
@@ -35,7 +35,7 @@ impl InputData for Code {
         let app_state = use_app_state(cx);
 
         cx.render(rsx! { div {
-            class: "editor",
+            class: "editor code-theme",
             "theme": "{app_state.theme()}",
             onfocus: move |_| editor.borrow_mut().set_focused(true, ctx),
             onfocusout: move |_| editor.borrow_mut().set_focused(false, ctx),
@@ -66,7 +66,7 @@ impl InputData for Code {
     }
 }
 
-impl Deref for Code {
+impl Deref for CodeEditor {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {

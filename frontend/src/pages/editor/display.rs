@@ -1,6 +1,8 @@
 use std::{iter, mem, ops::Range};
 
-use stac::Token;
+use little_md::{CodeCategory, ToCodeCategory};
+
+use crate::pages::StacSyntaxConfig;
 
 use super::state::{EditingContext, EditingState, EditorMode};
 
@@ -47,7 +49,7 @@ impl CodeDisplayer {
 
         let mut lexer = stac::Token::lexer(code)
             .spanned()
-            .map(|(tok, span)| (tok.map_or(Token::ERROR, |t| t.name()), span))
+            .map(|(tok, span)| (StacSyntaxConfig::to_code_category(tok), span))
             .peekable();
 
         let highlights = iter::from_fn(|| {
@@ -61,7 +63,7 @@ impl CodeDisplayer {
                 start: span.start,
                 end: span.end,
                 style: Style {
-                    foreground: col,
+                    foreground: Some(col),
                     ..Default::default()
                 },
             })
@@ -122,7 +124,7 @@ impl CodeDisplayer {
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 struct Style {
-    foreground: &'static str,
+    foreground: Option<CodeCategory>,
     background: &'static str,
     cursor: bool,
 }
@@ -138,7 +140,7 @@ impl Style {
         }
 
         Self {
-            foreground: choose(other.foreground, self.foreground),
+            foreground: other.foreground.or(self.foreground),
             background: choose(other.background, self.background),
             cursor: other.cursor || self.cursor,
         }
@@ -177,7 +179,7 @@ impl Style {
         };
 
         html.push_str("<span class=\"");
-        html.push_str(self.foreground);
+        html.push_str(self.foreground.map_or("", |c| c.to_class()));
         html.push_str(" ");
         html.push_str(self.background);
         html.push_str("\">");
@@ -402,7 +404,7 @@ impl NodeResolver {
 mod test {
     use super::*;
 
-    fn style_node(start: usize, end: usize, foreground: &'static str) -> StyleNode {
+    fn style_node(start: usize, end: usize, foreground: Option<CodeCategory>) -> StyleNode {
         StyleNode {
             start,
             end,
@@ -413,7 +415,7 @@ mod test {
         }
     }
 
-    fn syle_command(pos: usize, foreground: &'static str) -> StyleCommand {
+    fn syle_command(pos: usize, foreground: Option<CodeCategory>) -> StyleCommand {
         StyleCommand {
             pos,
             style: Style {
@@ -439,72 +441,83 @@ mod test {
 
     #[test]
     fn test_disjoint() {
+        let [a, empty, b] = [
+            Some(CodeCategory::Keyword),
+            None,
+            Some(CodeCategory::Punctuation),
+        ];
         perform_test(
-            [style_node(0, 1, "a")],
-            [syle_command(0, "a"), syle_command(1, "")],
+            [style_node(0, 1, a)],
+            [syle_command(0, a), syle_command(1, empty)],
         );
 
         perform_test(
-            [style_node(0, 1, "a"), style_node(2, 3, "b")],
+            [style_node(0, 1, a), style_node(2, 3, b)],
             [
-                syle_command(0, "a"),
-                syle_command(1, ""),
-                syle_command(2, "b"),
-                syle_command(3, ""),
+                syle_command(0, a),
+                syle_command(1, empty),
+                syle_command(2, b),
+                syle_command(3, empty),
             ],
         );
 
         perform_test(
-            [style_node(0, 2, "a"), style_node(2, 3, "b")],
+            [style_node(0, 2, a), style_node(2, 3, b)],
             [
-                syle_command(0, "a"),
-                syle_command(2, "b"),
-                syle_command(3, ""),
+                syle_command(0, a),
+                syle_command(2, b),
+                syle_command(3, empty),
             ],
         );
     }
 
     #[test]
     fn test_overlaps() {
+        let [a, empty, b, c] = [
+            Some(CodeCategory::Keyword),
+            None,
+            Some(CodeCategory::Punctuation),
+            Some(CodeCategory::Number),
+        ];
         perform_test(
-            [style_node(0, 2, "a"), style_node(1, 3, "b")],
+            [style_node(0, 2, a), style_node(1, 3, b)],
             [
-                syle_command(0, "a"),
-                syle_command(1, "b"),
-                syle_command(3, ""),
+                syle_command(0, a),
+                syle_command(1, b),
+                syle_command(3, empty),
             ],
         );
 
         perform_test(
-            [style_node(0, 2, "a"), style_node(1, 2, "b")],
+            [style_node(0, 2, a), style_node(1, 2, b)],
             [
-                syle_command(0, "a"),
-                syle_command(1, "b"),
-                syle_command(2, ""),
+                syle_command(0, a),
+                syle_command(1, b),
+                syle_command(2, empty),
             ],
         );
 
         perform_test(
             [
-                style_node(0, 2, "a"),
-                style_node(2, 4, "c"),
-                style_node(1, 3, "b"),
+                style_node(0, 2, a),
+                style_node(2, 4, c),
+                style_node(1, 3, b),
             ],
             [
-                syle_command(0, "a"),
-                syle_command(1, "b"),
-                syle_command(2, "c"),
-                syle_command(4, ""),
+                syle_command(0, a),
+                syle_command(1, b),
+                syle_command(2, c),
+                syle_command(4, empty),
             ],
         );
 
         perform_test(
-            [style_node(0, 4, "a"), style_node(1, 3, "b")],
+            [style_node(0, 4, a), style_node(1, 3, b)],
             [
-                syle_command(0, "a"),
-                syle_command(1, "b"),
-                syle_command(3, "a"),
-                syle_command(4, ""),
+                syle_command(0, a),
+                syle_command(1, b),
+                syle_command(3, a),
+                syle_command(4, empty),
             ],
         );
     }

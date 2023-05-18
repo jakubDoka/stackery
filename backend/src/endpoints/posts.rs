@@ -1,3 +1,4 @@
+use futures_util::stream::{StreamExt, TryStreamExt};
 use mongodb::bson::doc;
 use poem::session::Session;
 use poem_openapi::param::Path;
@@ -107,15 +108,44 @@ impl Posts {
     async fn search(&self, query: Query<String>) -> SearchResponse {
         let Query(query) = query;
 
-        if query.is_empty() {
+        if query.trim().is_empty() {
             return SearchResponse::Ok(Json(Vec::new()));
         }
 
-        let search_result = http_try!(self.searcher.search(&query).await,
+        let (filter, query) = 'a: {
+            let mut parser = bf_shared::search::Query::new(query.as_str());
+
+            let Some(author) = parser.get_field("author") else {
+                break 'a ("".to_string(), query.as_str());
+            };
+
+            parser.by_ref().count(); // strip fields
+
+            let author = author.trim_matches('"');
+
+            (format!("author = '{author}'"), parser.reminder())
+        };
+
+        let search_result = http_try!(self.searcher.search_with_filter(query, &filter).await,
             SearchResponse::InternalServerError,
             error "failed to search posts");
 
         SearchResponse::Ok(Json(search_result))
+    }
+
+    #[oai(method = "get", path = "/for-user/:user_name")]
+    async fn for_user(&self, user_name: Path<String>) -> SearchResponse {
+        let query = doc! { db::post::AUTHOR: user_name.as_str() };
+
+        let cursor = http_try!(self.posts::<bf_shared::db::post::Model>().find(query, None).await,
+            SearchResponse::InternalServerError,
+            error "failed to select posts");
+
+        let posts = http_try!(cursor.map(|r| r.map(bf_shared::search::post::Model::from)).try_collect::<Vec<_>>().await,
+            SearchResponse::InternalServerError,
+            error "failed to collect posts");
+
+        SearchResponse::Ok(Json(posts))
     }
 
     fn posts<T>(&self) -> mongodb::Collection<T> {

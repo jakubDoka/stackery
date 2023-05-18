@@ -26,14 +26,15 @@ mod vec;
 pub use {
     expr::{ExprEncoder, IfExprEncoder, Laneidx, Memarg, MultiByteInstr, OneByteInstr},
     module::{
-        CodeSection, DataSection, Dataidx, Elemidx, ExportSection, Funcidx, FunctionSection,
-        GlobalSection, Globalidx, ImportSection, Labelidx, Localidx, Memidx, MemorySection, Module,
-        TableSection, Tableidx, TypeSection, Typeidx,
+        CodeSection, DataSection, Dataidx, ElemSection, Elemidx, ExportSection, Funcidx,
+        FunctionSection, GlobalSection, Globalidx, ImportSection, Labelidx, Localidx, Memidx,
+        MemorySection, Module, TableSection, Tableidx, TypeSection, Typeidx,
     },
     sections::{
         ActiveDataEncoder, BlockType, CodeBodyEncoder, CodeEncoder, CodeLocalsEncoder,
-        CustomSection, DataEncoder, ElemKind, Export, ExportDesc, FuncEncoder, GlobalEncoder,
-        Globaltype, Import, ImportDesc, IndexSpaceOffset, MemArg, Memtype, SectionId, Tabletype,
+        CustomSection, DataEncoder, ElemEncoder, ElemKind, Export, ExportDesc, ExprsElemEncoder,
+        FuncEncoder, FuncsElemEncoder, GlobalEncoder, Globaltype, Import, ImportDesc, ImportItem,
+        ImportSectionEncoder, IndexSpace, IndexSpaceOffsets, MemArg, Memtype, SectionId, Tabletype,
         VecSectionEncoder,
     },
     types::{Numtype, Reftype, Valtype, Vectype},
@@ -47,7 +48,7 @@ pub trait Encode: Copy + Sealed {
     fn encode<B: Backend>(self, encoder: Encoder<B>);
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Integer {
     pub offset: usize,
     pub value: u64,
@@ -130,43 +131,44 @@ impl<'a, B: Backend> Encoder<'a, B> {
         Self { integers, output }
     }
 
-    pub fn types(&mut self) -> VecSectionEncoder<'_, TypeSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    pub fn types(&mut self) -> VecSectionEncoder<TypeSection, B> {
+        VecSectionEncoder::new(self.stack_borrow())
     }
 
-    pub fn imports(&mut self) -> VecSectionEncoder<'_, ImportSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    pub fn imports(&mut self) -> ImportSectionEncoder<B> {
+        ImportSectionEncoder::new(self.stack_borrow())
     }
 
-    pub fn functions(
-        &mut self,
-        iso: IndexSpaceOffset,
-    ) -> VecSectionEncoder<'_, FunctionSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), iso)
+    pub fn functions(&mut self, iso: IndexSpaceOffsets) -> VecSectionEncoder<FunctionSection, B> {
+        VecSectionEncoder::with_index_offset::<Typeidx>(self.stack_borrow(), iso)
     }
 
-    pub fn tables(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, TableSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), iso)
+    pub fn tables(&mut self, iso: IndexSpaceOffsets) -> VecSectionEncoder<TableSection, B> {
+        VecSectionEncoder::with_index_offset::<Tabletype>(self.stack_borrow(), iso)
     }
 
-    pub fn memories(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, MemorySection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), iso)
+    pub fn memories(&mut self, iso: IndexSpaceOffsets) -> VecSectionEncoder<MemorySection, B> {
+        VecSectionEncoder::with_index_offset::<Memtype>(self.stack_borrow(), iso)
     }
 
-    pub fn globals(&mut self, iso: IndexSpaceOffset) -> VecSectionEncoder<'_, GlobalSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), iso)
+    pub fn globals(&mut self, iso: IndexSpaceOffsets) -> VecSectionEncoder<GlobalSection, B> {
+        VecSectionEncoder::with_index_offset::<Globaltype>(self.stack_borrow(), iso)
     }
 
-    pub fn exports(&mut self) -> VecSectionEncoder<'_, ExportSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    pub fn exports(&mut self) -> VecSectionEncoder<ExportSection, B> {
+        VecSectionEncoder::new(self.stack_borrow())
     }
 
-    pub fn codes(&mut self) -> VecSectionEncoder<'_, CodeSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    pub fn elements(&mut self) -> VecSectionEncoder<ElemSection, B> {
+        VecSectionEncoder::new(self.stack_borrow())
     }
 
-    pub fn data(&mut self) -> VecSectionEncoder<'_, DataSection, B> {
-        VecSectionEncoder::new(self.stack_borrow(), IndexSpaceOffset::new(0))
+    pub fn codes(&mut self) -> VecSectionEncoder<CodeSection, B> {
+        VecSectionEncoder::new(self.stack_borrow())
+    }
+
+    pub fn data(&mut self) -> VecSectionEncoder<DataSection, B> {
+        VecSectionEncoder::new(self.stack_borrow())
     }
 
     fn stack_borrow(&mut self) -> Encoder<'_, B> {

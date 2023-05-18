@@ -31,6 +31,7 @@ macro_rules! gen_instrs {
 		impl<'a, B: super::Backend> super::ExprEncoder<'a, B> {
 			$(
 				pub fn $fn_name(&mut self, $($arg: $ty,)*) {
+					self.inner.byte($leading_byte);
 					$(
 						self.inner.encode($body);
 					)*

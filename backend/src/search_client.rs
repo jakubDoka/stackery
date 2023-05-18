@@ -21,6 +21,11 @@ impl<T: SearchModel> SearcherClient<T> {
     pub async fn new(client: &Client) -> Self {
         let index = Self::create_index(&client).await;
 
+        index
+            .set_filterable_attributes(T::FILTERABLE_FIELDS)
+            .await
+            .unwrap();
+
         Self {
             index,
             phantom: std::marker::PhantomData,
@@ -67,9 +72,18 @@ impl<T: SearchModel> SearcherClient<T> {
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<T>, meilisearch_sdk::errors::Error> {
+        self.search_with_filter(query, "").await
+    }
+
+    pub async fn search_with_filter(
+        &self,
+        query: &str,
+        filter: &str,
+    ) -> Result<Vec<T>, meilisearch_sdk::errors::Error> {
         self.index
             .search()
             .with_query(query)
+            .with_filter(filter)
             .with_limit(T::RESULT_LIMIT)
             .execute()
             .await
@@ -82,6 +96,7 @@ pub trait SearchModel:
 {
     const PRIMARY_KEY: &'static str;
     const INDEX: &'static str;
+    const FILTERABLE_FIELDS: &'static [&'static str] = &[];
     const RESULT_LIMIT: usize;
 }
 
@@ -103,5 +118,6 @@ impl DeletableSearchModel for SearchUser {}
 impl SearchModel for search::post::Model {
     const PRIMARY_KEY: &'static str = search::post::PRIMARY_KEY;
     const INDEX: &'static str = search::post::INDEX;
+    const FILTERABLE_FIELDS: &'static [&'static str] = &["author"];
     const RESULT_LIMIT: usize = search::post::RESULT_LIMIT;
 }

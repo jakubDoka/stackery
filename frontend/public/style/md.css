@@ -1,0 +1,4 @@
+.md-code-block {
+  background: var(--background);
+  padding: calc(var(--spacing) / 2);
+}

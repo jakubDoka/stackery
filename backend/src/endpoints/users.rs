@@ -202,7 +202,7 @@ impl Users {
         let Query(query) = query;
         let query = query.as_str();
 
-        if query.is_empty() {
+        if query.trim().is_empty() {
             return SearchResponse::Ok(Json(vec![]));
         }
 

@@ -1,3 +1,4 @@
+use crate::sections::Limits;
 use crate::*;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -15,7 +16,7 @@ fn perform_test<'a>(tester: impl FnOnce(Encoder<DefaultBackend>) -> Module<'a>) 
         )
         .unwrap();
 
-    wasmparser::validate(&emmited).unwrap();
+    wasmparser::validate(&emmited).expect(&format!("{emmited:?}"));
 
     emmited
 }
@@ -67,6 +68,56 @@ fn types_section() {
             f.finish()
         },
         ..Module::default()
+    });
+}
+
+#[test]
+fn test_elements() {
+    perform_test(|mut e| {
+        let func;
+        let table;
+        let signature;
+        Module {
+            types: {
+                let mut f = e.types();
+                {
+                    let (id, mut e) = f.encoder();
+                    signature = id;
+                    e.push(Valtype::Num(Numtype::I32));
+
+                    let mut e = e.returns();
+                    e.push(Valtype::Num(Numtype::I32));
+                    e.finish();
+                }
+                f.finish()
+            },
+            imports: {
+                let mut f = e.imports();
+                table = f.import(
+                    "g",
+                    "m",
+                    Tabletype {
+                        elem_type: Reftype::FuncRef,
+                        limits: Limits::Bounded { min: 0, max: 3 },
+                    },
+                );
+                func = f.import("f", "m", signature);
+                f.finish().0
+            },
+            elements: {
+                let mut f = e.elements();
+                {
+                    let (.., e) = f.encoder();
+                    let mut e = e.active(table);
+                    e.i32_const(5);
+                    let mut e = e.funcs(ElemKind::FuncRef);
+                    e.push(func);
+                }
+
+                f.finish()
+            },
+            ..Default::default()
+        }
     });
 }
 
