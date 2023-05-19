@@ -11,8 +11,6 @@ pub mod db {
     pub mod session {
         use std::{fmt, time::Duration};
 
-        pub const COLLECTION: &str = "session";
-        pub const ID: &str = super::PRIMARY_KEY;
         pub const DURATION: Duration = Duration::from_secs(60 * 60);
         pub const STATE_DIR: &str = "app-state";
 

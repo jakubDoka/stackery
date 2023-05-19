@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use self::users::Sessions;
 
+mod health_check;
 mod posts;
 mod users;
 
@@ -58,6 +59,7 @@ pub async fn router(
         route,
     );
     route = endpoint("posts", posts::Posts::new(db, posts, sessions).await, route);
+    route = endpoint("health_check", health_check::HealthCheck, route);
     route
         .nest("/", static_files())
         .with(CookieSession::new(users::cookie_config()))

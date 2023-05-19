@@ -1,5 +1,6 @@
 use futures_util::stream::{StreamExt, TryStreamExt};
 use mongodb::bson::doc;
+use mongodb::IndexModel;
 use poem::session::Session;
 use poem_openapi::param::Path;
 use poem_openapi::payload::PlainText;
@@ -27,11 +28,24 @@ impl Posts {
         searcher: SearcherClient<bf_shared::search::post::Model>,
         sessions: Sessions,
     ) -> Self {
+        Self::create_indexes(&db).await;
         Self {
             db,
             searcher,
             sessions,
         }
+    }
+
+    async fn create_indexes(db: &mongodb::Database) {
+        db.collection::<()>(db::post::COLLECTION)
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { db::post::AUTHOR: 1 })
+                    .build(),
+                None,
+            )
+            .await
+            .unwrap();
     }
 
     #[oai(method = "post", path = "/")]

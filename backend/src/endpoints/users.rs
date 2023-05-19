@@ -1,6 +1,6 @@
 use crate::{search_client::SearchUser, SearcherClient};
 use bf_shared::{db::session::AppState, *};
-use mongodb::bson::{doc, Document};
+use mongodb::bson::doc;
 use poem::{
     middleware::SizeLimit,
     session::{CookieConfig, Session},
@@ -104,13 +104,6 @@ impl Users {
             salt: self.sessions.create().await,
         };
 
-        let session_record = doc! { db::session::ID: credentials.salt.to_string() };
-        http_try!(
-            self.sessions::<Document>().insert_one(session_record, None).await,
-            LoginResopnse::InternalServerError,
-            error "failed to insert session",
-        );
-
         session.set(api::session::KEY, credentials);
 
         LoginResopnse::Ok
@@ -119,12 +112,6 @@ impl Users {
     #[oai(path = "/logout", method = "post")]
     async fn logout(&self, session: &Session) -> LogoutResopnse {
         let creds = crate::auth!(self, session, LogoutResopnse);
-
-        http_try!(
-            self.sessions::<()>().delete_one(doc! { db::session::ID: creds.salt.to_string() }, None).await,
-            LogoutResopnse::InternalServerError,
-            error "failed to delete session",
-        );
 
         session.purge();
 
@@ -216,10 +203,6 @@ impl Users {
     fn users<T>(&self) -> mongodb::Collection<T> {
         self.db.collection(db::user::COLLECTION)
     }
-
-    fn sessions<T>(&self) -> mongodb::Collection<T> {
-        self.db.collection(db::session::COLLECTION)
-    }
 }
 
 pub fn cookie_config() -> CookieConfig {
@@ -278,8 +261,6 @@ enum LogoutResopnse {
     /// Not logged in.
     #[oai(status = 401)]
     Unauthorized,
-    #[oai(status = 500)]
-    InternalServerError,
 }
 
 #[derive(poem_openapi::ApiResponse)]

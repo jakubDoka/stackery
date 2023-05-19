@@ -474,7 +474,10 @@ mod test {
         );
 
         // links
-        test_case("[hello world](https://example.com)", "<p><a href=\"https://example.com\">hello world</a></p>");
+        test_case(
+            "[hello world](https://example.com)",
+            "<p><a href=\"https://example.com\">hello world</a></p>",
+        );
     }
 
     #[test]
