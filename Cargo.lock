@@ -135,7 +135,7 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "bcrypt",
- "bf-shared 0.1.0",
+ "bf-shared",
  "dashmap",
  "futures-util",
  "meilisearch-sdk",
@@ -194,14 +194,6 @@ name = "bf-shared"
 version = "0.1.0"
 dependencies = [
  "poem-openapi",
- "serde",
-]
-
-[[package]]
-name = "bf-shared"
-version = "0.1.0"
-source = "git+https://github.com/jakubDoka/stackery.git?branch=search-presistence#824adc996a9c73c8c43cba873ce60cb7d8a8d899"
-dependencies = [
  "serde",
 ]
 
@@ -538,9 +530,9 @@ dependencies = [
 
 [[package]]
 name = "curl-sys"
-version = "0.4.61+curl-8.0.1"
+version = "0.4.62+curl-8.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14d05c10f541ae6f3bc5b3d923c20001f47db7d5f0b2bc6ad16490133842db79"
+checksum = "274ef7ef7c1113c7611af49ce248a700afa1171045a1aaa40137030773f993b8"
 dependencies = [
  "cc",
  "libc",
@@ -707,9 +699,9 @@ checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
 
 [[package]]
 name = "digest"
-version = "0.10.6"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8168378f4e5023e7218c89c891c0fd8ecdb5e5e4f18cb78f38cf245dd021e76f"
+checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
@@ -719,7 +711,7 @@ dependencies = [
 [[package]]
 name = "dioxus"
 version = "0.3.2"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "dioxus-core",
  "dioxus-core-macro",
@@ -732,7 +724,7 @@ dependencies = [
 [[package]]
 name = "dioxus-core"
 version = "0.3.3"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "bumpalo",
  "bumpslab",
@@ -750,7 +742,7 @@ dependencies = [
 [[package]]
 name = "dioxus-core-macro"
 version = "0.3.0"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "dioxus-rsx",
  "proc-macro2",
@@ -761,7 +753,7 @@ dependencies = [
 [[package]]
 name = "dioxus-hooks"
 version = "0.3.1"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "dioxus-core",
  "futures-channel",
@@ -771,7 +763,7 @@ dependencies = [
 [[package]]
 name = "dioxus-hot-reload"
 version = "0.1.1"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "chrono",
  "dioxus-core",
@@ -789,7 +781,7 @@ dependencies = [
 [[package]]
 name = "dioxus-html"
 version = "0.3.1"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "async-trait",
  "dioxus-core",
@@ -807,7 +799,7 @@ dependencies = [
 [[package]]
 name = "dioxus-interpreter-js"
 version = "0.3.1"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "js-sys",
  "sledgehammer_bindgen",
@@ -829,7 +821,7 @@ dependencies = [
 [[package]]
 name = "dioxus-rsx"
 version = "0.0.3"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "dioxus-core",
  "internment",
@@ -843,7 +835,7 @@ dependencies = [
 [[package]]
 name = "dioxus-web"
 version = "0.3.2"
-source = "git+https://github.com/DioxusLabs/dioxus#c97f43146d17abca049f77a616ae6b116d90ca34"
+source = "git+https://github.com/DioxusLabs/dioxus#0527cff3a59ba3176f7510a7234c5977ce1b17d7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1076,7 +1068,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.21.0",
  "bcrypt",
- "bf-shared 0.1.0",
+ "bf-shared",
  "dioxus",
  "dioxus-logger",
  "dioxus-web",
@@ -1811,9 +1803,9 @@ checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "linux-raw-sys"
-version = "0.3.7"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ece97ea872ece730aed82664c424eb4c8291e1ff2480247ccf7409044bc6479f"
+checksum = "ef53942eb7bf7ff43a617b3e2c1c4a5ecf5944a7c1bc12d7ee39bbb15e5c1519"
 
 [[package]]
 name = "little-md"
@@ -2839,21 +2831,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "search"
-version = "0.1.0"
-dependencies = [
- "bf-shared 0.1.0 (git+https://github.com/jakubDoka/stackery.git?branch=search-presistence)",
- "meilisearch-sdk",
- "mongodb",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "security-framework"
-version = "2.9.0"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca2855b3715770894e67cbfa3df957790aa0c9edc3bf06efa1a84d77fa0839d1"
+checksum = "1fc758eb7bffce5b308734e9b0c1468893cae9ff70ebf13e7090be8dcbcc83a8"
 dependencies = [
  "bitflags",
  "core-foundation",
@@ -3224,9 +3205,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "subtle"
-version = "2.4.1"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
+checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 
 [[package]]
 name = "syn"
@@ -3449,15 +3430,15 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab8ed2edee10b50132aed5f331333428b011c99402b5a534154ed15746f9622"
+checksum = "5a76a9312f5ba4c2dec6b9161fdf25d87ad8a09256ccea5a556fef03c706a10f"
 
 [[package]]
 name = "toml_edit"
-version = "0.19.8"
+version = "0.19.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239410c8609e8125456927e6707163a3b1fdb40561e4b803bc041f466ccfdc13"
+checksum = "92d964908cec0d030b812013af25a0e57fddfadb1e066ecc6681d86253129d4f"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -3628,9 +3609,9 @@ checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
 
 [[package]]
 name = "universal-hash"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d3160b73c9a19f7e2939a2fdad446c57c1bbbbf4d919d3213ff1267a580d8b5"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",

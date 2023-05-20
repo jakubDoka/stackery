@@ -42,6 +42,16 @@ pub async fn run() {
     let search_client = search_client::connect();
     let users = SearcherClient::new(&search_client).await;
     let posts = SearcherClient::new(&search_client).await;
+    users
+        .load_database(
+            &db.collection::<bf_shared::db::user::Model>(bf_shared::db::user::COLLECTION),
+        )
+        .await;
+    posts
+        .load_database(
+            &db.collection::<bf_shared::db::post::Model>(bf_shared::db::post::COLLECTION),
+        )
+        .await;
 
     let router = endpoints::router(db, users, posts).await;
 

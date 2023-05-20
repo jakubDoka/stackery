@@ -42,14 +42,15 @@ mkdir build/db
 cp -r frontend/dist/* build/public/
 mv target/${TARGET_DIR}/backend build
 
-cd build/public/assets/dioxus
-wasm-opt -Oz -o stackery_bg.wasm.opt stackery_bg.wasm
-rm stackery_bg.wasm
-mv stackery_bg.wasm.opt stackery_bg.wasm
-cd ../../../..
-
+if [ "$1" = "frontend" ] || [ "$1" = "all" ] || [ "$1" = "release" ]; then
+    echo potimizing wasm
+    cd build/public/assets/dioxus
+    wasm-opt -Oz -o stackery_bg.wasm.opt stackery_bg.wasm
+    rm stackery_bg.wasm
+    mv stackery_bg.wasm.opt stackery_bg.wasm
+    cd ../../..
+fi
 
 if [ ! -f meilisearch ] || [ "$1" = "release" ]; then
     curl -L https://install.meilisearch.com | sh
-    mv meilisearch ./build
 fi
