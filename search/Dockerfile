@@ -12,7 +12,7 @@ COPY . /app
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-WORKDIR /app
+WORKDIR /app/shared
 RUN cargo build --release
 
 RUN mkdir -p /app/build
