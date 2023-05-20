@@ -35,7 +35,7 @@ async fn copy_over<D: for<'a> serde::Deserialize<'a>, S: From<D> + serde::Serial
     meili: &meilisearch_sdk::Client,
     collection: &str,
     index_id: &str,
-    private_key: &str,
+    primary_key: &str,
     chunk_size: usize,
 ) {
     let collection = db.collection::<D>(collection);
@@ -44,7 +44,7 @@ async fn copy_over<D: for<'a> serde::Deserialize<'a>, S: From<D> + serde::Serial
             index
         } else {
             meili
-                .create_index(index_id, Some(private_key))
+                .create_index(index_id, Some(primary_key))
                 .await
                 .unwrap()
                 .wait_for_completion(meili, None, None)
@@ -100,6 +100,9 @@ async fn connect_meilisearch() -> meilisearch_sdk::Client {
         MEILI_URL: String = "127.0.0.1:7700".to_string();
         MEILI_SECRET: Option<String>;
     }
+
+    println!("Connecting to MeiliSearch at {}", MEILI_URL.as_str());
+    println!("Secret is present: {}", MEILI_SECRET.is_some());
 
     meilisearch_sdk::Client::new(&*MEILI_URL, MEILI_SECRET.as_deref())
 }

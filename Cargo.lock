@@ -135,7 +135,7 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "bcrypt",
- "bf-shared",
+ "bf-shared 0.1.0",
  "dashmap",
  "futures-util",
  "meilisearch-sdk",
@@ -194,6 +194,14 @@ name = "bf-shared"
 version = "0.1.0"
 dependencies = [
  "poem-openapi",
+ "serde",
+]
+
+[[package]]
+name = "bf-shared"
+version = "0.1.0"
+source = "git+https://github.com/jakubDoka/stackery.git?branch=search-presistence#824adc996a9c73c8c43cba873ce60cb7d8a8d899"
+dependencies = [
  "serde",
 ]
 
@@ -1068,7 +1076,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.21.0",
  "bcrypt",
- "bf-shared",
+ "bf-shared 0.1.0",
  "dioxus",
  "dioxus-logger",
  "dioxus-web",
@@ -2834,7 +2842,7 @@ dependencies = [
 name = "search"
 version = "0.1.0"
 dependencies = [
- "bf-shared",
+ "bf-shared 0.1.0 (git+https://github.com/jakubDoka/stackery.git?branch=search-presistence)",
  "meilisearch-sdk",
  "mongodb",
  "serde",
