@@ -23,12 +23,12 @@ macro_rules! http_try {
     };
 }
 
-mod config;
 mod db;
 mod endpoints;
 mod log;
 mod search_client;
 
+use bf_shared::config_var;
 #[cfg_attr(test, mockall_double::double)]
 pub use search_client::SearcherClient;
 

@@ -4,10 +4,10 @@ use meilisearch_sdk::{indexes::Index, Client};
 pub fn connect() -> Client {
     crate::config_var! {
         SEARCHER_HOST: String = "http://localhost:7700".into();
-        MEILI_MASTER_KEY: Option<String>;
+        MEILI_SECRET: Option<String>;
     }
 
-    Client::new(SEARCHER_HOST.as_str(), MEILI_MASTER_KEY.as_deref())
+    Client::new(SEARCHER_HOST.as_str(), MEILI_SECRET.as_deref())
 }
 
 #[cfg_attr(not(test), derive(Clone))]
