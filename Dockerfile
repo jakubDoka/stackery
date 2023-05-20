@@ -44,7 +44,7 @@ WORKDIR /app
 
 RUN echo $'\
     export HOST=0.0.0.0:$PORT\n\
-    ./meilisearch\n\
+    ./meilisearch &\n\
     sleep 5\n\
     ./backend\n\
 ' > ./start.sh
