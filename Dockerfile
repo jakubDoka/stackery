@@ -29,7 +29,10 @@ RUN mkdir -p /app/build && \
 
 RUN ls -la /app/frontend
 RUN mv /app/frontend/dist/* /app/build/public/
-RUN mv /app/target/backend/backend /app/build/backend
+RUN mv /app/target/backend/backend /app/build/backen
+
+RUN curl -L https://install.meilisearch.com | sh && \
+    mv meilisearch /app/build/meilisearch
 
 FROM archlinux:latest as runner
 
@@ -41,6 +44,8 @@ WORKDIR /app
 
 RUN echo $'\
     export HOST=0.0.0.0:$PORT\n\
+    ./meilisearch\n\
+    sleep 5\n\
     ./backend\n\
 ' > ./start.sh
 
