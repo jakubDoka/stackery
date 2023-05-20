@@ -11,6 +11,7 @@ members = [
 	"stac",
 	"wasm-emit",
 	"little-md",
+	"mini-alloc",
 ]
 
 

@@ -7,7 +7,7 @@ use std::{
 
 use scoped_arena::Scope;
 
-use crate::{Errors, Parser, ParserContext};
+use crate::Errors;
 
 pub trait LoaderSource {
     async fn load(&mut self, id: &str) -> Result<String, impl Display>;

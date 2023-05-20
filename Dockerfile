@@ -29,7 +29,7 @@ RUN mkdir -p /app/build && \
 
 RUN ls -la /app/frontend
 RUN mv /app/frontend/dist/* /app/build/public/
-RUN mv /app/target/backend/backend /app/build/backen
+RUN mv /app/target/backend/backend /app/build/backend
 
 RUN curl -L https://install.meilisearch.com | sh && \
     mv meilisearch /app/build/meilisearch

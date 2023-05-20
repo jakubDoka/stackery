@@ -21,6 +21,5 @@ pub use {
     errors::{Error, ErrorBuilder, Errors},
     lexer::Token,
     loader::{LoaderSource, RootSource, Source, SourceId},
-    parser::{Parser, ParserContext},
     scoped_arena,
 };
