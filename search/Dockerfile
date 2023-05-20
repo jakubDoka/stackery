@@ -32,10 +32,10 @@ COPY --from=builder /app/build /app
 WORKDIR /app
 
 RUN echo $'\
-    export MEILI_URL=127.0.0.1:$PORT\n\
+    export MEILI_URL=0.0.0.0:$PORT\n\
     ./meilisearch --http-addr "$MEILI_URL" --master-key "$MEILI_SECRET" &\n\
     sleep 1\n\
-    export MEILI_URL="http://$MEILI_URL"\n\
+    export MEILI_URL=http://127.0.0.1:$PORT\n\
     ./search\n\
 ' > ./start.sh
 
