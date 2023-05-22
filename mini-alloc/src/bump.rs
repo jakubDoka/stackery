@@ -2,137 +2,159 @@ use std::{
     alloc::{Allocator, Global, Layout},
     intrinsics::unlikely,
     mem,
-    ptr::NonNull,
+    ops::Range,
+    ptr::{self, NonNull},
 };
 
-pub type NextAlloc = Option<Alloc>;
-pub const NEXT_ALLOC_SIZE: usize = mem::size_of::<NextAlloc>();
-pub const NEXT_ALLOC_ALIGN: usize = mem::align_of::<NextAlloc>();
+const ALLOC_HEADER_SIZE: usize = mem::size_of::<AllocHeader>();
+const ALLOC_HEADER_ALIGN: usize = mem::align_of::<AllocHeader>();
 
-pub struct AllocList<A: Allocator = Global> {
+pub(crate) struct AllocList<A: Allocator = Global> {
     alloc: A,
     head: Option<Alloc>,
     base_size: usize,
-    len: usize,
 }
 
 impl<A: Allocator> AllocList<A> {
-    pub fn new(base_size: usize, alloc: A) -> Self {
-        assert!(base_size >= NEXT_ALLOC_SIZE);
+    pub(crate) const MIN_BASE_SIZE: usize = ALLOC_HEADER_SIZE;
+
+    pub(crate) fn new(base_size: usize, alloc: A) -> Self {
+        assert!(base_size >= ALLOC_HEADER_SIZE);
         Self {
             alloc,
             head: None,
             base_size,
-            len: 0,
         }
     }
 
-    pub fn current_chunk_size(&self) -> usize {
-        self.base_size << self.len
+    #[inline]
+    pub(crate) fn alloc_to_bump<T>(&mut self, bump: &mut Bump) -> NonNull<T> {
+        loop {
+            match bump.alloc(Layout::new::<T>()) {
+                Some(ptr) => return ptr.cast(),
+                None => self.expand(bump),
+            }
+        }
     }
 
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
+    #[inline]
+    pub(crate) fn dealloc_from_bump<T>(&mut self, bump: &mut Bump) -> NonNull<T> {
+        loop {
+            match bump.dealloc(mem::size_of::<T>()) {
+                Some(ptr) => return ptr.cast(),
+                None => self.shrink(bump),
+            }
+        }
     }
 
     #[inline(never)]
-    pub fn alloc(&mut self) -> Bump {
-        let alloc = if let Some(mut current) = self.head {
-            let mut countdown = self.len;
+    #[cold]
+    fn expand(&mut self, bump: &mut Bump) {
+        let Some(head) = self.head else {
+            let head = unsafe {
+                Alloc::new(
+                    self.base_size,
+                    AllocHeader {
+                        next: None,
+                        prev: None,
+                        meta: AllocHeaderMeta::initial(),
+                    },
+                    &self.alloc,
+                )
+            };
 
-            loop {
-                let Some(next) = countdown.checked_sub(1) else {
-                    break current;
-                };
-                countdown = next;
+            self.head = Some(head);
 
-                let next_address =
-                    unsafe { current.end.as_ptr().cast::<NextAlloc>().sub(1).read() };
+            *bump = unsafe { head.empty_bump(self.base_size) };
 
-                if let Some(next) = next_address {
-                    current = next;
-                    continue;
-                }
+            return;
+        };
 
-                let next = unsafe { Alloc::new(self.current_chunk_size(), &self.alloc) };
+        if *bump == Default::default() {
+            *bump = unsafe { head.empty_bump(self.base_size) };
+            return;
+        }
 
-                unsafe {
-                    current
-                        .end
-                        .as_ptr()
-                        .cast::<NextAlloc>()
-                        .sub(1)
-                        .write(Some(next));
-                    next.end.as_ptr().cast::<NextAlloc>().write(None);
-                }
-
-                break next;
-            }
+        let header = unsafe { bump.header() };
+        let next = if let Some(alloc) = header.next {
+            alloc
         } else {
-            let next = unsafe { Alloc::new(self.current_chunk_size(), &self.alloc) };
-            unsafe {
-                next.end.as_ptr().cast::<NextAlloc>().write(None);
-            }
-            self.head = Some(next);
+            let next = unsafe {
+                Alloc::new(
+                    self.base_size,
+                    AllocHeader {
+                        next: None,
+                        prev: Some(bump.source()),
+                        meta: header.meta.next(),
+                    },
+                    &self.alloc,
+                )
+            };
+
+            header.next = Some(next);
+
             next
         };
 
-        self.len += 1;
-
-        let start = unsafe { alloc.end.as_ptr().sub(self.current_chunk_size()) };
-        let end = unsafe { alloc.end.as_ptr().sub(NEXT_ALLOC_SIZE) };
-        unsafe { Bump::new(start, end) }
+        *bump = unsafe { next.empty_bump(self.base_size) };
     }
 
-    pub fn assume_cleared(&mut self) {
-        self.len = 0;
+    #[inline(never)]
+    #[cold]
+    fn shrink(&mut self, bump: &mut Bump) {
+        if *bump == Default::default() {
+            return;
+        }
+
+        let Some(prev) = (unsafe { bump.header().prev }) else {
+            *bump = Default::default();
+            return;
+        };
+
+        *bump = unsafe { prev.full_bump(self.base_size) };
     }
 }
 
 impl<A: Allocator> Drop for AllocList<A> {
     fn drop(&mut self) {
-        let Some(mut current) = self.head else {
-            return;
-        };
+        let mut current = self.head;
 
-        for i in 0..self.len {
-            let next = unsafe { current.end.as_ptr().cast::<NextAlloc>().sub(1).read() };
-            unsafe {
-                self.alloc.deallocate(
-                    NonNull::new_unchecked(current.end.as_ptr().sub(self.base_size << i)),
-                    Layout::from_size_align_unchecked(self.current_chunk_size(), NEXT_ALLOC_ALIGN),
-                );
-            }
-            current = next.unwrap();
+        while let Some(alloc) = current {
+            current = unsafe { alloc.drop(self.base_size, &self.alloc).next };
         }
     }
 }
 
-pub struct Bump {
+#[derive(PartialEq, Eq)]
+pub(crate) struct Bump {
     cursor: *mut u8,
     end: *mut u8,
+    start: *mut u8,
 }
 
 impl Bump {
-    pub unsafe fn new(start: *mut u8, end: *mut u8) -> Self {
-        debug_assert!(start <= end);
+    #[inline]
+    unsafe fn new(start: *mut u8, end: *mut u8, cursor: *mut u8) -> Self {
+        debug_assert!(start <= cursor);
+        debug_assert!(cursor <= end);
         debug_assert!(start.is_aligned_to(mem::align_of::<NonNull<Alloc>>()));
 
-        Self { cursor: start, end }
+        Self { cursor, end, start }
     }
 
-    pub unsafe fn alloc_unchecked(&mut self, layout: Layout) -> NonNull<u8> {
-        if cfg!(debug_assertions) {
-            self.alloc(layout).expect("Bump allocator out of memory")
-        } else {
-            self.alloc_low(self.cursor.align_offset(layout.align()), layout.size())
+    #[inline]
+    fn alloc(&mut self, layout: Layout) -> Option<NonNull<u8>> {
+        let padding = self.cursor.align_offset(layout.align());
+        let size = layout.size();
+
+        if unlikely(self.free_space() < padding + size) {
+            return None;
         }
+
+        unsafe { Some(self.alloc_low(padding, size)) }
     }
 
+    #[inline]
     unsafe fn alloc_low(&mut self, padding: usize, size: usize) -> NonNull<u8> {
         self.cursor = self.cursor.add(padding);
         let ptr = self.cursor;
@@ -140,30 +162,131 @@ impl Bump {
         NonNull::new_unchecked(ptr)
     }
 
-    pub fn alloc(&mut self, layout: Layout) -> Option<NonNull<u8>> {
-        let padding = self.cursor.align_offset(layout.align());
-        let size = layout.size();
+    #[inline]
+    fn free_space(&self) -> usize {
+        self.end as usize - self.cursor as usize
+    }
 
-        if unlikely((self.end as usize - self.cursor as usize) < padding + size) {
+    #[inline]
+    fn taken_space(&self) -> usize {
+        self.cursor as usize - self.start as usize
+    }
+
+    fn dealloc(&mut self, size: usize) -> Option<NonNull<u8>> {
+        if unlikely(self.taken_space() < size) {
             return None;
         }
 
-        unsafe { Some(self.alloc_low(padding, size)) }
+        self.cursor = unsafe { self.cursor.sub(size) };
+        NonNull::new(self.cursor)
+    }
+
+    unsafe fn header<'a>(&mut self) -> &'a mut AllocHeader {
+        unsafe { &mut *self.end.cast::<AllocHeader>() }
+    }
+
+    unsafe fn source(&self) -> Alloc {
+        Alloc {
+            end: NonNull::new(self.end.add(ALLOC_HEADER_SIZE)).unwrap(),
+        }
+    }
+}
+
+impl Default for Bump {
+    fn default() -> Self {
+        Self {
+            cursor: ptr::null_mut(),
+            end: ptr::null_mut(),
+            start: ptr::null_mut(),
+        }
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct Alloc {
+struct Alloc {
     end: NonNull<u8>,
 }
 
 impl Alloc {
-    pub unsafe fn new(size: usize, alloc: impl Allocator) -> Self {
-        debug_assert!(size >= NEXT_ALLOC_SIZE);
-        let layout = Layout::from_size_align_unchecked(size, NEXT_ALLOC_ALIGN);
-        let ptr = alloc.allocate(layout).unwrap();
+    unsafe fn new(base_size: usize, header: AllocHeader, alloc: impl Allocator) -> Self {
+        debug_assert!(base_size >= ALLOC_HEADER_SIZE);
+
+        let size = base_size << header.meta.pow();
+        let layout = Layout::from_size_align_unchecked(size, ALLOC_HEADER_ALIGN);
+        let end = unsafe { alloc.allocate(layout).unwrap().as_mut_ptr().add(size) };
+
+        end.cast::<AllocHeader>().sub(1).write(header);
+
         Self {
-            end: NonNull::new_unchecked(ptr.as_mut_ptr().add(size)),
+            end: NonNull::new_unchecked(end),
         }
+    }
+
+    unsafe fn header<'a>(self) -> &'a mut AllocHeader {
+        unsafe { &mut *self.end.as_ptr().cast::<AllocHeader>().sub(1) }
+    }
+
+    unsafe fn drop(self, base_size: usize, alloc: impl Allocator) -> AllocHeader {
+        let header = unsafe { ptr::read(self.header()) };
+        let size = base_size << header.meta.pow();
+        let layout = Layout::from_size_align_unchecked(size, ALLOC_HEADER_ALIGN);
+        let alloc_ptr = unsafe { NonNull::new_unchecked(self.end.as_ptr().sub(size)) };
+        unsafe { alloc.deallocate(alloc_ptr, layout) }
+        header
+    }
+
+    unsafe fn bump_range(self, base_size: usize) -> Range<*mut u8> {
+        let size = base_size << self.header().meta.pow();
+        let start = unsafe { self.end.as_ptr().sub(size) };
+        let end = self.end.as_ptr().sub(ALLOC_HEADER_SIZE);
+
+        start..end
+    }
+
+    unsafe fn full_bump(self, base_size: usize) -> Bump {
+        let Range { start, end } = self.bump_range(base_size);
+        unsafe { Bump::new(start, end, end) }
+    }
+
+    unsafe fn empty_bump(self, base_size: usize) -> Bump {
+        let Range { start, end } = self.bump_range(base_size);
+        unsafe { Bump::new(start, end, start) }
+    }
+}
+
+struct AllocHeader {
+    next: Option<Alloc>,
+    prev: Option<Alloc>,
+    meta: AllocHeaderMeta,
+}
+
+#[derive(Clone, Copy)]
+struct AllocHeaderMeta(usize);
+
+impl AllocHeaderMeta {
+    const POW_WIDTH: usize = 6;
+    const END_OFFSET_WIDTH: usize = mem::size_of::<usize>() * 8 - Self::POW_WIDTH;
+    const END_OFFSET_MASK: usize = (1 << Self::END_OFFSET_WIDTH) - 1;
+
+    fn new(pow: usize, end_offset: usize) -> Self {
+        debug_assert!(pow < 1 << Self::POW_WIDTH);
+        debug_assert!(end_offset < 1 << Self::END_OFFSET_WIDTH);
+        Self((pow << Self::END_OFFSET_WIDTH) | end_offset)
+    }
+
+    fn initial() -> Self {
+        Self::new(0, 0)
+    }
+
+    fn pow(self) -> usize {
+        self.0 >> Self::END_OFFSET_WIDTH
+    }
+
+    fn end_offset(self) -> usize {
+        self.0 & Self::END_OFFSET_MASK
+    }
+
+    fn next(self) -> AllocHeaderMeta {
+        Self::new(self.pow() + 1, 0)
     }
 }
