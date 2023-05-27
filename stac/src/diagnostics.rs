@@ -343,7 +343,7 @@ main: || {
         drop(builder);
 
         assert_eq!(diags.diagnostic_view(), "error: test\n-> main:\n1| \n2| main: || {\n   ^ Ident\n       ^ Colon\n         ^ ||
-            ^ LBrace\n3|     x: 1;\n       ^ Ident\n        ^ Colon\n          ^ Int\n           ^ Semi\n4| }\n   ^ RBrace\n", "{}", diags.diagnostic_view());
+            ^ LBrace\n3|     x: 1;\n       ^ Ident\n        ^ Colon\n          ^ Int\n           ^ Semi\n4| }\n   ^ RBrace\n\n", "{}", diags.diagnostic_view());
     }
 
     #[test]
@@ -377,6 +377,6 @@ f: x
 
         assert_eq!(diags.diagnostic_view(), "error: test\n-> main:\n1 | \n2 | main: || {\n    ^ Ident\n        ^ Colon\n          ^ ||
              ^ LBrace\n3 |     x: 1;\n        ^ Ident\n         ^ Colon\n           ^ Int\n            ^ Semi\n4 | \n...\n6 | \n7 | f: x
-    ^ Ident\n     ^ Colon\n       ^ Ident\n8 | \n...\n10| \n11| };\n    ^ RBrace\n     ^ Semi\n", "{}", diags.diagnostic_view());
+    ^ Ident\n     ^ Colon\n       ^ Ident\n8 | \n...\n10| \n11| };\n    ^ RBrace\n     ^ Semi\n\n", "{}", diags.diagnostic_view());
     }
 }

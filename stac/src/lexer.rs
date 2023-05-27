@@ -38,7 +38,7 @@ impl<'a> Iterator for Lexer<'a> {
 
         let span = Span::new(
             self.lexer.extras.line,
-            span.end - self.lexer.extras.last_newline,
+            span.start - self.lexer.extras.last_newline,
             self.file,
         );
 
@@ -95,7 +95,7 @@ macro_rules! define_lexer {
                 match self {
                     $(Self::$token => stringify!($token),)*
                     $(Self::$regex => stringify!($regex),)*
-                    Self::Op(_) => "operator",
+                    Self::Op(o) => o.name(),
                     Self::Eof => "end of file",
                 }
             }
@@ -168,11 +168,9 @@ define_lexer! {
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
-        Import = r":\{[^ \n\r\t]*\}"
+        Import = r":\{[^ \n\r\t}]*\}"
         Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
-
-        Comment = r"//.*"
     }
 
     operators {
