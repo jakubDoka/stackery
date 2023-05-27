@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::{FileRef, Files, Span};
 
 pub struct Token<'a> {
-    pub token: TokenKind,
+    pub kind: TokenKind,
     pub source: &'a str,
     pub span: Span,
 }
@@ -43,7 +43,7 @@ impl<'a> Iterator for Lexer<'a> {
         );
 
         Some(tok.map(|token| Token {
-            token,
+            kind: token,
             source,
             span,
         }))
@@ -62,7 +62,7 @@ macro_rules! define_lexer {
             $regex:ident = $regex_repr:literal
         )*}
         operators {$(
-            ($($op:literal)*) = $prec:literal
+            ($($op_name:ident: $op:literal),*) = $prec:literal,
         )*}
     ) => {
         #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
@@ -74,8 +74,8 @@ macro_rules! define_lexer {
 
             $(#[regex($regex_repr)] $regex,)*
 
-            $($(#[token($op, |_| $prec)])*)*
-            Op(u8),
+            $($(#[token($op, |_| OpCode::$op_name)])*)*
+            Op(OpCode),
 
             #[default]
             #[token("\n", handle_newlien)]
@@ -85,12 +85,37 @@ macro_rules! define_lexer {
         impl TokenKind {
             pub const TOKEN_COUNT: usize = [$($token_repr,)* $($regex_repr,)*].len();
 
+            pub const ALL: &[Self] = &[
+               $(Self::$token,)*
+               $(Self::$regex,)*
+               $($(Self::Op(OpCode::$op_name),)*)*
+            ];
+
             pub fn name(self) -> &'static str {
                 match self {
                     $(Self::$token => stringify!($token),)*
                     $(Self::$regex => stringify!($regex),)*
                     Self::Op(_) => "operator",
                     Self::Eof => "end of file",
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum OpCode {
+            $($($op_name,)*)*
+        }
+
+        impl OpCode {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $($(Self::$op_name => $op,)*)*
+                }
+            }
+
+            pub fn prec(self) -> u8 {
+                match self {
+                    $($(Self::$op_name)|* => $prec,)*
                 }
             }
         }
@@ -151,8 +176,14 @@ define_lexer! {
     }
 
     operators {
-        ("*" "/") = 3
-        ("+" "-") = 4
+        (Mul: "*", Div: "/", Mod: "%") = 3,
+        (Add: "+", Sub: "-") = 4,
+        (Shl: "<<", Shr: ">>") = 5,
+        (BitAnd: "&", BitOr: "|", BitXor: "^") = 6,
+        (Eq: "==", Ne: "!=", Lt: "<", Le: "<=", Gt: ">", Ge: ">=") = 7,
+        (And: "&&", Or: "||") = 8,
+        (Assign: "=", AddAssign: "+=", SubAssign: "-=", MulAssign: "*=", DivAssign: "/=", ModAssign: "%=",
+         ShlAssign: "<<=", ShrAssign: ">>=", BitAndAssign: "&=", BitOrAssign: "|=", BitXorAssign: "^=") = 9,
     }
 }
 
@@ -167,5 +198,31 @@ impl TokenKind {
 impl Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::TokenKind;
+
+    #[test]
+    fn all_tokens() {
+        let code = "
+            if else loop fn ret for in
+            . , ; : |{ *{ { } [ ] *( ( )
+            ident
+            :{import}
+            \"str\"
+            123
+            * / % + - << >> & | ^ == != < <= > >= && || = += -= *= /= %= <<= >>= &= |= ^= //
+        ";
+
+        let actual = TokenKind::lexer(code)
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+
+        let expected = TokenKind::ALL;
+
+        assert_eq!(actual, expected);
     }
 }

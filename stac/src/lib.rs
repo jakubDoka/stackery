@@ -11,7 +11,8 @@
     inline_const,
     iter_intersperse,
     iter_collect_into,
-    trusted_len
+    trusted_len,
+    slice_group_by
 )]
 
 mod diagnostics;
@@ -20,6 +21,6 @@ mod source;
 
 pub use {
     diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics},
-    lexer::{Token, TokenKind},
+    lexer::{Lexer, Token, TokenKind},
     source::{File, FileRef, Files, Span},
 };
