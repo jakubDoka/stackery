@@ -19,6 +19,7 @@ mod lexer;
 mod source;
 
 pub use {
-    lexer::Token,
-    source::{File, FileRef, Span},
+    diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics},
+    lexer::{Token, TokenKind},
+    source::{File, FileRef, Files, Span},
 };

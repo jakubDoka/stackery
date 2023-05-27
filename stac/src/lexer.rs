@@ -1,11 +1,53 @@
 use std::fmt::Display;
 
-use crate::Span;
+use crate::{FileRef, Files, Span};
 
-pub struct TokenMeta<'a> {
-    pub token: Token,
+pub struct Token<'a> {
+    pub token: TokenKind,
     pub source: &'a str,
     pub span: Span,
+}
+
+#[derive(Default)]
+pub struct Extras {
+    line: usize,
+    last_newline: usize,
+}
+
+pub struct Lexer<'a> {
+    lexer: logos::Lexer<'a, TokenKind>,
+    file: FileRef,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(files: &'a Files, file: FileRef) -> Self {
+        Self {
+            lexer: TokenKind::lexer(files.get_file(file).source()),
+            file,
+        }
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Result<Token<'a>, ()>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let tok = self.lexer.next()?;
+        let span = self.lexer.span();
+        let source = self.lexer.slice();
+
+        let span = Span::new(
+            self.lexer.extras.line,
+            span.end - self.lexer.extras.last_newline,
+            self.file,
+        );
+
+        Some(tok.map(|token| Token {
+            token,
+            source,
+            span,
+        }))
+    }
 }
 
 macro_rules! define_lexer {
@@ -24,9 +66,10 @@ macro_rules! define_lexer {
         )*}
     ) => {
         #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
-        #[logos(skip r"[ \t\n\r]+")]
+        #[logos(skip r"([ \t\r]+|//.*\n)")]
+        #[logos(extras = Extras)]
         $(#[logos(subpattern $subpattern = $subpattern_repr)])*
-        pub enum Token {
+        pub enum TokenKind {
             $(#[token($token_repr)] $token,)*
 
             $(#[regex($regex_repr)] $regex,)*
@@ -35,10 +78,11 @@ macro_rules! define_lexer {
             Op(u8),
 
             #[default]
+            #[token("\n", handle_newlien)]
             Eof,
         }
 
-        impl Token {
+        impl TokenKind {
             pub const TOKEN_COUNT: usize = [$($token_repr,)* $($regex_repr,)*].len();
 
             pub fn name(self) -> &'static str {
@@ -59,6 +103,12 @@ macro_rules! define_lexer {
     (@token_repr $token:ident) => {
         stringify!($token)
     };
+}
+
+fn handle_newlien(lex: &mut logos::Lexer<TokenKind>) -> logos::Skip {
+    lex.extras.line += 1;
+    lex.extras.last_newline = lex.span().end;
+    logos::Skip
 }
 
 define_lexer! {
@@ -106,15 +156,15 @@ define_lexer! {
     }
 }
 
-impl Token {
+impl TokenKind {
     pub const ERROR: &str = "Error";
 
-    pub fn lexer(input: &str) -> logos::Lexer<Token> {
+    pub fn lexer(input: &str) -> logos::Lexer<TokenKind> {
         logos::Logos::lexer(input)
     }
 }
 
-impl Display for Token {
+impl Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }
