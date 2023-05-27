@@ -1,11 +1,14 @@
 use std::fmt::Display;
 
-use crate::Span;
-
 pub struct TokenMeta<'a> {
     pub token: Token,
     pub source: &'a str,
     pub span: Span,
+}
+
+pub struct Span {
+    pos: u16,
+    file: FileRef,
 }
 
 macro_rules! define_lexer {
@@ -25,6 +28,7 @@ macro_rules! define_lexer {
     ) => {
         #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
         #[logos(skip r"[ \t\n\r]+")]
+        #[repr(C)]
         $(#[logos(subpattern $subpattern = $subpattern_repr)])*
         pub enum Token {
             $(#[token($token_repr)] $token,)*

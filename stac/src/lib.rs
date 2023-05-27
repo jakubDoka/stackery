@@ -8,19 +8,17 @@
     never_type,
     int_roundings,
     if_let_guard,
-    inline_const
+    inline_const,
+    iter_intersperse,
+    iter_collect_into,
+    trusted_len
 )]
 
-mod codegen;
-mod errors;
+mod diagnostics;
 mod lexer;
-mod loader;
-mod parser;
+mod source;
 
 pub use {
-    errors::{Error, ErrorBuilder, Errors},
     lexer::Token,
-    loader::{LoaderSource, RootSource, Source, SourceId},
-    parser::{Parser, ParserContext},
-    scoped_arena,
+    source::{File, FileRef, Span},
 };

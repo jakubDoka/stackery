@@ -7,5 +7,4 @@ edition = "2021"
 
 [dependencies]
 logos = "0.13.0"
-peg = "0.8.1"
-scoped-arena = { version = "0.4.1", features = ["alloc", "allocator_api"] }
+mini-alloc = { path = "../util/mini-alloc" }
