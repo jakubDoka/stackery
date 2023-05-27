@@ -231,7 +231,7 @@ pub mod api {
     }
 
     pub mod session {
-        pub const KEY: &'static str = "session";
+        pub const KEY: &str = "session";
     }
 }
 
@@ -354,7 +354,7 @@ pub mod search {
 
             let end = next
                 .find(|c| !is_field_char(c))
-                .unwrap_or_else(|| next.len());
+                .unwrap_or(next.len());
 
             let (field, reminder) = next.split_at(end);
             let reminder = reminder.trim_start();

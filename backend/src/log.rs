@@ -42,7 +42,7 @@ static LOGGER: std::sync::LazyLock<Logger> = std::sync::LazyLock::new(|| {
 });
 
 pub fn get() -> &'static Logger {
-    &*LOGGER
+    &LOGGER
 }
 
 #[macro_export]

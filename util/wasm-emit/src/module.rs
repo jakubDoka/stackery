@@ -102,7 +102,7 @@ sections! {
 macro_rules! impl_nested_encode {
     ($($name:ident => $encoder:ident)*) => {$(
         impl NestedEncode for $name {
-            fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B> {
+            fn new_encoder<B: Backend>(encoder: Encoder<'_, B>, _: Guard) -> Self::Element<'_, B> {
                 $encoder::new(encoder)
             }
         }
@@ -134,19 +134,19 @@ pub struct Module<'a> {
     pub data: DataSection,
 }
 
-pub trait EmmitBuffer {
+pub trait EmitBuffer {
     fn ensure_capacity(&mut self, amount: usize) -> *mut u8;
     unsafe fn set_len(&mut self, len: usize);
 }
 
 impl<'a> Module<'a> {
-    pub fn emmit<B: Backend>(
+    pub fn emit<B: Backend>(
         &self,
         encoder: Encoder<B>,
-        buffer: &mut impl EmmitBuffer,
-    ) -> Result<(), EmmitError> {
+        buffer: &mut impl EmitBuffer,
+    ) -> Result<(), EmitError> {
         if self.functions.entity_count != self.codes.entity_count {
-            return Err(EmmitError::UnmatchedFuncCount(
+            return Err(EmitError::UnmatchedFuncCount(
                 self.functions.entity_count,
                 self.codes.entity_count,
             ));
@@ -208,10 +208,8 @@ impl<'a> Module<'a> {
             + self.exports.len()
             + self.start.map_or(0, |s| s.len())
             + self.elements.len()
-            + self
-                .include_data_count
-                .then_some(b128::unsigned_integer_length(self.data.len() as u64))
-                .unwrap_or(0)
+            + if self
+                .include_data_count { b128::unsigned_integer_length(self.data.len() as u64) } else { 0 }
             + self.codes.len()
             + self.data.len()
             + PREFACE_SIZE
@@ -219,7 +217,7 @@ impl<'a> Module<'a> {
 }
 
 #[derive(Debug)]
-pub enum EmmitError {
+pub enum EmitError {
     UnmatchedFuncCount(usize, usize),
 }
 

@@ -1,10 +1,12 @@
-use std::{
-    alloc::{Allocator, Global, Layout},
+use core::{
+    alloc::{Allocator, Layout},
     intrinsics::unlikely,
     mem,
     ops::Range,
     ptr::{self, NonNull},
 };
+
+use alloc::alloc::Global;
 
 const ALLOC_HEADER_SIZE: usize = mem::size_of::<AllocHeader>();
 const ALLOC_HEADER_ALIGN: usize = mem::align_of::<AllocHeader>();
@@ -15,11 +17,18 @@ pub(crate) struct AllocList<A: Allocator = Global> {
     base_size: usize,
 }
 
-impl<A: Allocator> AllocList<A> {
+impl AllocList {
     pub(crate) const MIN_BASE_SIZE: usize = ALLOC_HEADER_SIZE;
 
-    pub(crate) fn new(base_size: usize, alloc: A) -> Self {
-        assert!(base_size >= ALLOC_HEADER_SIZE);
+    #[cfg(test)]
+    pub(crate) fn new(base_size: usize) -> Self {
+        Self::new_in(base_size, Global)
+    }
+}
+
+impl<A: Allocator> AllocList<A> {
+    pub(crate) fn new_in(base_size: usize, alloc: A) -> Self {
+        assert!(base_size >= AllocList::MIN_BASE_SIZE);
         Self {
             alloc,
             head: None,
@@ -37,11 +46,23 @@ impl<A: Allocator> AllocList<A> {
         }
     }
 
+    pub fn alloc_slice_to_bump<T>(&mut self, bump: &mut Bump, len: usize) -> NonNull<T> {
+        let layout = Layout::array::<T>(len).unwrap();
+
+        loop {
+            match bump.alloc(layout) {
+                Some(ptr) => return ptr.cast(),
+                None => self.expand(bump),
+            }
+        }
+    }
+
     #[inline]
-    pub(crate) fn dealloc_from_bump<T>(&mut self, bump: &mut Bump) -> NonNull<T> {
+    pub(crate) fn dealloc_from_bump<T>(&mut self, bump: &mut Bump) -> Option<NonNull<T>> {
         loop {
             match bump.dealloc(mem::size_of::<T>()) {
-                Some(ptr) => return ptr.cast(),
+                Some(ptr) => return Some(ptr.cast()),
+                None if *bump == Default::default() => return None,
                 None => self.shrink(bump),
             }
         }
@@ -96,6 +117,8 @@ impl<A: Allocator> AllocList<A> {
             next
         };
 
+        header.meta = header.meta.with_end_offset(bump.free_space());
+
         *bump = unsafe { next.empty_bump(self.base_size) };
     }
 
@@ -112,6 +135,7 @@ impl<A: Allocator> AllocList<A> {
         };
 
         *bump = unsafe { prev.full_bump(self.base_size) };
+        bump.cursor = unsafe { bump.cursor.sub(bump.header().meta.end_offset()) };
     }
 }
 
@@ -125,7 +149,7 @@ impl<A: Allocator> Drop for AllocList<A> {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub(crate) struct Bump {
     cursor: *mut u8,
     end: *mut u8,
@@ -288,5 +312,44 @@ impl AllocHeaderMeta {
 
     fn next(self) -> AllocHeaderMeta {
         Self::new(self.pow() + 1, 0)
+    }
+
+    fn with_end_offset(self, free_space: usize) -> AllocHeaderMeta {
+        Self::new(self.pow(), free_space)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use alloc::vec::Vec;
+
+    #[test]
+    fn expand() {
+        let mut alloc = AllocList::new(AllocList::MIN_BASE_SIZE);
+        let mut bump = Bump::default();
+
+        for _ in 0..10 {
+            alloc.expand(&mut bump);
+        }
+    }
+
+    #[test]
+    fn allocate_deallocate() {
+        let mut alloc = AllocList::new(AllocList::MIN_BASE_SIZE);
+        let mut bump = Bump::default();
+
+        let mut ptrs = (0..100)
+            .map(|_| alloc.alloc_to_bump::<usize>(&mut bump))
+            .collect::<Vec<_>>();
+
+        for ptr in ptrs.drain(..).rev() {
+            let poped = alloc.dealloc_from_bump::<usize>(&mut bump);
+            assert_eq!(poped, Some(ptr));
+        }
+
+        assert_eq!(alloc.dealloc_from_bump::<usize>(&mut bump), None);
+
+        assert_eq!(bump.cursor, bump.start);
     }
 }

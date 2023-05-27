@@ -112,7 +112,7 @@ pub trait Index: Sealed + Copy {
 pub trait Sealed {}
 
 pub trait NestedEncode: VecSection {
-    fn new_encoder<'a, B: Backend>(encoder: Encoder<'a, B>, _: Guard) -> Self::Element<'a, B>;
+    fn new_encoder<B: Backend>(encoder: Encoder<'_, B>, _: Guard) -> Self::Element<'_, B>;
 }
 
 pub struct Guard(());
@@ -173,8 +173,8 @@ impl<'a, B: Backend> Encoder<'a, B> {
 
     fn stack_borrow(&mut self) -> Encoder<'_, B> {
         Encoder {
-            integers: &mut self.integers,
-            output: &mut self.output,
+            integers: self.integers,
+            output: self.output,
         }
     }
 

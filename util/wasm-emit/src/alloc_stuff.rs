@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{module::EmmitBuffer, Buffer, Integer, Integers};
+use crate::{module::EmitBuffer, Buffer, Integer, Integers};
 
 impl Buffer for Vec<u8> {
     fn extend(&mut self, slice: &[u8]) {
@@ -36,7 +36,7 @@ impl Integers for Vec<Integer> {
     }
 }
 
-impl EmmitBuffer for Vec<u8> {
+impl EmitBuffer for Vec<u8> {
     fn ensure_capacity(&mut self, amount: usize) -> *mut u8 {
         self.reserve(amount);
         unsafe { self.as_mut_ptr().add(self.len()) }

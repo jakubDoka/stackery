@@ -25,7 +25,7 @@ impl<'a, T, B: Backend> VecEncoder<'a, T, B> {
         self.written += 1;
     }
 
-    pub(super) fn inc_written<'b>(&'b mut self) {
+    pub(super) fn inc_written(&mut self) {
         self.written += 1;
     }
 

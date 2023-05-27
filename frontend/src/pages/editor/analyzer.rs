@@ -4,7 +4,7 @@ use stac::*;
 use crate::api;
 
 pub struct Analyzer {
-    scope: scoped_arena::Scope<'static>,
+    //arena_base: ArenaBase,
     root: RootSource,
     errors: Errors,
 }
@@ -12,7 +12,7 @@ pub struct Analyzer {
 impl Default for Analyzer {
     fn default() -> Self {
         Self {
-            scope: scoped_arena::Scope::new(),
+            //arena_base: ArenaBase::default(),
             root: RootSource::default(),
             errors: Errors::default(),
         }
@@ -21,16 +21,7 @@ impl Default for Analyzer {
 
 impl Analyzer {
     pub async fn check(&mut self, source: String, status: UseState<String>) {
-        self.root
-            .reload(
-                &source,
-                &self.scope,
-                &mut self.errors,
-                &mut LoaderImpl(status.clone()),
-            )
-            .await;
-
-        status.set("code checked".to_owned());
+        todo!()
     }
 
     pub fn errors(&mut self) -> impl Iterator<Item = Error> + '_ {

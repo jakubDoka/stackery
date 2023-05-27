@@ -1,12 +1,12 @@
 use std::mem;
 
-pub fn emmit(markdown: &str, config: Config, buffer: &mut String) {
+pub fn emit(markdown: &str, config: Config, buffer: &mut String) {
     use logos::Logos;
 
     fn tag_start(tag: &str, attributes: ElementAttr, buffer: &mut String) {
         buffer.push('<');
         buffer.push_str(tag);
-        attributes.emmit(buffer);
+        attributes.emit(buffer);
         buffer.push('>');
     }
 
@@ -103,7 +103,7 @@ pub fn emmit(markdown: &str, config: Config, buffer: &mut String) {
                 };
 
                 tag_start("pre", config.code_block, buffer);
-                syntax.emmit(code, buffer);
+                syntax.emit(code, buffer);
                 tag_end("pre", buffer);
             }
             Token::Heading => {
@@ -122,7 +122,7 @@ pub fn emmit(markdown: &str, config: Config, buffer: &mut String) {
                 buffer.push_str("<a href=\"");
                 buffer.push_str(link);
                 buffer.push('"');
-                config.link.emmit(buffer);
+                config.link.emit(buffer);
                 buffer.push('>');
 
                 buffer.push_str(text);
@@ -269,7 +269,7 @@ impl<'a> ElementAttr<'a> {
         }
     }
 
-    fn emmit(&self, buffer: &mut String) {
+    fn emit(&self, buffer: &mut String) {
         if self.content.is_empty() {
             return;
         }
@@ -288,7 +288,7 @@ impl<'a> ElementAttr<'a> {
 
 pub trait Syntax {
     fn name(&self) -> &str;
-    fn emmit(&mut self, code: &str, buffer: &mut String);
+    fn emit(&mut self, code: &str, buffer: &mut String);
 }
 
 pub trait LogosSyntaxConfig {
@@ -377,7 +377,7 @@ impl<T: LogosSyntaxConfig> Syntax for LogosSyntax<T> {
         T::NAME
     }
 
-    fn emmit(&mut self, code: &str, buffer: &mut String) {
+    fn emit(&mut self, code: &str, buffer: &mut String) {
         use logos::Logos;
 
         let mut lexer = T::Token::lexer(code);
@@ -419,7 +419,7 @@ mod test {
     #[track_caller]
     fn test_case_config(config: Config<'_>, input: &str, expected: &str) {
         let mut buffer = String::new();
-        emmit(input, config, &mut buffer);
+        emit(input, config, &mut buffer);
         assert_eq!(buffer, expected);
     }
 

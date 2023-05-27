@@ -1,17 +1,10 @@
-[package]
-name = "stackery"
-version = "0.1.0"
-edition = "2021"
-
 [workspace]
 members = [
-	"frontend",
-	"backend",
-	"bf-shared",
+	#"frontend",
+	#"backend",
+	#"bf-shared",
 	"stac",
-	"wasm-emit",
-	"little-md",
-	"mini-alloc",
+	"util/*",
 ]
 
 

@@ -20,7 +20,7 @@ pub struct SearcherClient<T> {
 #[cfg_attr(test, mockall::automock, allow(dead_code))]
 impl<T: SearchModel> SearcherClient<T> {
     pub async fn new(client: &Client) -> Self {
-        let index = Self::create_index(&client).await;
+        let index = Self::create_index(client).await;
 
         index
             .set_filterable_attributes(T::FILTERABLE_FIELDS)

@@ -1,6 +1,5 @@
 FROM archlinux:latest AS builder
 
-
 RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm binaryen && \
     pacman -S --noconfirm git && \

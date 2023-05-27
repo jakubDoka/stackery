@@ -125,7 +125,7 @@ impl<'a, 'b, T: VecSection, B: Backend> VecSectionEncoder<'a, 'b, T, B> {
         T::new(start, current_len, self.inner.written(), Guard(()))
     }
 
-    pub fn encoder<'c>(&'c mut self) -> (T::Index, T::Element<'c, B>)
+    pub fn encoder(&mut self) -> (T::Index, T::Element<'_, B>)
     where
         T: NestedEncode,
     {

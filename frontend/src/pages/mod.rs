@@ -388,19 +388,7 @@ impl ToCodeCategory for StacSyntaxConfig {
     type Token = stac::Token;
 
     fn to_code_category(s: Result<Self::Token, ()>) -> CodeCategory {
-        let Ok(s) = s else {return CodeCategory::Error;};
-        match s {
-            stac::Token::ListSep
-            | stac::Token::ListEnd
-            | stac::Token::Bind
-            | stac::Token::Op(_) => CodeCategory::Punctuation,
-            stac::Token::Import | stac::Token::Func | stac::Token::Call => CodeCategory::Keyword,
-            stac::Token::Str => CodeCategory::String,
-            stac::Token::Int => CodeCategory::Number,
-            stac::Token::Comment => CodeCategory::Comment,
-            stac::Token::Eof => CodeCategory::Error,
-            stac::Token::Use => CodeCategory::Ident,
-        }
+        todo!()
     }
 }
 
@@ -451,7 +439,7 @@ pub fn translate_md(md: &str) -> String {
     };
 
     let mut buf = String::new();
-    little_md::emmit(md, config, &mut buf);
+    little_md::emit(md, config, &mut buf);
 
     buf
 }

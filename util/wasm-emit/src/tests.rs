@@ -6,19 +6,19 @@ use alloc::vec::Vec;
 fn perform_test<'a>(tester: impl FnOnce(Encoder<DefaultBackend>) -> Module<'a>) -> Vec<u8> {
     let mut buffer = vec![];
     let mut integers = vec![];
-    let mut emmited: Vec<u8> = vec![];
+    let mut emited: Vec<u8> = vec![];
 
     let module = tester(Encoder::<DefaultBackend>::new(&mut integers, &mut buffer));
     module
-        .emmit(
+        .emit(
             Encoder::<DefaultBackend>::new(&mut integers, &mut buffer),
-            &mut emmited,
+            &mut emited,
         )
         .unwrap();
 
-    wasmparser::validate(&emmited).expect(&format!("{emmited:?}"));
+    wasmparser::validate(&emited).unwrap_or_else(|_| panic!("{emited:?}"));
 
-    emmited
+    emited
 }
 
 #[test]
