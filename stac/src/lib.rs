@@ -17,10 +17,19 @@
 
 mod diagnostics;
 mod lexer;
+mod parser;
 mod source;
 
 pub use {
-    diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics},
+    diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics, Severty},
     lexer::{Lexer, Token, TokenKind},
+    parser::{
+        expr::{
+            BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAccessAst,
+            FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst, LiteralAst,
+            LiteralKindAst, LoopAst, MethodCallAst, OpAst, StructField, UnaryAst, UnitAst,
+        },
+        Parser, TransposeOpt,
+    },
     source::{File, FileRef, Files, Span},
 };

@@ -1,4 +1,4 @@
-#![feature(array_windows)]
+#![feature(array_windows, decl_macro)]
 
 use std::{
     env,
@@ -14,6 +14,7 @@ pub fn function_name<T>(_: T) -> &'static str {
 struct Config {
     cahce_dir: PathBuf,
     auto_git_add: bool,
+    write_changes: bool,
 }
 
 impl Config {
@@ -22,9 +23,12 @@ impl Config {
             cahce_dir: env::var("PRINT_TEXT_CACHE_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("print-test-cache")),
-            auto_git_add: env::var("PRINT_TEXT_AUTO_GIT_ADD")
+            auto_git_add: env::var("PRINT_TEST_AUTO_GIT_ADD")
                 .map(|s| s == "1")
-                .unwrap_or(true),
+                .unwrap_or(false),
+            write_changes: env::var("PRINT_TEST_WRITE_CHANGES")
+                .map(|s| s == "1")
+                .unwrap_or(false),
         }
     }
 }
@@ -41,32 +45,56 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
     }
 
     fn save_result(name: &str, source: &str) {
+        use std::fmt::Write;
+
+        struct Dump {
+            buffer: String,
+        }
+
+        impl Drop for Dump {
+            fn drop(&mut self) {
+                if self.buffer.is_empty() {
+                    return;
+                }
+                eprintln!("{}", self.buffer);
+            }
+        }
+
+        let mut dump = Dump {
+            buffer: String::new(),
+        };
+
+        macro log($dump:ident, $($arg:tt)*) {
+            writeln!($dump.buffer, "print-test: {}", format_args!($($arg)*)).unwrap();
+        }
+
         let config = get_config();
 
         let path = config.cahce_dir.join(name);
 
-        fn write_file(path: &Path, source: &str) -> bool {
+        fn write_file(dump: &mut Dump, path: &Path, source: &str, should_run: bool) -> bool {
+            if !should_run {
+                return true;
+            }
+
             if let Err(e) = std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))) {
-                eprintln!("print-test: failed to create directory: {}", e);
+                log!(dump, "failed to create directory: {}", e);
                 return false;
             }
             if let Err(e) = std::fs::write(&path, source) {
-                eprintln!("print-test: failed to write to file: {}", e);
+                log!(dump, "failed to write to file: {}", e);
                 return false;
             }
 
             true
         }
 
-        fn run_git_add(path: &Path, should_run: bool) {
+        fn run_git_add(dump: &mut Dump, path: &Path, should_run: bool) {
             if !should_run {
                 return;
             }
 
-            println!(
-                "print-test: adding file to git:\n  git add {}",
-                path.display()
-            );
+            log!(dump, "adding file to git:\n  git add {}", path.display());
             let output = std::process::Command::new("git")
                 .arg("add")
                 .arg(path)
@@ -74,24 +102,33 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
                 .expect("failed to execute git add");
 
             if !output.status.success() {
-                eprintln!("print-test: failed to execute git add");
-                eprintln!("  status: {}", output.status);
-                eprintln!("  stdout: {}", String::from_utf8_lossy(&output.stdout));
-                eprintln!("  stderr: {}", String::from_utf8_lossy(&output.stderr));
+                log!(dump, "failed to execute git add");
+                log!(dump, "  status: {}", output.status);
+                log!(
+                    dump,
+                    "  stdout: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                log!(
+                    dump,
+                    "  stderr: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
         }
 
         if !path.exists() {
-            if !write_file(&path, source) {
+            if !write_file(&mut dump, &path, source, config.write_changes) {
                 return;
             }
 
-            println!(
-                "print-test: no previous result found, saving current result:\n{}",
+            log!(
+                dump,
+                "no previous result found, saving current result:\n{}",
                 source
             );
 
-            run_git_add(&path, config.auto_git_add);
+            run_git_add(&mut dump, &path, config.auto_git_add);
 
             return;
         }
@@ -99,19 +136,18 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
         let prev = match std::fs::read_to_string(&path) {
             Ok(prev) => prev,
             Err(e) => {
-                eprintln!("print-test: failed to read from file: {}", e);
+                log!(dump, "failed to read from file: {}", e);
                 return;
             }
         };
 
-        let diff = diff::lines(&source, &prev);
+        let diff = diff::lines(&prev, &source);
 
         if diff.iter().all(|d| matches!(d, diff::Result::Both(..))) {
-            println!("print-test: no changes detected for test '{}'", name);
             return;
         }
 
-        println!("print-test: changes detected for test '{}':", name);
+        log!(dump, "changes detected for test '{}':", name);
         let mut displaying = false;
         for (i, line) in diff.iter().enumerate() {
             let ansi_term = "\u{001b}[0m";
@@ -129,30 +165,34 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
                             displaying = true;
                         }
                         (true, false) => {
-                            println!("...");
+                            log!(dump, "...");
                             displaying = false;
                         }
                         _ => {}
                     }
 
                     if displaying {
-                        println!("  {}", line);
+                        log!(dump, "  {}", line);
                     }
                 }
                 diff::Result::Left(line) => {
                     let ansi_red = "\u{001b}[31m";
-                    println!("{ansi_red}- {line}{ansi_term}");
+                    log!(dump, "{ansi_red}- {line}{ansi_term}");
                 }
                 diff::Result::Right(line) => {
                     let ansi_green = "\u{001b}[32m";
-                    println!("{ansi_green}+ {line}{ansi_term}");
+                    log!(dump, "{ansi_green}+ {line}{ansi_term}");
                 }
             }
         }
 
-        write_file(&path, source);
+        write_file(&mut dump, &path, source, config.write_changes);
 
-        run_git_add(&path, config.auto_git_add);
+        run_git_add(&mut dump, &path, config.auto_git_add);
+
+        if !std::thread::panicking() {
+            panic!("test '{}' failed", name);
+        }
     }
 
     let mut case = Case {

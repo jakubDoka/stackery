@@ -176,7 +176,6 @@ impl Diagnostics {
                     annotation.display_standalone(&mut self.output, &self.temp_buffer, self.config.skip_colors);
                     
                     diags.next();
-
                 }
             }
         }
@@ -204,7 +203,7 @@ impl Default for DiagnosticConfig {
     fn default() -> Self {
         Self {
             tab_width: 4,
-            skip_colors: false,
+            skip_colors: true,
             view_range: 1,
         }
     }
@@ -216,7 +215,7 @@ pub struct Diagnostic<'ctx> {
 }
 
 impl<'ctx> Diagnostic<'ctx> {
-    pub fn footer(&mut self, severty: Severty, message: impl Display) -> &mut Self {
+    pub fn footer(self, severty: Severty, message: impl Display) ->  Self {
         let message = self.inner.cache_string(message);
         self.inner
             .footer_temp
@@ -224,7 +223,7 @@ impl<'ctx> Diagnostic<'ctx> {
         self
     }
 
-    pub fn annotation(&mut self, severty: Severty, span: Span, message: impl Display) -> &mut Self {
+    pub fn annotation(self, severty: Severty, span: Span, message: impl Display) ->  Self {
         let message = self.inner.cache_string(message);
         self.inner.annotation_temp.push(Annotation {
             severty,
@@ -232,6 +231,10 @@ impl<'ctx> Diagnostic<'ctx> {
             message,
         });
         self
+    }
+
+    pub fn terminate(self) -> Option<!> {
+        None
     }
 }
 
@@ -316,17 +319,11 @@ impl Severty {
 
 #[cfg(test)]
 mod test {
-    use crate::{File, Lexer};
+    use crate::{File, Lexer, TokenKind};
 
     use super::*;
 
-    #[test]
-    fn just_do_it() {
-        let code = "
-main: || {
-\tx: 1;
-}
-";
+    fn perform_test(code: &str, ctx: &mut String) {
         let mut files = Files::new();
         let (file, ..) = files.add_file(File::new("main".into(), code.into()));
         let lexer = Lexer::new(&files, file);
@@ -335,20 +332,27 @@ main: || {
             ..Default::default()
         });
 
-        let mut builder = diags.builder(&files);
-        builder.footer(Severty::Error, "test");
-        for tok in lexer.flat_map(Result::ok) {
-            builder.annotation(Severty::Warning, tok.span, tok.kind);
+        let mut builder = diags.builder(&files).footer(Severty::Error, "test");
+        for tok in lexer.take_while(|tok| tok.kind != TokenKind::Eof) {
+            builder = builder.annotation(Severty::Warning, tok.span, tok.kind);
         }
+
         drop(builder);
 
-        assert_eq!(diags.diagnostic_view(), "error: test\n-> main:\n1| \n2| main: || {\n   ^ Ident\n       ^ Colon\n         ^ ||
-            ^ LBrace\n3|     x: 1;\n       ^ Ident\n        ^ Colon\n          ^ Int\n           ^ Semi\n4| }\n   ^ RBrace\n\n", "{}", diags.diagnostic_view());
+        ctx.push_str(diags.diagnostic_view());
     }
 
-    #[test]
-    fn lot_or_code() {
-        let code = "
+    print_test::cases! {
+        fn just_do_it(ctx) {
+            perform_test("
+main: || {
+\tx: 1;
+}
+", ctx)
+        }
+
+        fn lot_or_code(ctx) {
+            perform_test("
 main: || {
 \tx: 1;
 
@@ -359,24 +363,8 @@ f: x
 
 
 };
-";
-        let mut files = Files::new();
-        let (file, ..) = files.add_file(File::new("main".into(), code.into()));
-        let lexer = Lexer::new(&files, file);
-        let mut diags = Diagnostics::with_config(DiagnosticConfig {
-            skip_colors: true,
-            ..Default::default()
-        });
-
-        let mut builder = diags.builder(&files);
-        builder.footer(Severty::Error, "test");
-        for tok in lexer.flat_map(Result::ok) {
-            builder.annotation(Severty::Warning, tok.span, tok.kind);
+", ctx)
         }
-        drop(builder);
-
-        assert_eq!(diags.diagnostic_view(), "error: test\n-> main:\n1 | \n2 | main: || {\n    ^ Ident\n        ^ Colon\n          ^ ||
-             ^ LBrace\n3 |     x: 1;\n        ^ Ident\n         ^ Colon\n           ^ Int\n            ^ Semi\n4 | \n...\n6 | \n7 | f: x
-    ^ Ident\n     ^ Colon\n       ^ Ident\n8 | \n...\n10| \n11| };\n    ^ RBrace\n     ^ Semi\n\n", "{}", diags.diagnostic_view());
     }
+
 }

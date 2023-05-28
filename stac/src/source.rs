@@ -51,6 +51,11 @@ impl FileRef {
                 .expect("amount of source files cannot exceed 65535"),
         )
     }
+
+    #[cfg(test)]
+    pub fn fake() -> Self {
+        Self(u16::MAX)
+    }
 }
 
 pub struct File {
@@ -107,5 +112,13 @@ impl Span {
 
     pub fn col(&self) -> usize {
         self.col as usize
+    }
+
+    pub(crate) fn shift(&self, index: usize) -> Span {
+        Span {
+            row: self.row,
+            col: self.col + index as u16,
+            file: self.file,
+        }
     }
 }

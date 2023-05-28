@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 logos = "0.13.0"
 mini-alloc = { path = "../util/mini-alloc" }
+print-test = { version = "0.1.0", path = "../util/print-test" }

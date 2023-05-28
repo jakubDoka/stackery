@@ -140,6 +140,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
 
 [[package]]
+name = "print-test"
+version = "0.1.0"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -169,6 +173,7 @@ version = "0.1.0"
 dependencies = [
  "logos",
  "mini-alloc",
+ "print-test",
 ]
 
 [[package]]

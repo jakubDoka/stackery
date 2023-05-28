@@ -1,0 +1,16 @@
+error: test
+-> main:
+1| 
+2| main: || {
+   ^ Ident
+       ^ :
+         ^ ||
+            ^ {
+3|     x: 1;
+       ^ Ident
+        ^ :
+          ^ Int
+           ^ ;
+4| }
+   ^ }
+

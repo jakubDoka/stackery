@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use crate::{FileRef, Files, Span};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Token<'a> {
     pub kind: TokenKind,
     pub source: &'a str,
@@ -26,13 +27,21 @@ impl<'a> Lexer<'a> {
             file,
         }
     }
-}
 
-impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Token<'a>, ()>;
+    #[cfg(test)]
+    pub fn with_fake_file(source: &'a str) -> Self {
+        Self {
+            lexer: TokenKind::lexer(source),
+            file: FileRef::fake(),
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let tok = self.lexer.next()?;
+    pub fn next_tok(&mut self) -> Token<'a> {
+        let kind = self
+            .lexer
+            .next()
+            .unwrap_or(Ok(TokenKind::Eof))
+            .unwrap_or(TokenKind::Err);
         let span = self.lexer.span();
         let source = self.lexer.slice();
 
@@ -42,11 +51,15 @@ impl<'a> Iterator for Lexer<'a> {
             self.file,
         );
 
-        Some(tok.map(|token| Token {
-            kind: token,
-            source,
-            span,
-        }))
+        Token { kind, source, span }
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Token<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.next_tok())
     }
 }
 
@@ -66,7 +79,7 @@ macro_rules! define_lexer {
         )*}
     ) => {
         #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
-        #[logos(skip r"([ \t\r]+|//.*\n)")]
+        #[logos(skip r"([ \t\r]+|//[^\n]*)")]
         #[logos(extras = Extras)]
         $(#[logos(subpattern $subpattern = $subpattern_repr)])*
         pub enum TokenKind {
@@ -80,6 +93,8 @@ macro_rules! define_lexer {
             #[default]
             #[token("\n", handle_newlien)]
             Eof,
+
+            Err,
         }
 
         impl TokenKind {
@@ -93,10 +108,11 @@ macro_rules! define_lexer {
 
             pub fn name(self) -> &'static str {
                 match self {
-                    $(Self::$token => stringify!($token),)*
+                    $(Self::$token => $token_repr,)*
                     $(Self::$regex => stringify!($regex),)*
                     Self::Op(o) => o.name(),
                     Self::Eof => "end of file",
+                    Self::Err => "error",
                 }
             }
         }
@@ -146,12 +162,12 @@ define_lexer! {
         If = "if"
         Else = "else"
         Loop = "loop"
-        Fn = "fn"
         Ret = "ret"
         For = "for"
         In = "in"
 
         Dot = "."
+        DoubleDot = ".."
         Comma = ","
         Semi = ";"
         Colon = ":"
@@ -206,8 +222,8 @@ mod test {
     #[test]
     fn all_tokens() {
         let code = "
-            if else loop fn ret for in
-            . , ; : |{ *{ { } [ ] *( ( )
+            if else loop ret for in
+            . .. , ; : |{ *{ { } [ ] *( ( )
             ident
             :{import}
             \"str\"
