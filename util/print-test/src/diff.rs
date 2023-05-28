@@ -1,0 +1,129 @@
+/// A fragment of a computed diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Result<T> {
+    /// An element that only exists in the left input.
+    Left(T),
+    /// Elements that exist in both inputs.
+    Both(T, T),
+    /// An element that only exists in the right input.
+    Right(T),
+}
+
+/// Computes the diff between the lines of two strings.
+pub fn lines<'a>(left: &'a str, right: &'a str) -> Vec<Result<&'a str>> {
+    do_diff(
+        &left.lines().collect::<Vec<_>>(),
+        &right.lines().collect::<Vec<_>>(),
+    )
+}
+
+fn do_diff<'a>(left: &[&'a str], right: &[&'a str]) -> Vec<Result<&'a str>> {
+    let leading_equals = left
+        .iter()
+        .zip(right.iter())
+        .take_while(|(l, r)| l == r)
+        .count();
+    let trailing_equals = left[leading_equals..]
+        .iter()
+        .rev()
+        .zip(right[leading_equals..].iter().rev())
+        .take_while(|(l, r)| l == r)
+        .count();
+
+    let table: Vec2<u32> = {
+        let left_skip = &left[leading_equals..left.len() - trailing_equals];
+        let right_skip = &right[leading_equals..right.len() - trailing_equals];
+
+        let mut table = Vec2::new(0, [left_skip.len() + 1, right_skip.len() + 1]);
+
+        for (i, l) in left_skip.iter().enumerate() {
+            for (j, r) in right_skip.iter().enumerate() {
+                table.set(
+                    [i + 1, j + 1],
+                    if l == r {
+                        table.get([i, j]) + 1
+                    } else {
+                        *table.get([i, j + 1]).max(table.get([i + 1, j]))
+                    },
+                );
+            }
+        }
+
+        table
+    };
+
+    let mut diff = Vec::with_capacity(left.len().max(right.len()));
+
+    diff.extend(
+        left[..leading_equals]
+            .iter()
+            .zip(&right[..leading_equals])
+            .map(|(&l, &r)| Result::Both(l, r)),
+    );
+
+    {
+        let start = diff.len();
+        let mut i = table.len[0] - 1;
+        let mut j = table.len[1] - 1;
+        let left = &left[leading_equals..];
+        let right = &right[leading_equals..];
+
+        loop {
+            if j > 0 && (i == 0 || table.get([i, j]) == table.get([i, j - 1])) {
+                j -= 1;
+                diff.push(Result::Right(right[j]));
+            } else if i > 0 && (j == 0 || table.get([i, j]) == table.get([i - 1, j])) {
+                i -= 1;
+                diff.push(Result::Left(left[i]));
+            } else if i > 0 && j > 0 {
+                i -= 1;
+                j -= 1;
+                diff.push(Result::Both(left[i], right[j]));
+            } else {
+                break;
+            }
+        }
+        diff[start..].reverse();
+    }
+
+    diff.extend(
+        left[left.len() - trailing_equals..]
+            .iter()
+            .zip(&right[right.len() - trailing_equals..])
+            .map(|(&l, &r)| Result::Both(l, r)),
+    );
+
+    diff
+}
+
+struct Vec2<T> {
+    len: [usize; 2],
+    data: Vec<T>,
+}
+
+impl<T> Vec2<T> {
+    #[inline]
+    fn new(value: T, len: [usize; 2]) -> Self
+    where
+        T: Clone,
+    {
+        Vec2 {
+            len,
+            data: vec![value; len[0] * len[1]],
+        }
+    }
+
+    #[inline]
+    fn get(&self, index: [usize; 2]) -> &T {
+        debug_assert!(index[0] < self.len[0]);
+        debug_assert!(index[1] < self.len[1]);
+        &self.data[index[0] * self.len[1] + index[1]]
+    }
+
+    #[inline]
+    fn set(&mut self, index: [usize; 2], value: T) {
+        debug_assert!(index[0] < self.len[0]);
+        debug_assert!(index[1] < self.len[1]);
+        self.data[index[0] * self.len[1] + index[1]] = value;
+    }
+}
