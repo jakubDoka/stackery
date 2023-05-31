@@ -68,12 +68,17 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
             writeln!($dump.buffer, "print-test: {}", format_args!($($arg)*)).unwrap();
         }
 
+        fn usage_hint(dump: &mut Dump) {
+            log!(dump, "to save, run with 'PRINT_TEST_WRITE_CHANGES=1'");
+        }
+
         let config = get_config();
 
         let path = config.cahce_dir.join(name);
 
         fn write_file(dump: &mut Dump, path: &Path, source: &str, should_run: bool) -> bool {
             if !should_run {
+                usage_hint(dump);
                 return true;
             }
 
@@ -122,13 +127,13 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
                 return;
             }
 
-            log!(
-                dump,
-                "no previous result found, saving current result:\n{}",
-                source
-            );
+            log!(dump, "no previous result found, current form:\n{}", source);
 
             run_git_add(&mut dump, &path, config.auto_git_add);
+
+            if !std::thread::panicking() && !config.write_changes {
+                panic!("new test case detected");
+            }
 
             return;
         }
@@ -190,7 +195,7 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
 
         run_git_add(&mut dump, &path, config.auto_git_add);
 
-        if !std::thread::panicking() {
+        if !std::thread::panicking() && !config.write_changes {
             panic!("test '{}' failed", name);
         }
     }

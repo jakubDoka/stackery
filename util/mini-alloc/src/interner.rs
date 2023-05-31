@@ -14,9 +14,25 @@ use core::ptr::{self, NonNull};
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 
+#[cfg(feature = "serde128")]
+use serde_base128::Serde128;
+
 #[derive(Default)]
 pub struct StrInterner<A: Allocator + Clone = Global> {
     interner: Interner<u8, A>,
+}
+
+#[cfg(feature = "serde128")]
+impl<A: Allocator + Clone + Default> Serde128 for StrInterner<A> {
+    fn serialize(&self, encoder: &mut serde_base128::Encoder) {
+        self.interner.serialize(encoder);
+    }
+
+    unsafe fn deserialize(decoder: &mut serde_base128::Decoder) -> Self {
+        Self {
+            interner: Interner::deserialize(decoder),
+        }
+    }
 }
 
 impl StrInterner {
@@ -48,7 +64,7 @@ impl<A: Allocator + Clone> Index<InternedStr> for StrInterner<A> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct InternedStr {
     id: InternedSlice<u8>,
 }
@@ -236,6 +252,45 @@ impl<T, A: Allocator + Clone> Interner<T, A> {
     }
 }
 
+impl<T: Serde128 + Hash + Eq, A: Allocator + Clone + Default> serde_base128::Serde128
+    for Interner<T, A>
+{
+    fn serialize(&self, encoder: &mut serde_base128::Encoder) {
+        let (lookup, allocator) = unsafe { self.state_ref() };
+        allocator.serialize(encoder);
+        lookup.len().serialize(encoder);
+        for val in lookup.values() {
+            val.serialize(encoder);
+        }
+    }
+
+    unsafe fn deserialize(decoder: &mut serde_base128::Decoder) -> Self {
+        let allocator = InternerAllocator::<T, A>::deserialize(decoder);
+
+        let len = usize::deserialize(decoder);
+        let mut lookup =
+            Lookup::<T, A>::with_capacity_and_hasher_in(len, Default::default(), A::default());
+
+        for _ in 0..len {
+            let index = InternerSlice::deserialize(decoder);
+
+            let bucket = &allocator.buckets[index.chunk as usize];
+            let offset = index.offset as usize;
+            let len = index.len as usize;
+
+            let slice = slice::from_raw_parts(bucket.ptr.as_mut_ptr().add(offset), len);
+
+            let hash = HashView::new(slice);
+            lookup.insert(hash, index);
+        }
+
+        Self {
+            lookup: lookup.into(),
+            allocator: allocator.into(),
+        }
+    }
+}
+
 impl<T, A: Allocator + Clone> Index<InternerSlice> for Interner<T, A> {
     type Output = [T];
 
@@ -347,7 +402,6 @@ impl<T, A: Allocator + Clone> InternerAllocator<T, A> {
             self.current_alloc = bucket.as_mut_ptr();
             let last = self.buckets.last_mut().expect("c'mon, we just pushed");
             self.current_len = &mut last.taken;
-            unsafe { self.current_len.write(0) };
             current_len = 0;
         }
 
@@ -374,6 +428,60 @@ impl<T, A: Allocator + Clone> InternerAllocator<T, A> {
 
     unsafe fn rewind(&self, len: NonZeroUsize) {
         *self.current_len -= len.get();
+    }
+}
+
+impl<T: Serde128, A: Allocator + Clone + Default> Serde128 for InternerAllocator<T, A> {
+    fn serialize(&self, encoder: &mut serde_base128::Encoder) {
+        self.bucket_size.serialize(encoder);
+        self.buckets.len().serialize(encoder);
+        for bucket in self.buckets.iter() {
+            bucket.taken.serialize(encoder);
+            let slice = unsafe { slice::from_raw_parts(bucket.ptr.as_mut_ptr(), bucket.taken) };
+            for v in slice.iter() {
+                v.serialize(encoder);
+            }
+        }
+    }
+
+    unsafe fn deserialize(decoder: &mut serde_base128::Decoder) -> Self {
+        let alloc = A::default();
+        let bucket_size = u16::deserialize(decoder);
+
+        let bucket_count = usize::deserialize(decoder);
+
+        let Some(one_less) = bucket_count.checked_sub(1) else {
+            return Self::new_in(bucket_size, alloc);
+        };
+
+        let mut buckets = Vec::with_capacity_in(bucket_count, alloc.clone());
+
+        for _ in 0..one_less {
+            let taken = usize::deserialize(decoder);
+            let bucket = Self::create_bucket_low(taken, &alloc);
+            buckets.push(Bucket { ptr: bucket, taken });
+            let base = bucket.as_mut_ptr();
+            for i in 0..taken {
+                *base.add(i) = T::deserialize(decoder);
+            }
+        }
+
+        let taken = usize::deserialize(decoder);
+        let bucket = Self::create_bucket_low((bucket_size as usize).max(taken), &alloc);
+        let base = bucket.as_mut_ptr();
+        for i in 0..taken {
+            *base.add(i) = T::deserialize(decoder);
+        }
+        buckets.push(Bucket { ptr: bucket, taken });
+        let last = buckets.last_mut().expect("c'mon, we just pushed");
+
+        Self {
+            bucket_size: bucket_size as usize,
+            current_alloc: bucket.as_mut_ptr(),
+            current_len: &mut last.taken,
+            buckets,
+            alloc,
+        }
     }
 }
 
@@ -407,20 +515,24 @@ impl<T> Bucket<T> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde128", derive(serde_base128::Serde128))]
 pub struct InternerSlice {
     offset: u16,
     len: u16,
     chunk: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde128", derive(serde_base128::Serde128))]
 pub struct InternerObj {
     offset: u16,
     chunk: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde128", derive(serde_base128::Serde128))]
+#[cfg_attr(feature = "serde128", ignore_param(T))]
 pub struct InternedSlice<T> {
     id: InternerSlice,
     _marker: PhantomData<T>,
@@ -435,7 +547,9 @@ impl<T> Default for InternedSlice<T> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(feature = "serde128", derive(serde_base128::Serde128))]
+#[cfg_attr(feature = "serde128", ignore_param(T))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct Interned<T> {
     id: InternerObj,
     _marker: PhantomData<T>,
@@ -487,6 +601,9 @@ impl core::hash::Hasher for InternerHasher {
         self.hash = unsafe { ptr::read_unaligned(bytes.as_ptr().cast::<u64>()) };
     }
 }
+
+pub type FnvBuildHasher = core::hash::BuildHasherDefault<FnvHasher>;
+pub type FnvHashMap<K, V> = HashMap<K, V, FnvBuildHasher>;
 
 pub struct FnvHasher {
     hash: u64,
@@ -567,5 +684,28 @@ mod test {
 
         i.intern(sa);
         i.intern(sb);
+    }
+
+    #[cfg(feature = "serde128")]
+    #[test]
+    fn serde() {
+        let interner = StrInterner::new(6);
+
+        let a = interner.intern("hello");
+        let b = interner.intern("world of rust");
+
+        let mut writer = serde_base128::Encoder::new();
+        interner.serialize(&mut writer);
+        interner.serialize(&mut writer);
+
+        let buf = writer.into_vec();
+        let mut reader = serde_base128::Decoder::new(&buf[..]);
+        let c = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
+        let d = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
+
+        assert_eq!(a, c.intern("hello"));
+        assert_eq!(b, c.intern("world of rust"));
+        assert_eq!(a, d.intern("hello"));
+        assert_eq!(b, d.intern("world of rust"));
     }
 }

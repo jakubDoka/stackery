@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use mini_alloc::{ArenaScope, Diver, InternedStr, StrInterner};
 
-use crate::{Diagnostics, ExprAst, FileRef, Files, Lexer, Severty::*, Token, TokenKind};
+use crate::{Diagnostics, ExprAst, FileRef, Files, IdentAst, Lexer, Severty::*, Token, TokenKind};
 
 pub mod expr;
 pub mod fmt;
@@ -17,6 +17,7 @@ pub struct Parser<'ctx, 'src, 'arena> {
     diags: &'ctx mut Diagnostics,
     arena: &'arena ArenaScope<'ctx>,
     string_parser: &'ctx mut StringParser,
+    imports: &'ctx mut Vec<IdentAst>,
 }
 
 impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
@@ -27,7 +28,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         diags: &'ctx mut Diagnostics,
         arena: &'arena ArenaScope<'ctx>,
         string_parser: &'ctx mut StringParser,
+        imports: &'ctx mut Vec<IdentAst>,
     ) -> Self {
+        assert!(imports.is_empty());
+
         let mut lexer = Lexer::new(files, file);
         Self {
             files,
@@ -37,6 +41,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             diags,
             arena,
             string_parser,
+            imports,
         }
     }
 
@@ -83,7 +88,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     fn expect_advance(&mut self, pat: impl TokenPattern, msg: impl Display) -> Option<Token<'src>> {
         self.try_advance(pat.clone()).or_else(|| {
             self.diags
-                .builder(self.files)
+                .builder(self.files, self.interner)
                 .annotation(
                     Error,
                     self.next.span,

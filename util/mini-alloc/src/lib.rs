@@ -21,7 +21,7 @@ pub use {
     arena::{ArenaBase, ArenaProxi, ArenaScope},
     diver::{Diver, DiverBase},
     interner::{
-        FnvHasher, Internable, Interned, InternedSlice, InternedStr, Interner, InternerObj,
-        InternerSlice, StrInterner,
+        FnvBuildHasher, FnvHashMap, FnvHasher, Internable, Interned, InternedSlice, InternedStr,
+        Interner, InternerObj, InternerSlice, StrInterner,
     },
 };

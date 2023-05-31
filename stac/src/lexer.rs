@@ -23,7 +23,7 @@ pub struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn new(files: &'a Files, file: FileRef) -> Self {
         Self {
-            lexer: TokenKind::lexer(files.get_file(file).source()),
+            lexer: TokenKind::lexer(files[file].source()),
             file,
         }
     }
@@ -77,6 +77,10 @@ macro_rules! define_lexer {
         operators {$(
             ($($op_name:ident: $op:literal),*) = $prec:literal,
         )*}
+        other {$(
+            $(#[$attr:meta])*
+            $other_name:ident = $other_repr:literal
+        )*}
     ) => {
         #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, logos::Logos)]
         #[logos(skip r"([ \t\r]+|//[^\n]*)")]
@@ -90,20 +94,20 @@ macro_rules! define_lexer {
             $($(#[token($op, |_| OpCode::$op_name)])*)*
             Op(OpCode),
 
-            #[default]
-            #[token("\n", handle_newlien)]
-            Eof,
-
-            Err,
+            $(
+                $(#[$attr])*
+                $other_name,
+            )*
         }
 
         impl TokenKind {
             pub const TOKEN_COUNT: usize = [$($token_repr,)* $($regex_repr,)*].len();
 
             pub const ALL: &[Self] = &[
-               $(Self::$token,)*
-               $(Self::$regex,)*
-               $($(Self::Op(OpCode::$op_name),)*)*
+                $(Self::$token,)*
+                $(Self::$regex,)*
+                $($(Self::Op(OpCode::$op_name),)*)*
+                $(Self::$other_name,)*
             ];
 
             pub fn name(self) -> &'static str {
@@ -111,8 +115,7 @@ macro_rules! define_lexer {
                     $(Self::$token => $token_repr,)*
                     $(Self::$regex => stringify!($regex),)*
                     Self::Op(o) => o.name(),
-                    Self::Eof => "end of file",
-                    Self::Err => "error",
+                    $(Self::$other_name => $other_repr,)*
                 }
             }
         }
@@ -165,6 +168,9 @@ define_lexer! {
         Ret = "ret"
         For = "for"
         In = "in"
+        Unknown = "unknown"
+        True = "true"
+        False = "false"
 
         Dot = "."
         DoubleDot = ".."
@@ -184,7 +190,7 @@ define_lexer! {
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
-        Import = r":\{[^ \n\r\t}]*\}"
+        Import = r":\{[^\n\r\t}]*\}"
         Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
     }
@@ -198,6 +204,13 @@ define_lexer! {
         (And: "&&", Or: "||") = 8,
         (Assign: "=", AddAssign: "+=", SubAssign: "-=", MulAssign: "*=", DivAssign: "/=", ModAssign: "%=",
          ShlAssign: "<<=", ShrAssign: ">>=", BitAndAssign: "&=", BitOrAssign: "|=", BitXorAssign: "^=") = 9,
+    }
+
+    other {
+            #[default]
+            #[token("\n", handle_newlien)]
+            Eof = "EOF"
+            Err = "Error"
     }
 }
 
@@ -215,14 +228,75 @@ impl Display for TokenKind {
     }
 }
 
+#[derive(logos::Logos, Debug, Clone, Copy, PartialEq, Eq)]
+#[logos(skip "([^:]+|:)")]
+enum DependencyTokenKind {
+    #[regex(r":\{[^}]*\}")]
+    Import,
+}
+
+pub struct ImportLexer<'a> {
+    inner: logos::Lexer<'a, DependencyTokenKind>,
+}
+
+impl<'a> ImportLexer<'a> {
+    pub fn new(source: &'a str) -> Self {
+        Self {
+            inner: logos::Logos::lexer(source),
+        }
+    }
+}
+
+impl<'a> Iterator for ImportLexer<'a> {
+    type Item = (&'a str, usize);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let _ = self.inner.next()?;
+        Some((
+            unsafe {
+                self.inner
+                    .slice()
+                    .get_unchecked(2..self.inner.slice().len() - 1)
+            },
+            self.inner.span().start,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::TokenKind;
+    use std::fs;
+
+    use crate::*;
+
+    pub struct ImportLexer2<'a> {
+        source: &'a str,
+    }
+
+    impl<'a> ImportLexer2<'a> {
+        pub fn new(source: &'a str) -> Self {
+            Self { source }
+        }
+    }
+
+    impl<'a> Iterator for ImportLexer2<'a> {
+        type Item = &'a str;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let start = self.source.find(":{")? + ":{".len();
+            self.source = &self.source[start..];
+            let end = self.source.find('}')?;
+            let (import, rest) = self.source.split_at(end);
+            self.source = rest;
+            Some(import)
+        }
+    }
 
     #[test]
     fn all_tokens() {
         let code = "
-            if else loop ret for in
+            if else loop ret for in unknown true false
             . .. , ; : |{ *{ { } [ ] *( ( )
             ident
             :{import}
@@ -235,8 +309,56 @@ mod test {
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
 
-        let expected = TokenKind::ALL;
+        let expected = &TokenKind::ALL[..TokenKind::ALL.len() - 2];
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn dependency_token() {
+        let code = ":{import} akshd  : { } lkjas hdlas kjhdlakjs dhlsakj dhlsa kjdhlsak jdhalksjd 
+                    hlkjsad hlak jdshlda kshda lkjh alkj hdalks jdhalksj hdaslkj hdalkj hdlas
+                    :{import from here}";
+
+        let actual = ImportLexer::new(code).map(|(s, _)| s).collect::<Vec<_>>();
+
+        assert_eq!(actual, vec!["import", "import from here",]);
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_dpendency_token() {
+        let code = fs::read_to_string("expanded.xtx").unwrap();
+
+        let iters = 10000;
+
+        let mut samples = Vec::with_capacity(iters);
+        let mut res = 0;
+        for _ in 0..iters {
+            let now = std::time::Instant::now();
+            res = ImportLexer2::new(&code).count();
+            let elapsed = now.elapsed();
+            samples.push(elapsed);
+        }
+
+        println!(
+            "Fake: {:?}",
+            samples.drain(..).sum::<std::time::Duration>() / iters as u32
+        );
+
+        let mut fake_res = 0;
+        for _ in 0..iters {
+            let now = std::time::Instant::now();
+            fake_res = ImportLexer::new(&code).count();
+            let elapsed = now.elapsed();
+            samples.push(elapsed);
+        }
+
+        println!(
+            "Logos: {:?}",
+            samples.drain(..).sum::<std::time::Duration>() / iters as u32
+        );
+
+        assert_eq!(res, fake_res);
     }
 }

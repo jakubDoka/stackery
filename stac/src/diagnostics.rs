@@ -4,6 +4,8 @@ use std::{
     ops::Range,
 };
 
+use mini_alloc::StrInterner;
+
 use crate::{FileRef, Files, Span};
 
 #[derive(Default)]
@@ -36,7 +38,7 @@ impl Diagnostics {
         start..end
     }
 
-    fn commit_diagnostic(&mut self, files: &Files) {
+    fn commit_diagnostic(&mut self, files: &Files, interner: &StrInterner) {
         for footer in self.footer_temp.drain(..) {
             footer.display_standalone(&mut self.output, &self.temp_buffer, self.config.skip_colors)
         }
@@ -100,9 +102,9 @@ impl Diagnostics {
             let first = &group[0];
 
             let file = first.span.file();
-            let file = files.get_file(file);
+            let file = &files[file];
             let lines = file.source().lines().enumerate();
-            writeln!(self.output, "-> {}:", file.name().display()).unwrap();
+            writeln!(self.output, "-> {}:", &interner[file.name()]).unwrap();
 
             let line_number_pad = group
                 .last()
@@ -187,8 +189,8 @@ impl Diagnostics {
 }
 
 impl Diagnostics {
-    pub fn builder<'ctx>(&'ctx mut self, files: &'ctx Files) -> Diagnostic<'ctx> {
-        Diagnostic { inner: self, files }
+    pub fn builder<'ctx>(&'ctx mut self, files: &'ctx Files, interner: &'ctx StrInterner) -> Diagnostic<'ctx> {
+        Diagnostic { inner: self, files, interner }
     }
 }
 
@@ -212,6 +214,7 @@ impl Default for DiagnosticConfig {
 pub struct Diagnostic<'ctx> {
     inner: &'ctx mut Diagnostics,
     files: &'ctx Files,
+    interner: &'ctx StrInterner,
 }
 
 impl<'ctx> Diagnostic<'ctx> {
@@ -240,7 +243,7 @@ impl<'ctx> Diagnostic<'ctx> {
 
 impl Drop for Diagnostic<'_> {
     fn drop(&mut self) {
-        self.inner.commit_diagnostic(self.files);
+        self.inner.commit_diagnostic(self.files, self.interner);
     }
 }
 
@@ -325,14 +328,15 @@ mod test {
 
     fn perform_test(code: &str, ctx: &mut String) {
         let mut files = Files::new();
-        let (file, ..) = files.add_file(File::new("main".into(), code.into()));
+        let interner = StrInterner::default();
+        let file = files.add(File::new(interner.intern("main"), code.into()));
         let lexer = Lexer::new(&files, file);
         let mut diags = Diagnostics::with_config(DiagnosticConfig {
             skip_colors: true,
             ..Default::default()
         });
 
-        let mut builder = diags.builder(&files).footer(Severty::Error, "test");
+        let mut builder = diags.builder(&files, &interner).footer(Severty::Error, "test");
         for tok in lexer.take_while(|tok| tok.kind != TokenKind::Eof) {
             builder = builder.annotation(Severty::Warning, tok.span, tok.kind);
         }

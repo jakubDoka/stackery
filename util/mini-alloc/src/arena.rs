@@ -20,6 +20,12 @@ impl ArenaBase {
     }
 }
 
+impl<A: Default + Allocator> Default for ArenaBase<A> {
+    fn default() -> Self {
+        Self::new_in(1024, Default::default())
+    }
+}
+
 impl<A: Allocator> ArenaBase<A> {
     pub fn new_in(base_size: usize, alloc: A) -> Self {
         Self {

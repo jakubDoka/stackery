@@ -43,25 +43,26 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(lhs)
     }
 
-    fn unit(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
+    fn unit(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
         let token = self.next();
 
         fn unex_tok(parser: &mut Parser, span: Token, message: &str) -> Option<!> {
             parser
                 .diags
-                .builder(parser.files)
+                .builder(parser.files, parser.interner)
                 .footer(Error, message)
                 .annotation(Error, span.span, format_args!("unexpected {}", span.kind))
                 .terminate()
         }
 
-        match token.kind {
-            If => self.if_(diver),
+        let expr = match token.kind {
+            If => self.if_(diver.untyped_dive()),
             Else => unex_tok(self, token, "else can only follow an if")?,
-            Loop => self.loop_(diver),
-            Ret => self.ret(diver),
-            For => self.for_(diver),
+            Loop => self.loop_(diver.untyped_dive()),
+            Ret => self.ret(diver.untyped_dive()),
+            For => self.for_(diver.untyped_dive()),
             In => unex_tok(self, token, "in can only follow a for")?,
+            Unknown => Some(UnitAst::Unknown(token.span)),
             Dot => unex_tok(
                 self,
                 token,
@@ -79,14 +80,14 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 "semicolon can only follow an expression inside a block",
             )?,
             Colon => unex_tok(self, token, "colon can only follow pattern")?,
-            Enum => self.enum_(diver),
-            Struct => self.struct_(diver),
-            LBrace => self.block(diver),
+            Enum => self.enum_(diver.untyped_dive()),
+            Struct => self.struct_(diver.untyped_dive()),
+            LBrace => self.block(diver.untyped_dive()),
             RBrace => unex_tok(self, token, "unmatched right brace")?,
-            LBracket => self.array(diver),
+            LBracket => self.array(diver.untyped_dive()),
             RBracket => unex_tok(self, token, "unmatched right bracket")?,
-            Tuple => todo!(),
-            LParen => self.paren(diver),
+            Tuple => self.tuple(diver.untyped_dive()),
+            LParen => self.paren(diver.untyped_dive()),
             RParen => unex_tok(self, token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
@@ -96,15 +97,21 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 let source =
                     &token.source[Import.name().len()..token.source.len() - RBracket.name().len()];
 
-                IdentAst {
+                let import = IdentAst {
                     span: token.span,
                     name: self.interner.intern(source),
-                }
+                };
+
+                self.imports.push(import);
+
+                import
             })),
             Str => self.str(token),
             Int => self.int(token),
+            True => self.bool(true, token.span),
+            False => self.bool(false, token.span),
             Op(op) => self.unary(
-                diver,
+                diver.untyped_dive(),
                 OpAst {
                     span: token.span,
                     kind: op,
@@ -112,6 +119,65 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             ),
             Eof => unex_tok(self, token, "got eof when expression is expected")?,
             Err => unex_tok(self, token, "got error token when expression is expected")?,
+        }?;
+
+        self.handle_postfix(diver, expr)
+    }
+
+    fn bool(&mut self, value: bool, span: Span) -> Option<UnitAst<'arena>> {
+        Some(UnitAst::Literal(LiteralAst {
+            kind: LiteralKindAst::Bool(value),
+            span,
+        }))
+    }
+
+    fn tuple(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
+        let (exprs, ..) = self.sequence(diver, Self::expr, Comma, RParen, "tuple element")?;
+        Some(UnitAst::Tuple(exprs))
+    }
+
+    fn handle_postfix(
+        &mut self,
+        mut diver: Diver,
+        mut expr: UnitAst<'arena>,
+    ) -> Option<UnitAst<'arena>> {
+        loop {
+            let token = self.peek();
+            expr = match token.kind {
+                Dot => {
+                    self.next();
+                    let field = self.ident("field")?;
+                    UnitAst::FieldAccess(self.arena.alloc(FieldAccessAst { expr, field }))
+                }
+                LParen => {
+                    self.next();
+                    let args = &*self
+                        .sequence(
+                            diver.untyped_dive(),
+                            Self::expr,
+                            Comma,
+                            RParen,
+                            "function parameter",
+                        )?
+                        .0;
+
+                    UnitAst::Call(self.arena.alloc(CallAst { callee: expr, args }))
+                }
+                LBracket => {
+                    self.next();
+                    let index = self.expr(diver.untyped_dive())?;
+                    self.expect_advance(RBracket, "closing index operator");
+
+                    UnitAst::Index(self.arena.alloc(IndexAst { expr, index }))
+                }
+                Colon if let UnitAst::Ident(name) = expr => {
+                    self.next();
+
+                    let expr = self.expr(diver.untyped_dive())?;
+                    break Some(UnitAst::Decl(self.arena.alloc(NamedExpr { name , expr  })))
+                }
+                _ => break Some(expr),
+            }
         }
     }
 
@@ -159,14 +225,13 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     }
 
     fn int(&mut self, token: Token<'src>) -> Option<UnitAst<'arena>> {
-        let value = match token.source.parse::<u64>() {
-            Ok(value) => value,
-            Result::Err(_) => unreachable!("int token should be a valid integer"),
-        };
-
+        let value = token
+            .source
+            .parse::<u64>()
+            .expect("lexer should have validated int");
         Some(UnitAst::Literal(LiteralAst {
             span: token.span,
-            kind: LiteralKindAst::Int(value),
+            kind: LiteralKindAst::Int(value.to_ne_bytes()),
         }))
     }
 
@@ -180,14 +245,14 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 Ok(name) => LiteralKindAst::Str(name),
                 Result::Err(StringParseError::IncompleteEscape) => {
                     self.diags
-                        .builder(self.files)
+                        .builder(self.files, self.interner)
                         .footer(Error, "incomplete escape sequence")
                         .annotation(Error, token.span, "in string literal")
                         .terminate()?;
                 }
                 Result::Err(StringParseError::InvalidEscape(index)) => {
                     self.diags
-                        .builder(self.files)
+                        .builder(self.files, self.interner)
                         .footer(Error, "invalid escape sequence")
                         .annotation(Error, token.span.shift(index), "in string literal")
                         .terminate()?;
@@ -261,12 +326,13 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 })
             }
             DoubleDot => {
+                self.next();
                 let expr = self.expr(diver)?;
                 Some(StructField::Embed(expr))
             }
             _ => self
                 .diags
-                .builder(self.files)
+                .builder(self.files, self.interner)
                 .footer(
                     Error,
                     "struct field can either start with '..' for embeding or identifier",
@@ -364,11 +430,11 @@ pub enum UnitAst<'arena> {
     Tuple(&'arena [ExprAst<'arena>]),
     Struct(&'arena [StructField<'arena>]),
     Enum(&'arena EnumAst<'arena>),
-    MethodCall(&'arena MethodCallAst<'arena>),
     Call(&'arena CallAst<'arena>),
     Func(&'arena FuncAst<'arena>),
     Decl(&'arena NamedExpr<'arena>),
     Loop(&'arena LoopAst<'arena>),
+    Index(&'arena IndexAst<'arena>),
     ForLoop(&'arena ForLoopAst<'arena>),
     Break(&'arena BreakAst<'arena>),
     Continue(ContinueAst),
@@ -376,6 +442,13 @@ pub enum UnitAst<'arena> {
     If(&'arena IfAst<'arena>),
     Ret(Option<&'arena ExprAst<'arena>>),
     Paren(&'arena ExprAst<'arena>),
+    Unknown(Span),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IndexAst<'arena> {
+    pub expr: UnitAst<'arena>,
+    pub index: ExprAst<'arena>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -399,7 +472,7 @@ pub struct IfAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FieldAccessAst<'arena> {
-    pub expr: ExprAst<'arena>,
+    pub expr: UnitAst<'arena>,
     pub field: IdentAst,
 }
 
@@ -454,15 +527,8 @@ pub struct FuncArgAst<'arena> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MethodCallAst<'arena> {
-    pub caller: ExprAst<'arena>,
-    pub name: IdentAst,
-    pub args: &'arena [ExprAst<'arena>],
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct CallAst<'arena> {
-    pub callee: ExprAst<'arena>,
+    pub callee: UnitAst<'arena>,
     pub args: &'arena [ExprAst<'arena>],
 }
 
@@ -499,10 +565,8 @@ pub struct LiteralAst {
 
 #[derive(Debug, Clone, Copy)]
 pub enum LiteralKindAst {
-    Int(u64),
-    Float(f64),
+    Int([u8; 8]),
     Str(InternedStr),
-    Char(char),
     Bool(bool),
 }
 
@@ -514,325 +578,20 @@ pub struct IdentAst {
 
 #[cfg(test)]
 mod test {
-    use mini_alloc::{ArenaBase, DiverBase, StrInterner};
-
-    use crate::{parser::StringParser, Diagnostics, File, Files, TokenKind};
-
-    use super::*;
-
-    fn format_ast(ast: &[ExprAst], ctx: &mut String, indent: usize, interner: &StrInterner) {
-        for &ast in ast {
-            format_expr(ast, ctx, indent, interner);
-        }
-    }
-
-    fn format_expr(ast: ExprAst, ctx: &mut String, indent: usize, interner: &StrInterner) {
-        match ast {
-            ExprAst::Unit(u) => format_unit(u, ctx, indent, interner),
-            ExprAst::Binary(&b) => format_binary(b, ctx, indent, interner),
-        }
-    }
-
-    fn format_binary(binary: BinaryAst, ctx: &mut String, indent: usize, interner: &StrInterner) {
-        ctx.push('(');
-        format_expr(binary.lhs, ctx, indent, interner);
-        ctx.push(' ');
-        ctx.push_str(binary.op.kind.name());
-        ctx.push(' ');
-        format_expr(binary.rhs, ctx, indent, interner);
-        ctx.push(')');
-    }
-
-    fn indent_f(ctx: &mut String, indent: usize) {
-        for _ in 0..indent {
-            ctx.push_str("    ");
-        }
-    }
-
-    fn format_list<T: Copy>(
-        list: &[T],
-        ctx: &mut String,
-        indent: usize,
-        interner: &StrInterner,
-        [start, sep, end]: [TokenKind; 3],
-        indented: bool,
-        trailing: bool,
-        mut fmt: impl FnMut(T, &mut String, usize, &StrInterner),
-    ) {
-        ctx.push_str(start.name());
-        let Some((last, list)) = list.split_last() else {
-            ctx.push_str(end.name());
-            return;
-        };
-
-        if indented {
-            ctx.push('\n');
-        }
-
-        for &item in list {
-            if indented {
-                indent_f(ctx, indent + 1);
-            }
-            fmt(item, ctx, indent + indented as usize, interner);
-            ctx.push_str(sep.name());
-            if indented {
-                ctx.push('\n');
-            } else {
-                ctx.push(' ');
-            }
-        }
-
-        if indented {
-            indent_f(ctx, indent + 1);
-        }
-        fmt(*last, ctx, indent + indented as usize, interner);
-        if trailing {
-            ctx.push_str(sep.name());
-        }
-        if indented {
-            ctx.push('\n');
-        }
-
-        if indented {
-            indent_f(ctx, indent);
-        }
-        ctx.push_str(end.name());
-    }
-
-    fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &StrInterner) {
-        use std::fmt::Write;
-        match unit {
-            UnitAst::Literal(l) => match l.kind {
-                LiteralKindAst::Int(i) => write!(ctx, "{}", i).unwrap(),
-                LiteralKindAst::Float(f) => write!(ctx, "{}", f).unwrap(),
-                LiteralKindAst::Str(s) => write!(ctx, "{:?}", s).unwrap(),
-                LiteralKindAst::Char(c) => write!(ctx, "{:?}", c).unwrap(),
-                LiteralKindAst::Bool(b) => write!(ctx, "{}", b).unwrap(),
-            },
-            UnitAst::Import(ident) | UnitAst::Str(ident) | UnitAst::Ident(ident) => {
-                ctx.push_str(&interner[ident.name])
-            }
-            UnitAst::Block(b) => {
-                format_list(
-                    b.exprs,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::LBrace, TokenKind::Semi, TokenKind::RBrace],
-                    true,
-                    b.trailing_semi,
-                    |expr, ctx, indent, interner| {
-                        format_expr(expr, ctx, indent, interner);
-                        ctx.push(';');
-                    },
-                );
-            }
-            UnitAst::Unary(u) => {
-                ctx.push_str(u.op.kind.name());
-                format_expr(u.expr, ctx, indent, interner);
-            }
-            UnitAst::Array(a) => {
-                format_list(
-                    a,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::LBracket, TokenKind::Comma, TokenKind::RBracket],
-                    false,
-                    false,
-                    |expr, ctx, indent, interner| {
-                        format_expr(expr, ctx, indent, interner);
-                    },
-                );
-            }
-            UnitAst::FilledArray(a) => {
-                ctx.push('[');
-                format_expr(a.expr, ctx, indent, interner);
-                ctx.push(';');
-                format_expr(a.len, ctx, indent, interner);
-                ctx.push(']');
-            }
-            UnitAst::Tuple(t) => {
-                format_list(
-                    t,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::Tuple, TokenKind::Comma, TokenKind::RParen],
-                    false,
-                    false,
-                    |expr, ctx, indent, interner| {
-                        format_expr(expr, ctx, indent, interner);
-                    },
-                );
-            }
-            UnitAst::Struct(s) => {
-                format_list(
-                    s,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::Struct, TokenKind::Comma, TokenKind::RBrace],
-                    true,
-                    false,
-                    |field, ctx, indent, interner| match field {
-                        StructField::Decl(named) => {
-                            ctx.push_str(&interner[named.name.name]);
-                            ctx.push_str(": ");
-                            format_expr(named.expr, ctx, indent, interner);
-                        }
-                        StructField::Inline(name) => {
-                            ctx.push_str(&interner[name.name]);
-                        }
-                        StructField::Embed(expr) => {
-                            ctx.push_str(TokenKind::DoubleDot.name());
-                            format_expr(expr, ctx, indent, interner);
-                        }
-                    },
-                );
-            }
-            UnitAst::Enum(e) => {
-                ctx.push_str(TokenKind::Enum.name());
-                match e.value {
-                    Some(val) => {
-                        ctx.push(' ');
-                        ctx.push_str(&interner[e.name.name]);
-                        ctx.push_str(": ");
-                        format_expr(val, ctx, indent, interner);
-                        ctx.push_str(" }");
-                    }
-                    None => {
-                        ctx.push_str(&interner[e.name.name]);
-                        ctx.push('}');
-                    }
-                }
-            }
-            UnitAst::MethodCall(mc) => {
-                format_expr(mc.caller, ctx, indent, interner);
-                ctx.push('.');
-                ctx.push_str(&interner[mc.name.name]);
-                format_list(
-                    mc.args,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::LParen, TokenKind::Comma, TokenKind::RParen],
-                    false,
-                    false,
-                    |expr, ctx, indent, interner| {
-                        format_expr(expr, ctx, indent, interner);
-                    },
-                );
-            }
-            UnitAst::Call(c) => {
-                format_expr(c.callee, ctx, indent, interner);
-                format_list(
-                    c.args,
-                    ctx,
-                    indent,
-                    interner,
-                    [TokenKind::LParen, TokenKind::Comma, TokenKind::RParen],
-                    false,
-                    false,
-                    |expr, ctx, indent, interner| {
-                        format_expr(expr, ctx, indent, interner);
-                    },
-                );
-            }
-            UnitAst::Func(f) => {
-                format_list(
-                    f.args,
-                    ctx,
-                    indent,
-                    interner,
-                    [
-                        TokenKind::Op(OpCode::BitOr),
-                        TokenKind::Comma,
-                        TokenKind::Op(OpCode::BitOr),
-                    ],
-                    false,
-                    false,
-                    |param, ctx, indent, interner| {
-                        ctx.push_str(&interner[param.name.name]);
-                        if let Some(default) = param.default {
-                            ctx.push_str(": ");
-                            format_unit(default, ctx, indent, interner);
-                        }
-                    },
-                );
-                ctx.push(' ');
-                format_expr(f.body, ctx, indent, interner);
-            }
-            UnitAst::Decl(d) => {
-                ctx.push_str(&interner[d.name.name]);
-                ctx.push_str(": ");
-                format_expr(d.expr, ctx, indent, interner);
-            }
-            UnitAst::Loop(l) => {
-                ctx.push_str(TokenKind::Loop.name());
-                if let Some(label) = l.label {
-                    ctx.push('.');
-                    ctx.push_str(&interner[label.name]);
-                }
-                ctx.push(' ');
-                format_expr(l.body, ctx, indent, interner);
-            }
-            UnitAst::ForLoop(fl) => {
-                ctx.push_str(TokenKind::For.name());
-                if let Some(label) = fl.label {
-                    ctx.push('.');
-                    ctx.push_str(&interner[label.name]);
-                }
-                ctx.push(' ');
-                ctx.push_str(&interner[fl.var.name]);
-                ctx.push(' ');
-                ctx.push_str(TokenKind::In.name());
-                ctx.push(' ');
-                format_expr(fl.iter, ctx, indent, interner);
-                ctx.push(' ');
-                format_expr(fl.body, ctx, indent, interner);
-            }
-            UnitAst::Break(_) => todo!(),
-            UnitAst::Continue(_) => todo!(),
-            UnitAst::FieldAccess(fa) => {
-                format_expr(fa.expr, ctx, indent, interner);
-                ctx.push('.');
-                ctx.push_str(&interner[fa.field.name]);
-            }
-            UnitAst::If(i) => {
-                ctx.push_str(TokenKind::If.name());
-                ctx.push(' ');
-                format_expr(i.cond, ctx, indent, interner);
-                ctx.push(' ');
-                format_expr(i.then, ctx, indent, interner);
-                if let Some(else_) = i.else_ {
-                    ctx.push(' ');
-                    ctx.push_str(TokenKind::Else.name());
-                    ctx.push(' ');
-                    format_expr(else_, ctx, indent, interner);
-                }
-            }
-            UnitAst::Ret(r) => {
-                ctx.push_str(TokenKind::Ret.name());
-                if let Some(&expr) = r {
-                    ctx.push(' ');
-                    format_expr(expr, ctx, indent, interner);
-                }
-            }
-            UnitAst::Paren(_) => todo!(),
-        }
-    }
+    use crate::*;
+    use mini_alloc::*;
 
     fn perform_test(source_code: &str, ctx: &mut String) {
         let mut files = Files::new();
-        let file = File::new("test".into(), source_code.into());
-        let (file_id, ..) = files.add_file(file);
         let interner = StrInterner::default();
+        let file = File::new(interner.intern("test"), source_code.into());
+        let file_id = files.add(file);
         let mut diags = Diagnostics::default();
-        let mut arena = ArenaBase::new(10_000);
+        let mut arena = ArenaBase::new(1000);
         let scope = arena.scope();
         let mut string_parser = StringParser::default();
         let mut diver = DiverBase::new(1000);
+        let mut imports = vec![];
 
         let mut parser = Parser::new(
             &files,
@@ -841,6 +600,7 @@ mod test {
             &mut diags,
             &scope,
             &mut string_parser,
+            &mut imports,
         );
 
         let res = parser.parse(diver.dive());
@@ -867,5 +627,25 @@ mod test {
     cases! {
         precedence "1 + 2 * 3 - 4 / 5"
         function "|a, b = 10| a + b"
+        function_call "foo(1, 2, 3)"
+        method_call "foo.bar(1, 2, 3)"
+        struct_ctor "*{ a: 1, b, ..c }"
+        multy_statement "a: 1; b: 2; c: 3;"
+        block "{ a: 1; b: 2; a + b }"
+        field_access "foo.bar.baz.rar"
+        enum_ctor "|{none}; |{ some: 10 }"
+        if_expr "if cond then else else_"
+        loop_expr "loop.label body"
+        for_each "for.label var in iter body"
+        some_code "
+            enumerate: |iter| *{
+                counter: 0,
+                inner: iter,
+                next: |self| self.inner.next().map(|x| {
+                    self.counter += 1;
+                    *(self.counter - 1, x)
+                }),
+            }
+        "
     }
 }

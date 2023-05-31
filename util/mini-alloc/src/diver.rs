@@ -8,6 +8,12 @@ pub struct DiverBase<A: Allocator = Global> {
     list: AllocList<A>,
 }
 
+impl<A: Allocator + Default> Default for DiverBase<A> {
+    fn default() -> Self {
+        Self::new_in(1024, Default::default())
+    }
+}
+
 impl DiverBase {
     pub fn new(base_size: usize) -> Self {
         Self::new_in(base_size, Global)
@@ -42,8 +48,6 @@ pub struct Diver<'a, T = (), A: Allocator = Global> {
 
 impl<'a, T, A: Allocator> Diver<'a, T, A> {
     fn new(bump: Bump, alloc: &'a mut DiverBase<A>) -> Self {
-        
-
         Diver {
             bump,
             alloc,
@@ -94,6 +98,14 @@ impl<'a, T, A: Allocator> Diver<'a, T, A> {
 
     pub fn untyped_dive(&mut self) -> Diver<(), A> {
         self.dive()
+    }
+}
+
+impl<'a, T, A: Allocator> Extend<T> for Diver<'a, T, A> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.push(item);
+        }
     }
 }
 

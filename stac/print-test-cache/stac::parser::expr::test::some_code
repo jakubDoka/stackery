@@ -1,0 +1,8 @@
+enumerate: |iter| *{
+    counter: 0,
+    inner: iter,
+    next: |self| self.inner.next().map(|x| {
+        (self.counter += 1);
+        *((self.counter - 1), x)
+    }),
+};

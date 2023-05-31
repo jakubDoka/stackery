@@ -125,6 +125,7 @@ name = "mini-alloc"
 version = "0.1.0"
 dependencies = [
  "hashbrown 0.13.2",
+ "serde-base128",
 ]
 
 [[package]]
@@ -168,12 +169,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
+name = "serde-base128"
+version = "0.1.0"
+dependencies = [
+ "serde-base128-derive",
+]
+
+[[package]]
+name = "serde-base128-derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "stac"
 version = "0.1.0"
 dependencies = [
  "logos",
  "mini-alloc",
  "print-test",
+ "serde-base128",
 ]
 
 [[package]]
