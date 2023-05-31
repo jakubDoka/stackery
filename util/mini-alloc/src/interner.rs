@@ -252,6 +252,7 @@ impl<T, A: Allocator + Clone> Interner<T, A> {
     }
 }
 
+#[cfg(feature = "serde128")]
 impl<T: Serde128 + Hash + Eq, A: Allocator + Clone + Default> serde_base128::Serde128
     for Interner<T, A>
 {
@@ -431,6 +432,7 @@ impl<T, A: Allocator + Clone> InternerAllocator<T, A> {
     }
 }
 
+#[cfg(feature = "serde128")]
 impl<T: Serde128, A: Allocator + Clone + Default> Serde128 for InternerAllocator<T, A> {
     fn serialize(&self, encoder: &mut serde_base128::Encoder) {
         self.bucket_size.serialize(encoder);

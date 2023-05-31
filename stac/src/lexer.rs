@@ -266,7 +266,7 @@ impl<'a> Iterator for ImportLexer<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::fs;
+    use std::{fs, iter};
 
     use crate::*;
 
@@ -325,10 +325,50 @@ mod test {
         assert_eq!(actual, vec!["import", "import from here",]);
     }
 
+    fn generate_bench_code() -> String {
+        let mut code = String::new();
+
+        let import_variations = "
+            import
+            a ljf lakjf lhdsakjh falksdjhl kjdsahalf 
+            kajhfldaskjf hdslakjhflaksj hlfkjsa hlkj hsalkj
+            os:./path/to/file
+            git:github.com/username/repo
+            laskdjjjjjjj;][;][;-=o=-][l;3ql42';45l23';46l764[p8l0';5l]
+        "
+        .lines()
+        .map(str::trim)
+        .filter(|s| str::is_empty(s))
+        .map(|i| format!(":{{{i}}}"))
+        .collect::<Vec<_>>();
+        let tokens = TokenKind::ALL.iter().map(|t| t.name()).collect::<Vec<_>>();
+        let numbers = (0..100).map(|i| i.to_string()).collect::<Vec<_>>();
+
+        let dataset = import_variations
+            .iter()
+            .map(String::as_str)
+            .chain(tokens.iter().cycle().take(100).cloned())
+            .chain(numbers.iter().map(String::as_str))
+            .chain(iter::repeat("\n").take(1000))
+            .collect::<Vec<_>>();
+
+        let mut accum = 0x_dead_beef_u64;
+        for i in 0..30000 {
+            accum = accum.wrapping_mul(i) ^ i.wrapping_add(accum) ^ i.wrapping_sub(accum);
+            let idx = accum as usize % dataset.len();
+
+            code.push_str(dataset[idx]);
+            code.push(' ');
+        }
+
+        code
+    }
+
     #[test]
     #[ignore]
     fn bench_dpendency_token() {
-        let code = fs::read_to_string("expanded.xtx").unwrap();
+        let code = generate_bench_code();
+        println!("Code len: {}", code.len());
 
         let iters = 10000;
 
