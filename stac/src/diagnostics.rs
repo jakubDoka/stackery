@@ -140,7 +140,6 @@ impl Diagnostics {
                         if let Some(annotation) = diags.peek() {
                             last_diag_line = annotation.span.row() as usize;
                             if check_in_range(i, last_diag_line, view_range) {
-                                dbg!(line);
                                 break 'a;
                             }
                         }

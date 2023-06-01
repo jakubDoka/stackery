@@ -3,8 +3,12 @@ use std::{
     intrinsics::unlikely,
     marker::PhantomData,
     mem,
-    ops::{Index, IndexMut},
+    num::NonZeroU16,
+    ops::{Deref, Index, IndexMut},
+    ptr,
 };
+
+use mini_alloc::Diver;
 
 pub struct CachePool<T> {
     data: Vec<Option<T>>,
@@ -33,12 +37,12 @@ impl<T> CachePool<T> {
             self.data.push(None);
             CacheRef::new(index)
         };
-        self.data[index.0 as usize] = Some(value);
+        self.data[index.index()] = Some(value);
         index
     }
 
     pub fn remove(&mut self, index: CacheRef<T>) -> T {
-        let value = self.data[index.0 as usize]
+        let value = self.data[index.index()]
             .take()
             .expect("cache entry already removed");
         self.free.push(index);
@@ -60,13 +64,28 @@ impl<T> CachePool<T> {
         Self::by_index(s, index);
         CacheRef::new(index)
     }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.unfiltered_values().flatten()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (CacheRef<T>, &mut T)> {
+        self.data
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_mut().map(|v| (CacheRef::new(i), v)))
+    }
 }
 
 impl<T> Index<CacheRef<T>> for CachePool<T> {
     type Output = T;
 
     fn index(&self, index: CacheRef<T>) -> &Self::Output {
-        self.data[index.0 as usize]
+        self.data[index.index()]
             .as_ref()
             .expect("accessed removed cache entry")
     }
@@ -74,7 +93,7 @@ impl<T> Index<CacheRef<T>> for CachePool<T> {
 
 impl<T> IndexMut<CacheRef<T>> for CachePool<T> {
     fn index_mut(&mut self, index: CacheRef<T>) -> &mut Self::Output {
-        self.data[index.0 as usize]
+        self.data[index.index()]
             .as_mut()
             .expect("accessed removed cache entry")
     }
@@ -85,7 +104,7 @@ type BaseRepr = u32;
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct CacheRef<T>(Repr, PhantomData<T>);
+pub struct CacheRef<T>(NonZeroU16, PhantomData<T>);
 
 impl<T> PartialEq for CacheRef<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -124,17 +143,17 @@ impl<T> PartialOrd for CacheRef<T> {
 impl<T> CacheRef<T> {
     fn new(index: usize) -> Self {
         Self(
-            index.try_into().expect("exceeded cache entiry limit"),
+            NonZeroU16::new((index + 1).try_into().expect("exceeded cache entiry limit")).unwrap(),
             PhantomData,
         )
     }
 
     pub fn index(&self) -> usize {
-        self.0 as usize
+        self.0.get() as usize - 1
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug)]
 pub struct CacheSlice<T>(Repr, Repr, PhantomData<T>);
 
 impl<T> CacheSlice<T> {
@@ -153,6 +172,41 @@ impl<T> Default for CacheSlice<T> {
     }
 }
 
+impl<T> Clone for CacheSlice<T> {
+    fn clone(&self) -> Self {
+        Self(self.0, self.1, PhantomData)
+    }
+}
+
+impl<T> Copy for CacheSlice<T> {}
+
+impl<T> PartialEq for CacheSlice<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.1 == other.1
+    }
+}
+
+impl<T> Eq for CacheSlice<T> {}
+
+impl<T> hash::Hash for CacheSlice<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        self.1.hash(state);
+    }
+}
+
+impl<T> Ord for CacheSlice<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0).then(self.1.cmp(&other.1))
+    }
+}
+
+impl<T> PartialOrd for CacheSlice<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 pub struct CacheVec<T> {
     data: Vec<T>,
 }
@@ -167,12 +221,6 @@ impl<T> CacheVec<T> {
         CacheVecPush { data: self, start }
     }
 
-    pub fn view(&self, range: CacheVecRange<T>) -> &CacheVecView<T> {
-        let start = BaseRepr::from_ne_bytes(range.base) as usize;
-        let end = start + range.len as usize;
-        unsafe { mem::transmute(&self.data[start..end]) }
-    }
-
     pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) -> CacheVecRange<T>
     where
         T: Clone,
@@ -185,6 +233,69 @@ impl<T> CacheVec<T> {
             len: (end - start) as Repr,
             _marker: PhantomData,
         }
+    }
+
+    pub fn preserve_chunks<'a>(
+        &mut self,
+        chunks: impl IntoIterator<Item = &'a mut CacheVecRange<T>>,
+    ) where
+        T: 'a,
+    {
+        let len = self.data.len();
+        let base = self.data.as_mut_ptr();
+        // we should not expose dropped memory to T
+        unsafe { self.data.set_len(0) };
+
+        let mut writer = 0;
+        let mut prev_end = 0;
+        let mut iter = chunks.into_iter().peekable();
+
+        while let Some(chunk) = iter.next() {
+            assert!(chunk.base() >= prev_end);
+            prev_end = chunk.end();
+
+            let mut copy_len = chunk.len as usize;
+            while let Some(next) = iter.peek_mut() && next.base() == chunk.end() {
+                next.set_base(writer + copy_len as BaseRepr);
+                copy_len += next.len as usize;
+                iter.next();
+            }
+
+            unsafe {
+                let drop_len = chunk.base() - writer;
+                ptr::slice_from_raw_parts_mut(base.add(writer as usize), drop_len as usize)
+                    .drop_in_place();
+            }
+
+            unsafe {
+                let src = base.add(chunk.base() as usize);
+                let dst = base.add(writer as usize);
+                if src != dst {
+                    ptr::copy(src, dst, copy_len);
+                }
+            }
+
+            chunk.set_base(writer);
+            writer += copy_len as BaseRepr;
+        }
+
+        unsafe {
+            let drop_len = len - writer as usize;
+            ptr::slice_from_raw_parts_mut(base.add(writer as usize), drop_len as usize)
+                .drop_in_place();
+
+            self.data.set_len(writer as usize);
+        }
+    }
+}
+
+impl<T> Index<CacheVecRange<T>> for CacheVec<T> {
+    type Output = CacheVecView<T>;
+
+    fn index(&self, index: CacheVecRange<T>) -> &Self::Output {
+        let start = index.base() as usize;
+        let end = start + index.len as usize;
+        unsafe { mem::transmute(&self.data[start..end]) }
     }
 }
 
@@ -215,11 +326,7 @@ impl<'a, T> CacheVecPush<'a, T> {
 
     pub fn finish(self) -> CacheVecRange<T> {
         let end = self.data.data.len();
-        CacheVecRange {
-            base: (self.start as BaseRepr).to_ne_bytes(),
-            len: (end - self.start) as Repr,
-            _marker: PhantomData,
-        }
+        CacheVecRange::new(self.start as BaseRepr, (end - self.start) as Repr)
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -231,17 +338,25 @@ impl<'a, T> CacheVecPush<'a, T> {
     }
 }
 
+impl<'a, T> Index<CacheVecRange<T>> for CacheVecPush<'a, T> {
+    type Output = CacheVecView<T>;
+
+    fn index(&self, index: CacheVecRange<T>) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
 impl<T> Index<CacheRef<T>> for CacheVecPush<'_, T> {
     type Output = T;
 
     fn index(&self, index: CacheRef<T>) -> &Self::Output {
-        &self.data.data[self.start + index.0 as usize]
+        &self.data.data[self.start + index.index()]
     }
 }
 
 impl<T> IndexMut<CacheRef<T>> for CacheVecPush<'_, T> {
     fn index_mut(&mut self, index: CacheRef<T>) -> &mut Self::Output {
-        &mut self.data.data[self.start + index.0 as usize]
+        &mut self.data.data[self.start + index.index()]
     }
 }
 
@@ -273,7 +388,7 @@ impl<T> Index<CacheRef<T>> for CacheVecView<T> {
     type Output = T;
 
     fn index(&self, index: CacheRef<T>) -> &Self::Output {
-        &self.data[index.0 as usize]
+        &self.data[index.index()]
     }
 }
 
@@ -285,11 +400,49 @@ impl<T> Index<CacheSlice<T>> for CacheVecView<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+impl<T> Deref for CacheVecView<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<'a, T> IntoIterator for &'a CacheVecView<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
 pub struct CacheVecRange<T> {
-    base: [u8; 4],
+    base: [u8; mem::size_of::<BaseRepr>()],
     len: Repr,
     _marker: PhantomData<T>,
+}
+
+impl<T> CacheVecRange<T> {
+    fn new(base: BaseRepr, len: Repr) -> Self {
+        Self {
+            base: base.to_ne_bytes(),
+            len,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn base(&self) -> u32 {
+        BaseRepr::from_ne_bytes(self.base) as u32
+    }
+
+    pub fn end(&self) -> u32 {
+        self.base() + self.len as u32
+    }
+
+    fn set_base(&mut self, base_repr: u32) {
+        self.base = base_repr.to_ne_bytes();
+    }
 }
 
 impl<T> Default for CacheVecRange<T> {
@@ -301,6 +454,18 @@ impl<T> Default for CacheVecRange<T> {
         }
     }
 }
+
+impl<T> Clone for CacheVecRange<T> {
+    fn clone(&self) -> Self {
+        Self {
+            base: self.base,
+            len: self.len,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> Copy for CacheVecRange<T> {}
 
 pub struct BitSet {
     data: Vec<usize>,
@@ -362,7 +527,7 @@ impl BitSet {
         prev
     }
 
-    pub fn get(&self, index: usize) -> bool {
+    pub fn contains(&self, index: usize) -> bool {
         if unlikely(index >= self.len) {
             return false;
         }
@@ -382,5 +547,29 @@ impl BitSet {
 
     pub fn clear(&mut self) {
         self.data.fill(0);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn preserve_chunks() {
+        let mut vec = super::CacheVec::new();
+        let mut to_reserve = (0..100)
+            .map(|_| {
+                let mut push = vec.push();
+                push.extend([1, 2, 3, 4]);
+                push.finish()
+            })
+            .enumerate()
+            .filter_map(|(i, r)| if i % 3 != 0 { Some(r) } else { None })
+            .collect::<Vec<_>>();
+
+        vec.preserve_chunks(to_reserve.iter_mut());
+
+        assert!(to_reserve.array_windows().all(|[a, b]| a.end() == b.base()));
+        assert!(to_reserve
+            .iter()
+            .all(|&r| vec[r].as_slice() == &[1, 2, 3, 4]));
     }
 }

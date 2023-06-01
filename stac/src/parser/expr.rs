@@ -97,14 +97,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 let source =
                     &token.source[Import.name().len()..token.source.len() - RBracket.name().len()];
 
-                let import = IdentAst {
+                IdentAst {
                     span: token.span,
                     name: self.interner.intern(source),
-                };
-
-                self.imports.push(import);
-
-                import
+                }
             })),
             Str => self.str(token),
             Int => self.int(token),
@@ -147,7 +143,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 Dot => {
                     self.next();
                     let field = self.ident("field")?;
-                    UnitAst::FieldAccess(self.arena.alloc(FieldAccessAst { expr, field }))
+                    UnitAst::Field(self.arena.alloc(FieldAst { expr, field }))
                 }
                 LParen => {
                     self.next();
@@ -161,7 +157,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                         )?
                         .0;
 
-                    UnitAst::Call(self.arena.alloc(CallAst { callee: expr, args }))
+                    UnitAst::Call(self.arena.alloc(CallAst { caller: expr, args }))
                 }
                 LBracket => {
                     self.next();
@@ -174,7 +170,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                     self.next();
 
                     let expr = self.expr(diver.untyped_dive())?;
-                    break Some(UnitAst::Decl(self.arena.alloc(NamedExpr { name , expr  })))
+                    break Some(UnitAst::Decl(self.arena.alloc(NamedExprAst { name , expr  })))
                 }
                 _ => break Some(expr),
             }
@@ -186,7 +182,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             OpCode::Or => self.func(diver, false),
             OpCode::BitOr => self.func(diver, true),
             _ => {
-                let expr = ExprAst::Unit(self.unit(diver)?);
+                let expr = self.unit(diver)?;
                 Some(UnitAst::Unary(self.arena.alloc(UnaryAst { op, expr })))
             }
         }
@@ -309,7 +305,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(UnitAst::Struct(fields))
     }
 
-    fn struct_field(&mut self, diver: Diver) -> Option<StructField<'arena>> {
+    fn struct_field(&mut self, diver: Diver) -> Option<StructFieldAst<'arena>> {
         let peek = self.peek();
 
         match peek.kind {
@@ -321,14 +317,14 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                     .transpose()?;
 
                 Some(match value {
-                    Some(value) => StructField::Decl(NamedExpr { name, expr: value }),
-                    None => StructField::Inline(name),
+                    Some(value) => StructFieldAst::Decl(NamedExprAst { name, expr: value }),
+                    None => StructFieldAst::Inline(name),
                 })
             }
             DoubleDot => {
                 self.next();
                 let expr = self.expr(diver)?;
-                Some(StructField::Embed(expr))
+                Some(StructFieldAst::Embed(expr))
             }
             _ => self
                 .diags
@@ -428,17 +424,17 @@ pub enum UnitAst<'arena> {
     Array(&'arena [ExprAst<'arena>]),
     FilledArray(&'arena FilledArrayAst<'arena>),
     Tuple(&'arena [ExprAst<'arena>]),
-    Struct(&'arena [StructField<'arena>]),
+    Struct(&'arena [StructFieldAst<'arena>]),
     Enum(&'arena EnumAst<'arena>),
     Call(&'arena CallAst<'arena>),
     Func(&'arena FuncAst<'arena>),
-    Decl(&'arena NamedExpr<'arena>),
+    Decl(&'arena NamedExprAst<'arena>),
     Loop(&'arena LoopAst<'arena>),
     Index(&'arena IndexAst<'arena>),
     ForLoop(&'arena ForLoopAst<'arena>),
     Break(&'arena BreakAst<'arena>),
     Continue(ContinueAst),
-    FieldAccess(&'arena FieldAccessAst<'arena>),
+    Field(&'arena FieldAst<'arena>),
     If(&'arena IfAst<'arena>),
     Ret(Option<&'arena ExprAst<'arena>>),
     Paren(&'arena ExprAst<'arena>),
@@ -471,7 +467,7 @@ pub struct IfAst<'arena> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldAccessAst<'arena> {
+pub struct FieldAst<'arena> {
     pub expr: UnitAst<'arena>,
     pub field: IdentAst,
 }
@@ -502,8 +498,8 @@ pub struct ContinueAst {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum StructField<'arena> {
-    Decl(NamedExpr<'arena>),
+pub enum StructFieldAst<'arena> {
+    Decl(NamedExprAst<'arena>),
     Inline(IdentAst),
     Embed(ExprAst<'arena>),
 }
@@ -511,7 +507,7 @@ pub enum StructField<'arena> {
 #[derive(Debug, Clone, Copy)]
 pub struct UnaryAst<'arena> {
     pub op: OpAst,
-    pub expr: ExprAst<'arena>,
+    pub expr: UnitAst<'arena>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -528,12 +524,12 @@ pub struct FuncArgAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CallAst<'arena> {
-    pub callee: UnitAst<'arena>,
+    pub caller: UnitAst<'arena>,
     pub args: &'arena [ExprAst<'arena>],
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct NamedExpr<'arena> {
+pub struct NamedExprAst<'arena> {
     pub name: IdentAst,
     pub expr: ExprAst<'arena>,
 }
@@ -591,19 +587,16 @@ mod test {
         let scope = arena.scope();
         let mut string_parser = StringParser::default();
         let mut diver = DiverBase::new(1000);
-        let mut imports = vec![];
 
-        let mut parser = Parser::new(
+        let res = Parser::new(
             &files,
             file_id,
             &interner,
             &mut diags,
             &scope,
             &mut string_parser,
-            &mut imports,
-        );
-
-        let res = parser.parse(diver.dive());
+        )
+        .parse(diver.dive());
 
         match res {
             Some(ast) => format_ast(ast, ctx, 0, &interner),

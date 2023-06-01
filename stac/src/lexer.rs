@@ -149,7 +149,7 @@ macro_rules! define_lexer {
     };
 }
 
-fn handle_newlien(lex: &mut logos::Lexer<TokenKind>) -> logos::Skip {
+fn handle_newline(lex: &mut logos::Lexer<TokenKind>) -> logos::Skip {
     lex.extras.line += 1;
     lex.extras.last_newline = lex.span().end;
     logos::Skip
@@ -190,7 +190,7 @@ define_lexer! {
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
-        Import = r":\{[^\n\r\t}]*\}"
+        Import = r":\{[^}]*\}"
         Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
     }
@@ -208,7 +208,7 @@ define_lexer! {
 
     other {
             #[default]
-            #[token("\n", handle_newlien)]
+            #[token("\n", handle_newline)]
             Eof = "EOF"
             Err = "Error"
     }
@@ -266,7 +266,7 @@ impl<'a> Iterator for ImportLexer<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, iter};
+    use std::iter;
 
     use crate::*;
 

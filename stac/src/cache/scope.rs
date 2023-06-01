@@ -1,6 +1,10 @@
+use std::num::NonZeroU16;
+
 use mini_alloc::InternedStr;
 
-pub type Repr = u16;
+use crate::CacheRef;
+
+pub type Repr = NonZeroU16;
 
 #[derive(Default)]
 pub struct ScopeCache {
@@ -13,7 +17,7 @@ impl ScopeCache {
     }
 
     pub fn view(&self, range: ScopeRange) -> &ScopeView {
-        unsafe { std::mem::transmute(self.inner.view(range.inner)) }
+        unsafe { std::mem::transmute(&self.inner[range.inner]) }
     }
 }
 
@@ -23,7 +27,7 @@ pub struct ScopeView {
 
 impl ScopeView {
     pub fn name(&self, sym: Sym) -> InternedStr {
-        self.inner[sym.0 as usize]
+        self.inner[sym.index()]
     }
 
     pub fn resolve(&self, name: InternedStr) -> Option<Sym> {
@@ -86,15 +90,15 @@ impl Scope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Sym(Repr);
+pub struct Sym(CacheRef<InternedStr>);
 
 impl Sym {
     pub fn new(index: usize) -> Self {
-        Self(index.try_into().expect("exceeded sym count limit"))
+        Self(CacheRef::new(index))
     }
 
     pub fn index(self) -> usize {
-        self.0 as usize
+        self.0.index()
     }
 }
 

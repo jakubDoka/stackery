@@ -82,7 +82,7 @@ impl CycleDetector {
 
             let current = graph.edges[current as usize];
 
-            if self.seen.get(current as usize) {
+            if self.seen.contains(current as usize) {
                 continue;
             }
 
@@ -101,6 +101,8 @@ impl CycleDetector {
 
             self.stack.push(graph.children_range(current));
         }
+
+        self.order.push(root);
 
         None
     }

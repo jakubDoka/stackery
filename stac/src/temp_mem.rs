@@ -37,7 +37,6 @@ impl<'a> TempMem<'a> {
     where
         I: IntoIterator,
         I::IntoIter: ExactSizeIterator + TrustedLen,
-        I::Item: Copy,
     {
         self.arena.alloc_iter(iter)
     }
@@ -45,7 +44,6 @@ impl<'a> TempMem<'a> {
     pub fn collect<I>(&self, iter: I) -> &mut [I::Item]
     where
         I: IntoIterator,
-        I::Item: Copy,
     {
         let mut dive = unsafe { (*self.diver.get()).dive::<I::Item>() };
         dive.extend(iter);

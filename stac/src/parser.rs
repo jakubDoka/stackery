@@ -15,9 +15,8 @@ pub struct Parser<'ctx, 'src, 'arena> {
     lexer: Lexer<'src>,
     interner: &'ctx StrInterner,
     diags: &'ctx mut Diagnostics,
-    arena: &'arena ArenaScope<'ctx>,
+    arena: &'arena ArenaScope<'arena>,
     string_parser: &'ctx mut StringParser,
-    imports: &'ctx mut Vec<IdentAst>,
 }
 
 impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
@@ -26,12 +25,9 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         file: FileRef,
         interner: &'ctx StrInterner,
         diags: &'ctx mut Diagnostics,
-        arena: &'arena ArenaScope<'ctx>,
+        arena: &'arena ArenaScope<'arena>,
         string_parser: &'ctx mut StringParser,
-        imports: &'ctx mut Vec<IdentAst>,
     ) -> Self {
-        assert!(imports.is_empty());
-
         let mut lexer = Lexer::new(files, file);
         Self {
             files,
@@ -41,11 +37,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             diags,
             arena,
             string_parser,
-            imports,
         }
     }
 
-    pub fn parse(&mut self, diver: Diver) -> Option<&'arena [ExprAst<'arena>]> {
+    pub fn parse(mut self, diver: Diver) -> Option<&'arena [ExprAst<'arena>]> {
         self.sequence(diver, Self::expr, Semi, Eof, "declaration")
             .map(|(decls, _)| &*decls)
     }

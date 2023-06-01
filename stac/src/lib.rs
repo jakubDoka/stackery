@@ -15,7 +15,8 @@
     slice_group_by,
     array_windows,
     core_intrinsics,
-    slice_partition_dedup
+    slice_partition_dedup,
+    drain_filter
 )]
 
 mod algorithms;
@@ -30,21 +31,22 @@ mod types;
 pub use {
     algorithms::detect_cycles::{CycleDetector, Graph},
     cache::{
+        ast,
         scope::{Scope, ScopeCache, ScopeFrame, ScopeRange, ScopeView, Sym},
         storage::{
             BitSet, CachePool, CacheRef, CacheSlice, CacheVec, CacheVecPush, CacheVecRange,
             CacheVecView,
         },
-        Cache, CacheLoader, CachePush, CacheRange, CacheView, Loader, LoaderCtx, Module, ModuleRef,
-        Modules,
+        Cache, CacheLoader, CacheParser, CachePush, CacheRange, CacheView, Loader, LoaderCtx,
+        Module, ModuleMeta, ModuleRef, Modules, ParsedModule,
     },
     diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics, Severty},
     lexer::{ImportLexer, Lexer, OpCode, Token, TokenKind},
     parser::{
         expr::{
-            BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAccessAst,
-            FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst, LiteralAst,
-            LiteralKindAst, LoopAst, OpAst, StructField, UnaryAst, UnitAst,
+            BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAst,
+            FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst, IndexAst, LiteralAst,
+            LiteralKindAst, LoopAst, OpAst, StructFieldAst, UnaryAst, UnitAst,
         },
         fmt::format_ast,
         Parser, StringParseError, StringParser, TransposeOpt,

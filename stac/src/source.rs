@@ -1,5 +1,4 @@
 use std::{
-    intrinsics::truncf64,
     iter,
     ops::{Index, IndexMut},
 };
@@ -90,7 +89,7 @@ pub struct File {
     name: InternedStr,
     source: String,
     modification_id: u64,
-    dirty: bool,
+    is_dirty: bool,
 }
 
 impl File {
@@ -112,12 +111,12 @@ impl File {
             name,
             source,
             modification_id,
-            dirty: true,
+            is_dirty: true,
         }
     }
 
     pub fn mark_clean(&mut self) {
-        self.dirty = false;
+        self.is_dirty = false;
     }
 
     pub fn name(&self) -> InternedStr {
@@ -135,7 +134,11 @@ impl File {
     pub fn update(&mut self, source: String, modification_id: u64) {
         self.source = source;
         self.modification_id = modification_id;
-        self.dirty = true;
+        self.is_dirty = true;
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty
     }
 }
 

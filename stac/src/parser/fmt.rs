@@ -105,7 +105,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
         }
         UnitAst::Unary(u) => {
             ctx.push_str(u.op.kind.name());
-            format_expr(u.expr, ctx, indent, interner);
+            format_unit(u.expr, ctx, indent, interner);
         }
         UnitAst::Array(a) => {
             format_list(
@@ -148,15 +148,15 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 true,
                 true,
                 |field, ctx, indent, interner| match field {
-                    StructField::Decl(named) => {
+                    StructFieldAst::Decl(named) => {
                         ctx.push_str(&interner[named.name.name]);
                         ctx.push_str(": ");
                         format_expr(named.expr, ctx, indent, interner);
                     }
-                    StructField::Inline(name) => {
+                    StructFieldAst::Inline(name) => {
                         ctx.push_str(&interner[name.name]);
                     }
-                    StructField::Embed(expr) => {
+                    StructFieldAst::Embed(expr) => {
                         ctx.push_str(TokenKind::DoubleDot.name());
                         format_expr(expr, ctx, indent, interner);
                     }
@@ -186,7 +186,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             }
         }
         UnitAst::Call(c) => {
-            format_unit(c.callee, ctx, indent, interner);
+            format_unit(c.caller, ctx, indent, interner);
             format_list(
                 c.args,
                 ctx,
@@ -253,7 +253,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
         }
         UnitAst::Break(_) => todo!(),
         UnitAst::Continue(_) => todo!(),
-        UnitAst::FieldAccess(fa) => {
+        UnitAst::Field(fa) => {
             format_unit(fa.expr, ctx, indent, interner);
             ctx.push('.');
             ctx.push_str(&interner[fa.field.name]);
