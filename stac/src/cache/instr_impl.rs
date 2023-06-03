@@ -2,7 +2,7 @@ use mini_alloc::{ArenaScope, FnvHashMap, InternedStr, StrInterner};
 
 use crate::{parser::expr::NamedExprAst, *};
 
-use super::ast;
+use super::instrs;
 
 #[derive(Default)]
 struct CacheParserRes {
@@ -12,11 +12,9 @@ struct CacheParserRes {
 }
 
 impl<'a> CacheParser<'a> {
-    pub fn update(mut self, temp_mem: &mut TempMemBase, meta: &ModuleMeta) -> Option<()> {
+    pub fn update(mut self, temp_mem: &mut TempMemBase, meta: &ModuleMeta) {
         let mut res = CacheParserRes::default();
-        self.reparse_changed(&mut res, temp_mem, meta)?;
-
-        Some(())
+        self.reparse_changed(&mut res, temp_mem, meta);
     }
 
     fn reparse_changed(
@@ -24,7 +22,7 @@ impl<'a> CacheParser<'a> {
         res: &mut CacheParserRes,
         temp_mem: &mut TempMemBase,
         meta: &ModuleMeta,
-    ) -> Option<()> {
+    ) {
         self.clean_cache(temp_mem, meta);
 
         for module_ref in meta.changed() {
@@ -58,8 +56,6 @@ impl<'a> CacheParser<'a> {
 
             self.modules.eintities[module_ref].parsed = parsed;
         }
-
-        Some(())
     }
 
     fn clean_cache(&mut self, temp_mem: &mut TempMemBase, meta: &ModuleMeta) {
@@ -88,7 +84,7 @@ impl<'a> CacheAstBuilder<'a> {
         arena: &ArenaScope,
         ast: &[ExprAst],
         scope_cache: &mut ScopeCache,
-    ) -> Option<ParsedModule> {
+    ) -> Option<ModuleInstrs> {
         self.res.used_strs.clear();
 
         let exprs = arena.alloc_iter(
@@ -97,52 +93,52 @@ impl<'a> CacheAstBuilder<'a> {
                 .map(|e| self.expr(e, &arena.proxi().scope())),
         );
 
-        Some(ParsedModule {
+        Some(ModuleInstrs {
             scope: self.res.scope.cache(scope_cache),
             body: self.push.exprs.extend(exprs.iter().flatten().copied()),
             cache: self.push.finish(),
         })
     }
 
-    fn expr(&mut self, expr: ExprAst, arena: &ArenaScope) -> Option<ast::Expr> {
+    fn expr(&mut self, expr: ExprAst, arena: &ArenaScope) -> Option<instrs::Instr> {
         match expr {
             ExprAst::Unit(b) => self.unit(b, arena),
             ExprAst::Binary(&b) => self.binary(b, arena),
         }
     }
 
-    fn unit(&mut self, unit: UnitAst, arena: &ArenaScope) -> Option<ast::Expr> {
+    fn unit(&mut self, unit: UnitAst, arena: &ArenaScope) -> Option<instrs::Instr> {
         match unit {
-            UnitAst::Literal(l) => Some(ast::Expr::Lit(self.push.consts.push(l.kind))),
-            UnitAst::Ident(i) => self.sym(i).map(ast::Expr::Ident),
-            UnitAst::Import(i) => self.import(i).map(ast::Expr::Import),
-            UnitAst::Str(s) => Some(ast::Expr::Str(self.string(s))),
+            UnitAst::Literal(l) => Some(instrs::Instr::Lit(self.push.consts.push(l.kind))),
+            UnitAst::Ident(i) => self.sym(i).map(instrs::Instr::Ident),
+            UnitAst::Import(i) => self.import(i).map(instrs::Instr::Import),
+            UnitAst::Str(s) => Some(instrs::Instr::Str(self.string(s))),
             UnitAst::Block(&b) => self.block(b, arena),
             UnitAst::Unary(&u) => self.unary(u, arena),
-            UnitAst::Array(a) => Some(ast::Expr::Array(self.expr_seq(a, arena))),
+            UnitAst::Array(a) => Some(instrs::Instr::Array(self.expr_seq(a, arena))),
             UnitAst::FilledArray(_) => todo!(),
-            UnitAst::Tuple(t) => Some(ast::Expr::Tuple(self.expr_seq(t, arena))),
-            UnitAst::Struct(s) => Some(ast::Expr::Struct(self.struct_(s, arena))),
-            UnitAst::Enum(&e) => self.enum_(e, arena).map(ast::Expr::Enum),
-            UnitAst::Call(&c) => self.call(c, arena).map(ast::Expr::Call),
-            UnitAst::Func(&f) => self.func(f, arena).map(ast::Expr::Func),
+            UnitAst::Tuple(t) => Some(instrs::Instr::Tuple(self.expr_seq(t, arena))),
+            UnitAst::Struct(s) => Some(instrs::Instr::Struct(self.struct_(s, arena))),
+            UnitAst::Enum(&e) => self.enum_(e, arena).map(instrs::Instr::Enum),
+            UnitAst::Call(&c) => self.call(c, arena).map(instrs::Instr::Call),
+            UnitAst::Func(&f) => self.func(f, arena).map(instrs::Instr::Func),
             UnitAst::Decl(&d) => self.decl(d, arena),
             UnitAst::Loop(&l) => self.loop_(l, arena),
             UnitAst::Index(&i) => self.index(i, arena),
             UnitAst::ForLoop(_) => todo!(),
             UnitAst::Break(&b) => self.break_(b, arena),
-            UnitAst::Continue(c) => Some(ast::Expr::Continue(
+            UnitAst::Continue(c) => Some(instrs::Instr::Continue(
                 c.label.map(|l| self.sym(l)).transpose()?,
             )),
-            UnitAst::Field(&f) => self.field_access(f, arena).map(ast::Expr::Field),
-            UnitAst::If(&i) => self.if_(i, arena).map(ast::Expr::If),
-            UnitAst::Ret(expr) => Some(ast::Expr::Ret(
+            UnitAst::Field(&f) => self.field_access(f, arena).map(instrs::Instr::Field),
+            UnitAst::If(&i) => self.if_(i, arena).map(instrs::Instr::If),
+            UnitAst::Ret(expr) => Some(instrs::Instr::Ret(
                 expr.map(|&e| self.expr(e, arena))
                     .transpose()?
                     .map(|e| self.push.exprs.push(e)),
             )),
             UnitAst::Paren(&expr) => self.expr(expr, arena),
-            UnitAst::Unknown(..) => Some(ast::Expr::Unknown),
+            UnitAst::Unknown(..) => Some(instrs::Instr::Unknown),
         }
     }
 
@@ -150,20 +146,20 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         IfAst { cond, then, else_ }: IfAst,
         arena: &ArenaScope,
-    ) -> Option<CacheRef<ast::If>> {
+    ) -> Option<CacheRef<instrs::If>> {
         let cond = self.expr(cond, arena)?;
         let then = self.expr(then, arena)?;
         let else_ = else_.map(|e| self.expr(e, arena)).transpose()?;
-        Some(self.push.ifs.push(ast::If { cond, then, else_ }))
+        Some(self.push.ifs.push(instrs::If { cond, then, else_ }))
     }
 
     fn field_access(
         &mut self,
         FieldAst { expr, field }: FieldAst,
         arena: &ArenaScope,
-    ) -> Option<CacheRef<ast::FieldAccess>> {
+    ) -> Option<CacheRef<instrs::FieldAccess>> {
         let expr = self.unit(expr, arena)?;
-        let res = ast::FieldAccess {
+        let res = instrs::FieldAccess {
             expr,
             field: field.name,
         };
@@ -174,10 +170,10 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         BreakAst { label, expr }: BreakAst,
         arena: &ArenaScope,
-    ) -> Option<ast::Expr> {
+    ) -> Option<instrs::Instr> {
         let label = label.map(|l| self.sym(l)).transpose()?;
         let expr = expr.map(|e| self.expr(e, arena)).transpose()?;
-        Some(ast::Expr::Break(
+        Some(instrs::Instr::Break(
             label,
             expr.map(|e| self.push.exprs.push(e)),
         ))
@@ -187,41 +183,45 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         IndexAst { expr, index }: IndexAst,
         arena: &ArenaScope,
-    ) -> Option<ast::Expr> {
+    ) -> Option<instrs::Instr> {
         let array = self.unit(expr, arena)?;
         let index = self.expr(index, arena)?;
-        Some(ast::Expr::Index(
+        Some(instrs::Instr::Index(
             self.push.exprs.push(array),
             self.push.exprs.push(index),
         ))
     }
 
-    fn loop_(&mut self, LoopAst { body, label }: LoopAst, arena: &ArenaScope) -> Option<ast::Expr> {
+    fn loop_(
+        &mut self,
+        LoopAst { body, label }: LoopAst,
+        arena: &ArenaScope,
+    ) -> Option<instrs::Instr> {
         let frame = self.res.scope.start_frame();
         let label = label.map(|l| self.res.scope.push(l.name));
         let body = self.expr(body, arena)?;
         self.res.scope.end_frame(frame);
 
-        Some(ast::Expr::Loop(label, self.push.exprs.push(body)))
+        Some(instrs::Instr::Loop(label, self.push.exprs.push(body)))
     }
 
     fn decl(
         &mut self,
         NamedExprAst { name, expr }: NamedExprAst,
         arena: &ArenaScope,
-    ) -> Option<ast::Expr> {
+    ) -> Option<instrs::Instr> {
         let name = self.res.scope.push(name.name);
         let value = self.expr(expr, arena)?;
-        Some(ast::Expr::Decl(name, self.push.exprs.push(value)))
+        Some(instrs::Instr::Decl(name, self.push.exprs.push(value)))
     }
 
     fn func(
         &mut self,
         FuncAst { args, body }: FuncAst,
         arena: &ArenaScope,
-    ) -> Option<CacheRef<ast::Func>> {
+    ) -> Option<CacheRef<instrs::Func>> {
         let frame = self.res.scope.start_frame();
-        let res = ast::Func {
+        let res = instrs::Func {
             args: self.func_args(args, arena),
             body: self.expr(body, arena)?,
         };
@@ -229,11 +229,15 @@ impl<'a> CacheAstBuilder<'a> {
         Some(self.push.funcs.push(res))
     }
 
-    fn func_args(&mut self, args: &[FuncArgAst], arena: &ArenaScope) -> CacheSlice<ast::FuncArg> {
+    fn func_args(
+        &mut self,
+        args: &[FuncArgAst],
+        arena: &ArenaScope,
+    ) -> CacheSlice<instrs::FuncArg> {
         let args = arena.alloc_iter(args.iter().map(|a| {
             let name = self.res.scope.push(a.name.name);
             let default = a.default.map(|d| self.unit(d, arena)).transpose()?;
-            Some(ast::FuncArg { name, default })
+            Some(instrs::FuncArg { name, default })
         }));
         self.push.func_args.extend(args.iter().flatten().copied())
     }
@@ -242,8 +246,8 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         CallAst { caller, args }: CallAst,
         arena: &ArenaScope,
-    ) -> Option<CacheRef<ast::Call>> {
-        let res = ast::Call {
+    ) -> Option<CacheRef<instrs::Call>> {
+        let res = instrs::Call {
             caller: self.unit(caller, arena)?,
             args: self.expr_seq(args, arena),
         };
@@ -254,8 +258,8 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         EnumAst { name, value }: EnumAst,
         arena: &ArenaScope,
-    ) -> Option<CacheRef<ast::Enum>> {
-        let res = ast::Enum {
+    ) -> Option<CacheRef<instrs::Enum>> {
+        let res = instrs::Enum {
             name: name.name,
             value: value.map(|v| self.expr(v, arena)).transpose()?,
         };
@@ -266,15 +270,15 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         struct_: &[StructFieldAst],
         arena: &ArenaScope,
-    ) -> CacheSlice<ast::StructField> {
+    ) -> CacheSlice<instrs::StructField> {
         let fields = arena.alloc_iter(struct_.iter().map(|&f| {
             Some(match f {
-                StructFieldAst::Decl(n) => ast::StructField::Named {
+                StructFieldAst::Decl(n) => instrs::StructField::Named {
                     name: n.name.name,
                     value: self.expr(n.expr, arena)?,
                 },
-                StructFieldAst::Inline(i) => ast::StructField::Inline(i.name),
-                StructFieldAst::Embed(e) => ast::StructField::Embed(self.expr(e, arena)?),
+                StructFieldAst::Inline(i) => instrs::StructField::Inline(i.name),
+                StructFieldAst::Embed(e) => instrs::StructField::Embed(self.expr(e, arena)?),
             })
         }));
 
@@ -283,16 +287,16 @@ impl<'a> CacheAstBuilder<'a> {
             .extend(fields.iter().flatten().copied())
     }
 
-    fn expr_seq(&mut self, array: &[ExprAst], arena: &ArenaScope) -> CacheSlice<ast::Expr> {
+    fn expr_seq(&mut self, array: &[ExprAst], arena: &ArenaScope) -> CacheSlice<instrs::Instr> {
         let exprs = arena.alloc_iter(array.iter().copied().map(|e| self.expr(e, arena)));
         self.push.exprs.extend(exprs.iter().flatten().copied())
     }
 
-    fn unary(&mut self, unary: UnaryAst, arena: &ArenaScope) -> Option<ast::Expr> {
+    fn unary(&mut self, unary: UnaryAst, arena: &ArenaScope) -> Option<instrs::Instr> {
         let base = self.unit(unary.expr, arena)?;
         let op = unary.op.kind;
 
-        Some(ast::Expr::Unary(op, self.push.exprs.push(base)))
+        Some(instrs::Instr::Unary(op, self.push.exprs.push(base)))
     }
 
     fn block(
@@ -302,12 +306,12 @@ impl<'a> CacheAstBuilder<'a> {
             trailing_semi,
         }: BlockAst,
         arena: &ArenaScope,
-    ) -> Option<ast::Expr> {
+    ) -> Option<instrs::Instr> {
         let frame = self.res.scope.start_frame();
         let exprs = self.expr_seq(exprs, arena);
         self.res.scope.end_frame(frame);
 
-        Some(ast::Expr::Block {
+        Some(instrs::Instr::Block {
             trailing_semi,
             exprs,
         })
@@ -347,11 +351,11 @@ impl<'a> CacheAstBuilder<'a> {
         &mut self,
         BinaryAst { lhs, rhs, op }: BinaryAst,
         arena: &ArenaScope,
-    ) -> Option<ast::Expr> {
+    ) -> Option<instrs::Instr> {
         let lhs = self.expr(lhs, arena)?;
         let rhs = self.expr(rhs, arena)?;
 
-        Some(ast::Expr::Binary(
+        Some(instrs::Instr::Binary(
             self.push.exprs.push(lhs),
             op.kind,
             self.push.exprs.push(rhs),
@@ -389,7 +393,17 @@ mod test {
             return;
         };
 
-        let cahce_ctx = crate::CacheParser::new(&mut modules, &interner, &mut diagnostics, types)
+        let mut temp_mem = crate::TempMemBase::new();
+        let cahce_ctx = crate::CacheParser::new(&mut modules, &interner, &mut diagnostics);
+
+        cahce_ctx.update(&mut temp_mem, &meta);
+
+        if !diagnostics.diagnostic_view().is_empty() {
+            ctx.push_str("cache diagnostics:\n");
+            ctx.push_str(diagnostics.diagnostic_view());
+        }
+
+        todo!()
     }
 
     macro_rules! cases {

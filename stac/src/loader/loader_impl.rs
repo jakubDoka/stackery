@@ -1,13 +1,11 @@
-use mini_alloc::{hashbrown, InternedStr};
-
 use crate::*;
-
-use super::ModuleMeta;
+use mini_alloc::*;
 
 #[derive(Default)]
 struct CacheLoaderRes {
     import_stack: Vec<(ModuleRef, InternedStr, usize)>,
     module_stack: Vec<ModuleRef>,
+    reached_modules: BitSet,
 }
 
 impl<'a, L: Loader> CacheLoader<'a, L> {
@@ -16,6 +14,7 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
 
         let root = self.load_modules(&mut res, root).await?;
         let order = self.detect_cycles(root)?;
+        self.remove_unreachable(&res);
         let updated_modules = self.mark_updated(&order);
 
         Some(ModuleMeta {
@@ -23,6 +22,23 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
             root,
             updated_modules,
         })
+    }
+
+    fn remove_unreachable(&mut self, res: &CacheLoaderRes) {
+        self.modules
+            .eintities
+            .retain(|id, _| res.reached_modules.contains(id.index()));
+
+        let mut module_ranges = self
+            .modules
+            .eintities
+            .values_mut()
+            .map(|m| &mut m.deps)
+            .collect::<Vec<_>>();
+
+        module_ranges.sort_unstable();
+
+        self.modules.deps.preserve_chunks(module_ranges);
     }
 
     fn mark_updated(&mut self, order: &[ModuleRef]) -> BitSet {
@@ -137,7 +153,7 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
                 );
 
             for &module in cycle.iter().rev() {
-                let file = CachePool::by_index(&self.modules.eintities, module as usize).file;
+                let file = PoolStore::by_index(&self.modules.eintities, module as usize).file;
                 let name = self.modules.files[file].name();
                 let name_str = &self.interner[name];
                 builder = builder.footer(Severty::Error, format_args!(" -> {}", name_str));
@@ -150,12 +166,12 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
             detector
                 .order()
                 .iter()
-                .map(|&index| CachePool::index_to_ref(&self.modules.eintities, index as usize))
+                .map(|&index| PoolStore::index_to_ref(&self.modules.eintities, index as usize))
                 .collect(),
         )
     }
 
-    fn add_module(&mut self, res: &mut CacheLoaderRes, file: FileRef) -> CacheRef<Module> {
+    fn add_module(&mut self, res: &mut CacheLoaderRes, file: FileRef) -> ModuleRef {
         // let &mut module = self.modules.loaded_modules.entry(file).or_insert_with(|| {
         //     let module = Module::new(file);
         //     let module = self.modules.eintities.push(module);
@@ -176,6 +192,8 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
                 module
             }
         };
+
+        res.reached_modules.insert(module.index());
 
         module
     }
@@ -202,7 +220,7 @@ mod test {
     use mini_alloc::StrInterner;
     use pollster::FutureExt;
 
-    use crate::cache::test_util::LoaderMock;
+    use crate::loader::test_util::LoaderMock;
     use crate::{ModuleRef, Modules};
 
     fn perform_test(sources: &str, ctx: &mut String) {

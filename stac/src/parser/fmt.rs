@@ -88,9 +88,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             LiteralKindAst::Bool(b) => ctx.push_str(&b.to_string()),
             LiteralKindAst::Str(s) => ctx.push_str(&interner[s]),
         },
-        UnitAst::Import(ident) | UnitAst::Str(ident) | UnitAst::Ident(ident) => {
-            ctx.push_str(&interner[ident.name])
-        }
+        UnitAst::Import(ident) | UnitAst::Ident(ident) => ctx.push_str(&interner[ident.ident]),
         UnitAst::Block(b) => {
             format_list(
                 b.exprs,
@@ -107,9 +105,9 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             ctx.push_str(u.op.kind.name());
             format_unit(u.expr, ctx, indent, interner);
         }
-        UnitAst::Array(a) => {
+        UnitAst::Array { elems, .. } => {
             format_list(
-                a,
+                elems,
                 ctx,
                 indent,
                 interner,
@@ -126,9 +124,9 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             format_expr(a.len, ctx, indent, interner);
             ctx.push(']');
         }
-        UnitAst::Tuple(t) => {
+        UnitAst::Tuple { values, .. } => {
             format_list(
-                t,
+                values,
                 ctx,
                 indent,
                 interner,
@@ -138,9 +136,9 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 format_expr,
             );
         }
-        UnitAst::Struct(s) => {
+        UnitAst::Struct { fields, .. } => {
             format_list(
-                s,
+                fields,
                 ctx,
                 indent,
                 interner,
@@ -149,12 +147,12 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 true,
                 |field, ctx, indent, interner| match field {
                     StructFieldAst::Decl(named) => {
-                        ctx.push_str(&interner[named.name.name]);
+                        ctx.push_str(&interner[named.name.ident]);
                         ctx.push_str(": ");
                         format_expr(named.expr, ctx, indent, interner);
                     }
                     StructFieldAst::Inline(name) => {
-                        ctx.push_str(&interner[name.name]);
+                        ctx.push_str(&interner[name.ident]);
                     }
                     StructFieldAst::Embed(expr) => {
                         ctx.push_str(TokenKind::DoubleDot.name());
@@ -174,13 +172,13 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             match e.value {
                 Some(val) => {
                     ctx.push(' ');
-                    ctx.push_str(&interner[e.name.name]);
+                    ctx.push_str(&interner[e.name.ident]);
                     ctx.push_str(": ");
                     format_expr(val, ctx, indent, interner);
                     ctx.push_str(" }");
                 }
                 None => {
-                    ctx.push_str(&interner[e.name.name]);
+                    ctx.push_str(&interner[e.name.ident]);
                     ctx.push('}');
                 }
             }
@@ -212,7 +210,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 false,
                 false,
                 |param, ctx, indent, interner| {
-                    ctx.push_str(&interner[param.name.name]);
+                    ctx.push_str(&interner[param.name.ident]);
                     if let Some(default) = param.default {
                         ctx.push_str(": ");
                         format_unit(default, ctx, indent, interner);
@@ -223,7 +221,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             format_expr(f.body, ctx, indent, interner);
         }
         UnitAst::Decl(d) => {
-            ctx.push_str(&interner[d.name.name]);
+            ctx.push_str(&interner[d.name.ident]);
             ctx.push_str(": ");
             format_expr(d.expr, ctx, indent, interner);
         }
@@ -231,7 +229,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             ctx.push_str(TokenKind::Loop.name());
             if let Some(label) = l.label {
                 ctx.push('.');
-                ctx.push_str(&interner[label.name]);
+                ctx.push_str(&interner[label.ident]);
             }
             ctx.push(' ');
             format_expr(l.body, ctx, indent, interner);
@@ -240,10 +238,10 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             ctx.push_str(TokenKind::For.name());
             if let Some(label) = fl.label {
                 ctx.push('.');
-                ctx.push_str(&interner[label.name]);
+                ctx.push_str(&interner[label.ident]);
             }
             ctx.push(' ');
-            ctx.push_str(&interner[fl.var.name]);
+            ctx.push_str(&interner[fl.var.ident]);
             ctx.push(' ');
             ctx.push_str(TokenKind::In.name());
             ctx.push(' ');
@@ -256,7 +254,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
         UnitAst::Field(fa) => {
             format_unit(fa.expr, ctx, indent, interner);
             ctx.push('.');
-            ctx.push_str(&interner[fa.field.name]);
+            ctx.push_str(&interner[fa.name.ident]);
         }
         UnitAst::If(i) => {
             ctx.push_str(TokenKind::If.name());
@@ -271,9 +269,9 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 format_expr(else_, ctx, indent, interner);
             }
         }
-        UnitAst::Ret(r) => {
+        UnitAst::Ret { value, .. } => {
             ctx.push_str(TokenKind::Ret.name());
-            if let Some(&expr) = r {
+            if let Some(&expr) = value {
                 ctx.push(' ');
                 format_expr(expr, ctx, indent, interner);
             }

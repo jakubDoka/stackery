@@ -2,11 +2,8 @@ use std::fmt::Display;
 
 use mini_alloc::{Diver, InternedStr};
 
-use crate::Severty::*;
-use crate::Token;
 use crate::TokenKind::*;
-use crate::TransposeOpt;
-use crate::{lexer::OpCode, Parser, Span};
+use crate::*;
 
 use super::StringParseError;
 
@@ -50,17 +47,21 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             parser
                 .diags
                 .builder(parser.files, parser.interner)
-                .footer(Error, message)
-                .annotation(Error, span.span, format_args!("unexpected {}", span.kind))
+                .footer(Severty::Error, message)
+                .annotation(
+                    Severty::Error,
+                    span.span,
+                    format_args!("unexpected {}", span.kind),
+                )
                 .terminate()
         }
 
         let expr = match token.kind {
-            If => self.if_(diver.untyped_dive()),
+            If => self.if_(diver.untyped_dive(), token.span),
             Else => unex_tok(self, token, "else can only follow an if")?,
-            Loop => self.loop_(diver.untyped_dive()),
-            Ret => self.ret(diver.untyped_dive()),
-            For => self.for_(diver.untyped_dive()),
+            Loop => self.loop_(diver.untyped_dive(), token.span),
+            Ret => self.ret(diver.untyped_dive(), token.span),
+            For => self.for_(diver.untyped_dive(), token.span),
             In => unex_tok(self, token, "in can only follow a for")?,
             Unknown => Some(UnitAst::Unknown(token.span)),
             Dot => unex_tok(
@@ -81,17 +82,17 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             )?,
             Colon => unex_tok(self, token, "colon can only follow pattern")?,
             Enum => self.enum_(diver.untyped_dive()),
-            Struct => self.struct_(diver.untyped_dive()),
-            LBrace => self.block(diver.untyped_dive()),
+            Struct => self.struct_(diver.untyped_dive(), token.span),
+            LBrace => self.block(diver.untyped_dive(), token.span),
             RBrace => unex_tok(self, token, "unmatched right brace")?,
-            LBracket => self.array(diver.untyped_dive()),
+            LBracket => self.array(diver.untyped_dive(), token.span),
             RBracket => unex_tok(self, token, "unmatched right bracket")?,
-            Tuple => self.tuple(diver.untyped_dive()),
+            Tuple => self.tuple(diver.untyped_dive(), token.span),
             LParen => self.paren(diver.untyped_dive()),
             RParen => unex_tok(self, token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
-                name: self.interner.intern(token.source),
+                ident: self.interner.intern(token.source),
             })),
             Import => Some(UnitAst::Import({
                 let source =
@@ -99,7 +100,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
                 IdentAst {
                     span: token.span,
-                    name: self.interner.intern(source),
+                    ident: self.interner.intern(source),
                 }
             })),
             Str => self.str(token),
@@ -127,9 +128,9 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         }))
     }
 
-    fn tuple(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
-        let (exprs, ..) = self.sequence(diver, Self::expr, Comma, RParen, "tuple element")?;
-        Some(UnitAst::Tuple(exprs))
+    fn tuple(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+        let (values, ..) = self.sequence(diver, Self::expr, Comma, RParen, "tuple element")?;
+        Some(UnitAst::Tuple { keyword, values })
     }
 
     fn handle_postfix(
@@ -143,7 +144,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 Dot => {
                     self.next();
                     let field = self.ident("field")?;
-                    UnitAst::Field(self.arena.alloc(FieldAst { expr, field }))
+                    UnitAst::Field(self.arena.alloc(FieldAst { expr, name: field }))
                 }
                 LParen => {
                     self.next();
@@ -179,8 +180,8 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
     fn unary(&mut self, diver: Diver, op: OpAst) -> Option<UnitAst<'arena>> {
         match op.kind {
-            OpCode::Or => self.func(diver, false),
-            OpCode::BitOr => self.func(diver, true),
+            OpCode::Or => self.func(diver, false, op.span),
+            OpCode::BitOr => self.func(diver, true, op.span),
             _ => {
                 let expr = self.unit(diver)?;
                 Some(UnitAst::Unary(self.arena.alloc(UnaryAst { op, expr })))
@@ -188,7 +189,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         }
     }
 
-    fn func(&mut self, mut diver: Diver, has_args: bool) -> Option<UnitAst<'arena>> {
+    fn func(&mut self, mut diver: Diver, has_args: bool, pipe: Span) -> Option<UnitAst<'arena>> {
         let args = match has_args {
             true => {
                 &*self
@@ -206,7 +207,11 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
         let body = self.expr(diver)?;
 
-        Some(UnitAst::Func(self.arena.alloc(FuncAst { args, body })))
+        Some(UnitAst::Func(self.arena.alloc(FuncAst {
+            args,
+            body,
+            pipe,
+        })))
     }
 
     fn func_arg(&mut self, diver: Diver) -> Option<FuncArgAst<'arena>> {
@@ -242,15 +247,19 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 Result::Err(StringParseError::IncompleteEscape) => {
                     self.diags
                         .builder(self.files, self.interner)
-                        .footer(Error, "incomplete escape sequence")
-                        .annotation(Error, token.span, "in string literal")
+                        .footer(Severty::Error, "incomplete escape sequence")
+                        .annotation(Severty::Error, token.span, "in string literal")
                         .terminate()?;
                 }
                 Result::Err(StringParseError::InvalidEscape(index)) => {
                     self.diags
                         .builder(self.files, self.interner)
-                        .footer(Error, "invalid escape sequence")
-                        .annotation(Error, token.span.shift(index), "in string literal")
+                        .footer(Severty::Error, "invalid escape sequence")
+                        .annotation(
+                            Severty::Error,
+                            token.span.shift('"'.len_utf8() + index),
+                            "in string literal",
+                        )
                         .terminate()?;
                 }
             },
@@ -263,9 +272,12 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(UnitAst::Paren(self.arena.alloc(expr)))
     }
 
-    fn array(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
+    fn array(&mut self, mut diver: Diver, bracket: Span) -> Option<UnitAst<'arena>> {
         if self.try_advance(RBracket).is_some() {
-            return Some(UnitAst::Array(&[]));
+            return Some(UnitAst::Array {
+                bracket,
+                elems: &[],
+            });
         }
 
         let first = self.expr(diver.untyped_dive())?;
@@ -273,9 +285,11 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         if self.try_advance(Semi).is_some() {
             let len = self.expr(diver.untyped_dive())?;
             self.expect_advance(RBracket, "end of filled array")?;
-            return Some(UnitAst::FilledArray(
-                self.arena.alloc(FilledArrayAst { expr: first, len }),
-            ));
+            return Some(UnitAst::FilledArray(self.arena.alloc(FilledArrayAst {
+                expr: first,
+                len,
+                bracket,
+            })));
         }
 
         let mut elems = diver.dive::<ExprAst<'arena>>();
@@ -288,21 +302,25 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
         self.expect_advance(RBracket, "end of array")?;
 
-        Some(UnitAst::Array(self.arena.alloc_rev_iter(elems)))
+        Some(UnitAst::Array {
+            bracket,
+            elems: self.arena.alloc_rev_iter(elems),
+        })
     }
 
-    fn block(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
+    fn block(&mut self, diver: Diver, brace: Span) -> Option<UnitAst<'arena>> {
         let (exprs, trailing_semi) = self.sequence(diver, Self::expr, Semi, RBrace, "block")?;
         Some(UnitAst::Block(self.arena.alloc(BlockAst {
             exprs,
             trailing_semi,
+            brace,
         })))
     }
 
-    fn struct_(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
+    fn struct_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let (fields, ..) =
             self.sequence(diver, Self::struct_field, Comma, RBrace, "struct decl")?;
-        Some(UnitAst::Struct(fields))
+        Some(UnitAst::Struct { fields, keyword })
     }
 
     fn struct_field(&mut self, diver: Diver) -> Option<StructFieldAst<'arena>> {
@@ -330,10 +348,14 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 .diags
                 .builder(self.files, self.interner)
                 .footer(
-                    Error,
+                    Severty::Error,
                     "struct field can either start with '..' for embeding or identifier",
                 )
-                .annotation(Error, peek.span, format_args!("unexpected {}", peek.kind))
+                .annotation(
+                    Severty::Error,
+                    peek.span,
+                    format_args!("unexpected {}", peek.kind),
+                )
                 .terminate()?,
         }
     }
@@ -348,7 +370,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(UnitAst::Enum(self.arena.alloc(EnumAst { name, value })))
     }
 
-    fn for_(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
+    fn for_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let label = self.label("for")?;
         let var = self.ident("for loop variable")?;
         self.expect_advance(In, "expected in after for")?;
@@ -360,19 +382,22 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             var,
             iter,
             body,
+            keyword,
         })))
     }
 
-    fn ret(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
-        Some(UnitAst::Ret(
-            (self.peek().kind != Semi)
+    fn ret(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+        Some(UnitAst::Ret {
+            keyword,
+
+            value: (self.peek().kind != Semi)
                 .then(|| self.expr(diver))
                 .transpose()?
                 .map(|expr| &*self.arena.alloc(expr)),
-        ))
+        })
     }
 
-    fn if_(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
+    fn if_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let cond = self.expr(diver.untyped_dive())?;
         let then = self.expr(diver.untyped_dive())?;
         let else_ = self
@@ -380,13 +405,19 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             .map(|_| self.expr(diver))
             .transpose()?;
 
-        Some(UnitAst::If(self.arena.alloc(IfAst { cond, then, else_ })))
+        Some(UnitAst::If(self.arena.alloc(IfAst {
+            cond,
+            then,
+            else_,
+            keyword,
+        })))
     }
 
-    fn loop_(&mut self, diver: Diver) -> Option<UnitAst<'arena>> {
+    fn loop_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         Some(UnitAst::Loop(self.arena.alloc(LoopAst {
             label: self.label("loop")?,
             body: self.expr(diver)?,
+            keyword,
         })))
     }
 
@@ -402,7 +433,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
         Some(IdentAst {
             span: token.span,
-            name: self.interner.intern(token.source),
+            ident: self.interner.intern(token.source),
         })
     }
 }
@@ -413,18 +444,35 @@ pub enum ExprAst<'arena> {
     Binary(&'arena BinaryAst<'arena>),
 }
 
+impl ExprAst<'_> {
+    pub fn span(&self) -> Span {
+        match self {
+            ExprAst::Unit(unit) => unit.span(),
+            ExprAst::Binary(binary) => binary.span(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum UnitAst<'arena> {
     Literal(LiteralAst),
     Ident(IdentAst),
     Import(IdentAst),
-    Str(IdentAst),
     Block(&'arena BlockAst<'arena>),
     Unary(&'arena UnaryAst<'arena>),
-    Array(&'arena [ExprAst<'arena>]),
+    Array {
+        bracket: Span,
+        elems: &'arena [ExprAst<'arena>],
+    },
     FilledArray(&'arena FilledArrayAst<'arena>),
-    Tuple(&'arena [ExprAst<'arena>]),
-    Struct(&'arena [StructFieldAst<'arena>]),
+    Tuple {
+        keyword: Span,
+        values: &'arena [ExprAst<'arena>],
+    },
+    Struct {
+        keyword: Span,
+        fields: &'arena [StructFieldAst<'arena>],
+    },
     Enum(&'arena EnumAst<'arena>),
     Call(&'arena CallAst<'arena>),
     Func(&'arena FuncAst<'arena>),
@@ -436,9 +484,42 @@ pub enum UnitAst<'arena> {
     Continue(ContinueAst),
     Field(&'arena FieldAst<'arena>),
     If(&'arena IfAst<'arena>),
-    Ret(Option<&'arena ExprAst<'arena>>),
+    Ret {
+        keyword: Span,
+        value: Option<&'arena ExprAst<'arena>>,
+    },
     Paren(&'arena ExprAst<'arena>),
     Unknown(Span),
+}
+
+impl UnitAst<'_> {
+    fn span(&self) -> Span {
+        match self {
+            UnitAst::Literal(literal) => literal.span,
+            UnitAst::Ident(ident) => ident.span,
+            UnitAst::Import(ident) => ident.span,
+            UnitAst::Block(block) => block.brace,
+            UnitAst::Unary(unary) => unary.op.span,
+            UnitAst::Array { bracket, .. } => *bracket,
+            UnitAst::FilledArray(array) => array.bracket,
+            UnitAst::Tuple { keyword, .. } => *keyword,
+            UnitAst::Struct { keyword, .. } => *keyword,
+            UnitAst::Enum(enum_) => enum_.name.span,
+            UnitAst::Call(call) => call.caller.span(),
+            UnitAst::Func(func) => func.pipe,
+            UnitAst::Decl(decl) => decl.name.span,
+            UnitAst::Loop(loop_) => loop_.keyword,
+            UnitAst::Index(index) => index.expr.span(),
+            UnitAst::ForLoop(for_) => for_.keyword,
+            UnitAst::Break(break_) => break_.keyword,
+            UnitAst::Continue(continue_) => continue_.keyword,
+            UnitAst::Field(field) => field.expr.span(),
+            UnitAst::If(if_) => if_.keyword,
+            UnitAst::Ret { keyword, .. } => *keyword,
+            UnitAst::Paren(expr) => expr.span(),
+            UnitAst::Unknown(span) => *span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -449,6 +530,7 @@ pub struct IndexAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlockAst<'arena> {
+    pub brace: Span,
     pub exprs: &'arena [ExprAst<'arena>],
     pub trailing_semi: bool,
 }
@@ -461,6 +543,7 @@ pub struct EnumAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IfAst<'arena> {
+    pub keyword: Span,
     pub cond: ExprAst<'arena>,
     pub then: ExprAst<'arena>,
     pub else_: Option<ExprAst<'arena>>,
@@ -469,11 +552,12 @@ pub struct IfAst<'arena> {
 #[derive(Debug, Clone, Copy)]
 pub struct FieldAst<'arena> {
     pub expr: UnitAst<'arena>,
-    pub field: IdentAst,
+    pub name: IdentAst,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ForLoopAst<'arena> {
+    pub keyword: Span,
     pub label: Option<IdentAst>,
     pub var: IdentAst,
     pub iter: ExprAst<'arena>,
@@ -482,18 +566,21 @@ pub struct ForLoopAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LoopAst<'arena> {
-    pub body: ExprAst<'arena>,
+    pub keyword: Span,
     pub label: Option<IdentAst>,
+    pub body: ExprAst<'arena>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct BreakAst<'arena> {
+    pub keyword: Span,
     pub label: Option<IdentAst>,
     pub expr: Option<ExprAst<'arena>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ContinueAst {
+    pub keyword: Span,
     pub label: Option<IdentAst>,
 }
 
@@ -512,6 +599,7 @@ pub struct UnaryAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FuncAst<'arena> {
+    pub pipe: Span,
     pub args: &'arena [FuncArgAst<'arena>],
     pub body: ExprAst<'arena>,
 }
@@ -536,6 +624,7 @@ pub struct NamedExprAst<'arena> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FilledArrayAst<'arena> {
+    pub bracket: Span,
     pub expr: ExprAst<'arena>,
     pub len: ExprAst<'arena>,
 }
@@ -545,6 +634,12 @@ pub struct BinaryAst<'arena> {
     pub lhs: ExprAst<'arena>,
     pub rhs: ExprAst<'arena>,
     pub op: OpAst,
+}
+
+impl BinaryAst<'_> {
+    fn span(&self) -> Span {
+        self.lhs.span()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -559,7 +654,7 @@ pub struct LiteralAst {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LiteralKindAst {
     Int([u8; 8]),
     Str(InternedStr),
@@ -568,7 +663,7 @@ pub enum LiteralKindAst {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IdentAst {
-    pub name: InternedStr,
+    pub ident: InternedStr,
     pub span: Span,
 }
 

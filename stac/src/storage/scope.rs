@@ -1,14 +1,10 @@
-use std::num::NonZeroU16;
-
 use mini_alloc::InternedStr;
 
-use crate::CacheRef;
-
-pub type Repr = NonZeroU16;
+use crate::*;
 
 #[derive(Default)]
 pub struct ScopeCache {
-    inner: crate::CacheVec<InternedStr>,
+    inner: crate::VecStore<InternedStr>,
 }
 
 impl ScopeCache {
@@ -90,11 +86,11 @@ impl Scope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Sym(CacheRef<InternedStr>);
+pub struct Sym(Ref<InternedStr>);
 
 impl Sym {
     pub fn new(index: usize) -> Self {
-        Self(CacheRef::new(index))
+        Self(Ref::new(index))
     }
 
     pub fn index(self) -> usize {
@@ -105,3 +101,4 @@ impl Sym {
 pub struct ScopeFrame {
     sym_stack_len: usize,
 }
+

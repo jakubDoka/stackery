@@ -1,0 +1,11 @@
+order:
+common
+a
+b
+root
+graph:
+root
+  a
+    common
+  b
+    common

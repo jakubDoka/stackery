@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use mini_alloc::{ArenaScope, Diver, InternedStr, StrInterner};
 
-use crate::{Diagnostics, ExprAst, FileRef, Files, IdentAst, Lexer, Severty::*, Token, TokenKind};
+use crate::*;
 
 pub mod expr;
 pub mod fmt;
@@ -85,11 +85,11 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             self.diags
                 .builder(self.files, self.interner)
                 .annotation(
-                    Error,
+                    Severty::Error,
                     self.next.span,
                     format_args!("expected {} but got {}", pat.display(), self.next.kind),
                 )
-                .footer(Error, msg)
+                .footer(Severty::Error, msg)
                 .terminate()?
         })
     }

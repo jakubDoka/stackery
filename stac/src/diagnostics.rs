@@ -128,7 +128,8 @@ impl Diagnostics {
 
             'b: for (i, line) in lines {
                 fn check_in_range(i: usize, last_diag_line: usize, view_range: usize) -> bool {
-                    i >= last_diag_line.saturating_sub(view_range) && i <= last_diag_line.saturating_add(view_range)
+                    i >= last_diag_line.saturating_sub(view_range)
+                        && i <= last_diag_line.saturating_add(view_range)
                 }
                 let in_range = check_in_range(i, last_diag_line, view_range);
 
@@ -175,7 +176,7 @@ impl Diagnostics {
                         .collect_into(&mut self.output);
 
                     annotation.display_standalone(&mut self.output, &self.temp_buffer, self.config.skip_colors);
-                    
+
                     diags.next();
                 }
             }
@@ -188,8 +189,16 @@ impl Diagnostics {
 }
 
 impl Diagnostics {
-    pub fn builder<'ctx>(&'ctx mut self, files: &'ctx Files, interner: &'ctx StrInterner) -> Diagnostic<'ctx> {
-        Diagnostic { inner: self, files, interner }
+    pub fn builder<'ctx>(
+        &'ctx mut self,
+        files: &'ctx Files,
+        interner: &'ctx StrInterner,
+    ) -> Diagnostic<'ctx> {
+        Diagnostic {
+            inner: self,
+            files,
+            interner,
+        }
     }
 }
 
@@ -217,7 +226,7 @@ pub struct Diagnostic<'ctx> {
 }
 
 impl<'ctx> Diagnostic<'ctx> {
-    pub fn footer(self, severty: Severty, message: impl Display) ->  Self {
+    pub fn footer(self, severty: Severty, message: impl Display) -> Self {
         let message = self.inner.cache_string(message);
         self.inner
             .footer_temp
@@ -225,7 +234,7 @@ impl<'ctx> Diagnostic<'ctx> {
         self
     }
 
-    pub fn annotation(self, severty: Severty, span: Span, message: impl Display) ->  Self {
+    pub fn annotation(self, severty: Severty, span: Span, message: impl Display) -> Self {
         let message = self.inner.cache_string(message);
         self.inner.annotation_temp.push(Annotation {
             severty,
@@ -335,7 +344,9 @@ mod test {
             ..Default::default()
         });
 
-        let mut builder = diags.builder(&files, &interner).footer(Severty::Error, "test");
+        let mut builder = diags
+            .builder(&files, &interner)
+            .footer(Severty::Error, "test");
         for tok in lexer.take_while(|tok| tok.kind != TokenKind::Eof) {
             builder = builder.annotation(Severty::Warning, tok.span, tok.kind);
         }
@@ -369,5 +380,4 @@ f: x
 ", ctx)
         }
     }
-
 }
