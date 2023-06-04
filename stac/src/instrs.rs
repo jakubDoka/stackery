@@ -3,9 +3,21 @@ use mini_alloc::*;
 use crate::*;
 
 mod emiter_impl;
+pub mod fmt;
+
+pub type InstrIndex = u16;
+pub type FuncIndex = u32;
+pub type FuncId = (ModuleRef, FuncRef);
+pub type Const = Ref<LiteralKindAst, InstrIndex>;
+pub type Sym = Ref<SymData, InstrIndex>;
+pub type Loop = Ref<LoopData, InstrIndex>;
+pub type Import = ModuleRef;
+pub type Ident = Ref<InternedStr, InstrIndex>;
+pub type FuncRef = Ref<Func, InstrIndex>;
+pub type InstrItems = Slice<InstrItem, FuncIndex>;
 
 pub struct InstrEmiter<'a> {
-    funcs: &'a mut Instrs,
+    instrs: &'a mut Instrs,
     modules: &'a Modules,
     interner: &'a StrInterner,
     diags: &'a mut Diagnostics,
@@ -13,30 +25,19 @@ pub struct InstrEmiter<'a> {
 
 impl<'a> InstrEmiter<'a> {
     pub fn new(
-        funcs: &'a mut Instrs,
+        instrs: &'a mut Instrs,
         modules: &'a Modules,
         interner: &'a StrInterner,
         diagnostics: &'a mut Diagnostics,
     ) -> Self {
         Self {
-            funcs,
+            instrs,
             modules,
             interner,
             diags: diagnostics,
         }
     }
 }
-
-pub type InstrIndex = u16;
-pub type FuncIndex = u32;
-pub type FuncId = (ModuleRef, FuncRef);
-pub type Const = Ref<LiteralKindAst, InstrIndex>;
-pub type Sym = Ref<SymData, InstrIndex>;
-pub type Label = Ref<LabelData, InstrIndex>;
-pub type Import = ModuleRef;
-pub type Ident = Ref<InternedStr, InstrIndex>;
-pub type FuncRef = Ref<Func, InstrIndex>;
-pub type InstrItems = Slice<InstrItem, FuncIndex>;
 
 macro_rules! gen_func_meta {
     (
@@ -116,7 +117,7 @@ gen_func_meta! {
         instrs: Instr,
         consts: LiteralKindAst,
         idents: InternedStr,
-        labels: LabelData,
+        labels: LoopData,
         syms: SymData,
     }
 }
@@ -130,11 +131,12 @@ gen_func_meta! {
 }
 
 pub struct Instrs {
-    modules: ShadowStore<Module, InstrModule, ModuleRefRepr>,
+    modules: ShadowStore<Module, ModuleRefRepr, InstrModule>,
     module_meta: InstrModuleMeta,
     func_meta: FuncMeta,
 }
 
+#[derive(Copy, Clone, Default)]
 pub struct InstrModule {
     meta: InstrModuleMetaSlice,
 }
@@ -161,7 +163,7 @@ pub struct FuncName {
 pub struct SymData(InternedStr);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct LabelData(Option<InternedStr>);
+pub struct LoopData(Option<InternedStr>);
 
 #[derive(Copy, Clone, Default)]
 pub struct Func {
@@ -204,9 +206,9 @@ pub enum Instr {
 
     Loop,
 
-    Continue(Label),
-    Break(Label),
-    ValuelessBreak(Label),
+    Continue(Loop),
+    Break(Loop),
+    ValuelessBreak(Loop),
 
     If { instr_count: InstrIndex },
     Else { instr_count: InstrIndex },

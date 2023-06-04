@@ -16,7 +16,8 @@
     array_windows,
     core_intrinsics,
     slice_partition_dedup,
-    drain_filter
+    drain_filter,
+    decl_macro
 )]
 
 mod algorithms;
@@ -35,10 +36,10 @@ pub use {
     algorithms::detect_cycles::{CycleDetector, Graph},
     diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics, Severty},
     instrs::{
-        Const, Func, FuncId, FuncIndex, FuncMeta, FuncMetaBuilder, FuncMetaSlice, FuncMetaView,
-        FuncRef, Ident, Import, Instr, InstrEmiter, InstrIndex, InstrItem, InstrItemKind,
-        InstrItems, InstrModule, InstrModuleMeta, InstrModuleMetaBuilder, InstrModuleMetaSlice,
-        InstrModuleMetaView, Instrs, Label, LabelData, Sym, SymData,
+        fmt::format_instrs, Const, Func, FuncId, FuncIndex, FuncMeta, FuncMetaBuilder,
+        FuncMetaSlice, FuncMetaView, FuncRef, Ident, Import, Instr, InstrEmiter, InstrIndex,
+        InstrItem, InstrItemKind, InstrItems, InstrModule, InstrModuleMeta, InstrModuleMetaBuilder,
+        InstrModuleMetaSlice, InstrModuleMetaView, Instrs, Loop, LoopData, Sym, SymData,
     },
     lexer::{ImportLexer, Lexer, OpCode, Token, TokenKind},
     loader::{

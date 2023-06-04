@@ -73,6 +73,28 @@ impl Modules {
     pub fn files(&self) -> &Files {
         &self.files
     }
+
+    pub fn preserved(&self) -> impl Iterator<Item = ModuleRef> + '_ {
+        self.eintities.iter().filter_map(|(id, module)| {
+            let is_preserved = !self.files[module.file].is_dirty();
+            is_preserved.then_some(id)
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.eintities.len()
+    }
+
+    pub(crate) fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
+        self.eintities.iter().filter_map(|(id, module)| {
+            let is_changed = self.files[module.file].is_dirty();
+            is_changed.then_some(id)
+        })
+    }
+
+    pub fn module_file(&self, module: ModuleRef) -> FileRef {
+        self.eintities[module].file
+    }
 }
 
 pub struct LoaderCtx<'a> {

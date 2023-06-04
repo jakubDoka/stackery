@@ -2,8 +2,8 @@ use std::{
     intrinsics::unlikely,
     marker::PhantomData,
     mem,
-    ops::{Index, IndexMut, Range, Deref, DerefMut},
-    ptr, slice,
+    ops::{Deref, DerefMut, Index, IndexMut, Range},
+    ptr, slice, cmp::Ordering, hash,
 };
 
 use crate::*;
@@ -15,6 +15,20 @@ pub struct ShadowStore<K, R, V> {
     data: Vec<V>,
     default: V,
     _phantom: PhantomData<(K, R)>,
+}
+
+impl<K, R: RefRepr, V: Default> ShadowStore<K, R, V> {
+    pub fn multiple_mut(
+        &mut self,
+        preserved_modules: impl IntoIterator<Item = Ref<K, R>>,
+    ) -> impl Iterator<Item = &mut V> {
+        let mut last_index = 0;
+        preserved_modules.into_iter().map(move |module| unsafe {
+            assert!(module.index() > last_index);
+            last_index = module.index();
+            mem::transmute(&mut self[module])
+        })
+    }
 }
 
 impl<K, R, V: Default> Default for ShadowStore<K, R, V> {
@@ -65,15 +79,11 @@ impl<T, R: RefRepr> PoolStore<T, R> {
     }
 
     pub fn get(&self, index: Ref<T, R>) -> Option<&T> {
-        self.data
-            .get(index.index())
-            .and_then(Option::as_ref)
+        self.data.get(index.index()).and_then(Option::as_ref)
     }
 
     pub fn get_mut(&mut self, index: Ref<T, R>) -> Option<&mut T> {
-        self.data
-            .get_mut(index.index())
-            .and_then(Option::as_mut)
+        self.data.get_mut(index.index()).and_then(Option::as_mut)
     }
 
     pub fn push(&mut self, value: T) -> Ref<T, R> {
@@ -140,6 +150,13 @@ impl<T, R: RefRepr> PoolStore<T, R> {
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.data.iter_mut().filter_map(Option::as_mut)
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Ref<T, R>, &T)> {
+        self.data
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_ref().map(|v| (Ref::new(i), v)))
+    }
 }
 
 impl<T, R: RefRepr> Index<Ref<T, R>> for PoolStore<T, R> {
@@ -187,8 +204,7 @@ impl<T, R: RefRepr> VecStore<T, R> {
         Ref::new(id)
     }
 
-    pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) -> Slice<T, R>
-    {
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) -> Slice<T, R> {
         let start = self.data.len();
         self.data.extend(iter);
         let end = self.data.len();
@@ -207,8 +223,13 @@ impl<T, R: RefRepr> VecStore<T, R> {
         self.data.truncate(len);
     }
 
-    
-    pub fn preserve_chunks_by_slice<'a, P>(&mut self, chunks: impl IntoIterator<Item = &'a mut VecSlice<T, P, R>>) where T: 'a, P: 'a {
+    pub fn preserve_chunks_by_slice<'a, P>(
+        &mut self,
+        chunks: impl IntoIterator<Item = &'a mut VecSlice<T, P, R>>,
+    ) where
+        T: 'a,
+        P: 'a,
+    {
         self.preserve_chunks(chunks.into_iter().map(|c| &mut c.slice))
     }
 
@@ -280,6 +301,10 @@ impl<T, R: RefRepr> VecStore<T, R> {
     pub fn clear(&mut self) {
         self.data.clear();
     }
+
+    pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + ExactSizeIterator {
+        self.data.iter_mut()
+    }
 }
 
 impl<T, R: RefRepr> Index<Slice<T, R>> for VecStore<T, R> {
@@ -318,6 +343,12 @@ impl<T, R, P: RefRepr> Index<VecSlice<T, R, P>> for VecStore<T, P> {
     }
 }
 
+impl<T, R, P: RefRepr> IndexMut<VecSlice<T, R, P>> for VecStore<T, P> {
+    fn index_mut(&mut self, index: VecSlice<T, R, P>) -> &mut Self::Output {
+        unsafe { mem::transmute(&mut self.data[index.slice.range()]) }
+    }
+}
+
 impl<T, R: RefRepr> Default for VecStore<T, R> {
     fn default() -> Self {
         Self::new()
@@ -337,8 +368,7 @@ impl<'a, T, R: RefRepr, P: RefRepr> VecStoreBuilder<'a, T, R, P> {
         Ref::new(id)
     }
 
-    pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) -> Slice<T, R>
-    {
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = T>) -> Slice<T, R> {
         let start = self.len();
         self.within.data.extend(iter);
         let end = self.len();
@@ -358,7 +388,7 @@ impl<'a, T, R: RefRepr, P: RefRepr> VecStoreBuilder<'a, T, R, P> {
     }
 }
 
-impl<'a, T, R: RefRepr, P> Index<Slice<T, R>> for VecStoreBuilder<'a ,T, R, P> {
+impl<'a, T, R: RefRepr, P> Index<Slice<T, R>> for VecStoreBuilder<'a, T, R, P> {
     type Output = [T];
 
     fn index(&self, index: Slice<T, R>) -> &Self::Output {
@@ -366,13 +396,13 @@ impl<'a, T, R: RefRepr, P> Index<Slice<T, R>> for VecStoreBuilder<'a ,T, R, P> {
     }
 }
 
-impl<'a, T, R: RefRepr, P> IndexMut<Slice<T, R>> for VecStoreBuilder<'a ,T, R, P> {
+impl<'a, T, R: RefRepr, P> IndexMut<Slice<T, R>> for VecStoreBuilder<'a, T, R, P> {
     fn index_mut(&mut self, index: Slice<T, R>) -> &mut Self::Output {
         &mut self.within.data[index.shifted_range(self.start)]
     }
 }
 
-impl<'a, T, R: RefRepr, P> Index<Ref<T, R>> for VecStoreBuilder<'a ,T, R, P> {
+impl<'a, T, R: RefRepr, P> Index<Ref<T, R>> for VecStoreBuilder<'a, T, R, P> {
     type Output = T;
 
     fn index(&self, index: Ref<T, R>) -> &Self::Output {
@@ -380,13 +410,13 @@ impl<'a, T, R: RefRepr, P> Index<Ref<T, R>> for VecStoreBuilder<'a ,T, R, P> {
     }
 }
 
-impl<'a, T, R: RefRepr, P > IndexMut<Ref<T, R>> for VecStoreBuilder<'a ,T, R, P> {
+impl<'a, T, R: RefRepr, P> IndexMut<Ref<T, R>> for VecStoreBuilder<'a, T, R, P> {
     fn index_mut(&mut self, index: Ref<T, R>) -> &mut Self::Output {
         &mut self.within.data[index.index() - self.start]
     }
 }
 
-impl<'a, T, R, P: RefRepr> Index<VecSlice<T, R, P>> for VecStoreBuilder<'a ,T, R, P> {
+impl<'a, T, R, P: RefRepr> Index<VecSlice<T, R, P>> for VecStoreBuilder<'a, T, R, P> {
     type Output = VecSliceView<T, R>;
 
     fn index(&self, index: VecSlice<T, R, P>) -> &Self::Output {
@@ -428,6 +458,32 @@ impl<T, R, P: RefRepr> Default for VecSlice<T, R, P> {
             slice: Slice::default(),
             _marker: PhantomData,
         }
+    }
+}
+
+impl<T, R, P: RefRepr> PartialEq for VecSlice<T, R, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.slice == other.slice
+    }
+}
+
+impl<T, R, P: RefRepr> Eq for VecSlice<T, R, P> {}
+
+impl<T, R, P: RefRepr> hash::Hash for VecSlice<T, R, P> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.slice.hash(state)
+    }
+}
+
+impl<T, R, P: RefRepr> PartialOrd for VecSlice<T, R, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.slice.partial_cmp(&other.slice)
+    }
+}
+
+impl<T, R, P: RefRepr> Ord for VecSlice<T, R, P> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.slice.cmp(&other.slice)
     }
 }
 

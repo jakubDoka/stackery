@@ -3,88 +3,51 @@ use mini_alloc::*;
 use crate::{parser::expr::NamedExprAst, *};
 
 #[derive(Default)]
-struct InstrEmiterRes {
+struct InstrEmiterRes<'a> {
     used_consts: FnvHashMap<LiteralKindAst, Const>,
     used_idents: FnvHashMap<InternedStr, Ident>,
+    label_count: InstrIndex,
+    function_stack: Vec<(FuncRef, FuncAst<'a>)>,
     decl_scope: Scope<SymData>,
-    loop_scope: Scope<LoopData>,
+    loop_scope: Scope<LabelData>,
     modules: Vec<(InternedStr, ModuleRef)>,
-    string_parser: StringParser,
-}
-
-impl InstrEmiterRes {
-    fn prepare_for_function(&mut self) {
-        self.used_consts.clear();
-        self.used_idents.clear();
-        assert!(self.loop_scope.is_empty());
-    }
 }
 
 impl<'a> InstrEmiter<'a> {
-    pub fn emmit(mut self, temp_mem: &mut TempMemBase) -> Option<()> {
+    pub fn emmit(mut self, meta: &ModuleMeta) -> Option<()> {
         let mut res = InstrEmiterRes::default();
 
-        self.clean_meta();
-        self.parse_modules(&mut res, temp_mem);
+        self.clean_funcs(meta);
+        self.parse_modules(meta, &mut res);
 
         Some(())
     }
 
-    fn clean_meta(&mut self) {
+    fn clean_funcs(&mut self, meta: &ModuleMeta) {
         let preserved_modules = self.modules.preserved();
-        let mut preserved_modules = self
-            .instrs
+        let preserved_funcs = self
+            .funcs
             .modules
             .multiple_mut(preserved_modules)
-            .map(|module| &mut module.meta)
+            .map(|module| &mut module.meta.funcs)
             .collect::<Vec<_>>();
-
-        self.instrs
-            .module_meta
-            .preserve_ranges(preserved_modules.as_mut_slice());
-
-        let mut funcs = self
-            .instrs
-            .module_meta
-            .funcs
-            .values_mut()
-            .map(|func| &mut func.meta)
-            .collect::<Vec<_>>();
-
-        self.instrs.func_meta.preserve_ranges(funcs.as_mut_slice());
     }
 
-    fn parse_modules(&mut self, res: &mut InstrEmiterRes, temp_mem: &mut TempMemBase) {
-        for module in self.modules.changed() {
-            let (diver, arena) = temp_mem.diver_and_arena();
-            let Some(ast) = Parser::new(
-                self.modules.files(),
-                self.modules.module_file(module),
-                self.interner,
-                self.diags,
-                &arena,
-                &mut res.string_parser,
-            ).parse(diver) else {
-                continue;
-            };
-
-            let meta = self.emmit_module(ast, res);
-            self.instrs.modules[module] = InstrModule { meta };
-        }
-    }
+    fn parse_modules(&mut self, meta: &ModuleMeta, res: &mut InstrEmiterRes) {}
 
     fn emmit_module<'arena>(
-        &mut self,
+        self,
         items: &[ExprAst<'arena>],
-        res: &mut InstrEmiterRes,
+        res: &mut InstrEmiterRes<'arena>,
     ) -> InstrModuleMetaSlice {
-        let mut module_meta = self.instrs.module_meta.builder();
+        let mut module_meta = self.funcs.module_meta.builder();
 
-        let mut func_stack = Self::collect_module_items(
+        Self::collect_module_items(
             self.modules.files(),
             self.interner,
             self.diags,
             items,
+            res,
             &mut module_meta,
         );
         let frame = Self::prepare_scope(
@@ -95,16 +58,14 @@ impl<'a> InstrEmiter<'a> {
             &mut module_meta,
         );
 
-        while let Some((func_ref, func)) = func_stack.pop() {
-            res.prepare_for_function();
+        while let Some((func_ref, func)) = res.function_stack.pop() {
             FuncBuilder {
-                inner: self.instrs.func_meta.builder(),
+                inner: self.funcs.func_meta.builder(),
                 entities: &mut module_meta,
                 modules: self.modules,
                 interner: self.interner,
                 diags: self.diags,
                 res,
-                func_stack: &mut func_stack,
             }
             .build_func(func, func_ref);
         }
@@ -153,9 +114,9 @@ impl<'a> InstrEmiter<'a> {
         interner: &StrInterner,
         diags: &mut Diagnostics,
         items: &[ExprAst<'arena>],
+        res: &mut InstrEmiterRes<'arena>,
         entities: &mut InstrModuleMetaBuilder,
-    ) -> Vec<(FuncRef, FuncAst<'arena>)> {
-        let mut funcs = Vec::with_capacity(items.len());
+    ) {
         for &item in items {
             let NamedExprAst { name, expr } = match item {
                 ExprAst::Unit(UnitAst::Decl(&n)) => n,
@@ -182,14 +143,13 @@ impl<'a> InstrEmiter<'a> {
 
             let func_ref = entities.funcs.push(Func::default());
 
-            funcs.push((func_ref, func));
+            res.function_stack.push((func_ref, func));
             entities.items.push(InstrItem {
                 name: name.ident,
                 kind: InstrItemKind::Func(func_ref),
                 span: name.span,
             });
         }
-        funcs
     }
 }
 
@@ -199,8 +159,7 @@ struct FuncBuilder<'a, 'arena, 'ctx> {
     modules: &'a Modules,
     interner: &'a StrInterner,
     diags: &'a mut Diagnostics,
-    res: &'a mut InstrEmiterRes,
-    func_stack: &'a mut Vec<(FuncRef, FuncAst<'arena>)>,
+    res: &'a mut InstrEmiterRes<'arena>,
 }
 
 impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
@@ -245,7 +204,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             UnitAst::Decl(&d) => self.decl(d),
             UnitAst::Loop(&l) => self.loop_(l),
             UnitAst::Index(&i) => self.index(i),
-            UnitAst::ForLoop(..) => todo!(),
+            UnitAst::ForLoop(fl) => todo!(),
             UnitAst::Break(&b) => self.break_(b),
             UnitAst::Continue(c) => self.continue_(c),
             UnitAst::Field(&f) => self.field(f),
@@ -395,7 +354,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn func(&mut self, func: FuncAst<'arena>) {
         let func_ref = self.entities.funcs.push(Default::default());
-        self.func_stack.push((func_ref, func));
+        self.res.function_stack.push((func_ref, func));
         self.inner.instrs.push(Instr::Func(func_ref));
     }
 
@@ -409,7 +368,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         let label = label.map(|label| label.ident);
 
         let scope = self.res.loop_scope.start_frame();
-        let label = self.res.loop_scope.push(instrs::LoopData(label));
+        let label = self.res.loop_scope.push(instrs::LabelData(label));
 
         self.inner.instrs.push(Instr::Loop);
         self.expr(body);
@@ -453,9 +412,9 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         self.inner.instrs.push(Instr::Continue(label));
     }
 
-    fn find_loop(&mut self, label: Option<IdentAst>, keyword: Span) -> Option<Loop> {
+    fn find_loop(&mut self, label: Option<IdentAst>, keyword: Span) -> Option<Label> {
         let label = label.map(|label| label.ident);
-        let res = self.res.loop_scope.resolve(instrs::LoopData(label));
+        let res = self.res.loop_scope.resolve(instrs::LabelData(label));
 
         if res.is_none() {
             self.diags
@@ -551,11 +510,15 @@ impl<T> Default for Scope<T> {
 }
 
 impl<T> Scope<T> {
-    fn push(&mut self, sym: T) -> Ref<T, InstrIndex> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, sym: T) -> Ref<T, InstrIndex> {
         self.vec.push(sym)
     }
 
-    fn resolve(&self, name: T) -> Option<Ref<T, InstrIndex>>
+    pub fn resolve(&self, name: T) -> Option<Ref<T, InstrIndex>>
     where
         T: Eq,
     {
@@ -565,16 +528,12 @@ impl<T> Scope<T> {
             .find_map(|(id, sym)| (sym == &name).then_some(id))
     }
 
-    fn start_frame(&self) -> ScopeFrame {
+    pub fn start_frame(&self) -> ScopeFrame {
         ScopeFrame(self.vec.len())
     }
 
-    fn end_frame(&mut self, frame: ScopeFrame) {
+    pub fn end_frame(&mut self, frame: ScopeFrame) {
         self.vec.truncate(frame.0);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.vec.is_empty()
     }
 }
 
