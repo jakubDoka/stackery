@@ -1,0 +1,15 @@
+instrs:
+  root:
+    main:
+      mod1
+      field ident0
+      const0
+      const0
+      call 2
+  a:
+    foo:
+      sym1
+      sym2
+      binary +
+      const0
+      binary +

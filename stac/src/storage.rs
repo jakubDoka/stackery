@@ -406,13 +406,13 @@ impl<'a, T, R: RefRepr, P> Index<Ref<T, R>> for VecStoreBuilder<'a, T, R, P> {
     type Output = T;
 
     fn index(&self, index: Ref<T, R>) -> &Self::Output {
-        &self.within.data[index.index() - self.start]
+        &self.within.data[index.index() + self.start]
     }
 }
 
 impl<'a, T, R: RefRepr, P> IndexMut<Ref<T, R>> for VecStoreBuilder<'a, T, R, P> {
     fn index_mut(&mut self, index: Ref<T, R>) -> &mut Self::Output {
-        &mut self.within.data[index.index() - self.start]
+        &mut self.within.data[index.index() + self.start]
     }
 }
 

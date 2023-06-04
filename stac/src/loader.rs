@@ -31,23 +31,23 @@ pub struct ModuleMeta {
 }
 
 impl ModuleMeta {
-    pub fn order(&self) -> &[ModuleRef] {
+    pub(crate) fn order(&self) -> &[ModuleRef] {
         &self.order
     }
 
-    pub fn root(&self) -> ModuleRef {
+    pub(crate) fn root(&self) -> ModuleRef {
         self.root
     }
 
-    pub fn is_updated(&self, module: ModuleRef) -> bool {
+    pub(crate) fn is_updated(&self, module: ModuleRef) -> bool {
         self.updated_modules.contains(module.index())
     }
 
-    pub fn no_changes(&self) -> bool {
+    pub(crate) fn no_changes(&self) -> bool {
         !self.updated_modules.contains(self.root.index())
     }
 
-    pub fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
+    pub(crate) fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
         self.order().iter().copied().filter(|&m| self.is_updated(m))
     }
 }
@@ -61,27 +61,23 @@ pub struct Modules {
 }
 
 impl Modules {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn name_of(&self, module: ModuleRef) -> InternedStr {
+    pub(crate) fn name_of(&self, module: ModuleRef) -> InternedStr {
         let module = &self.eintities[module];
         self.files[module.file].name()
     }
 
-    pub fn files(&self) -> &Files {
+    pub(crate) fn files(&self) -> &Files {
         &self.files
     }
 
-    pub fn preserved(&self) -> impl Iterator<Item = ModuleRef> + '_ {
+    pub(crate) fn preserved(&self) -> impl Iterator<Item = ModuleRef> + '_ {
         self.eintities.iter().filter_map(|(id, module)| {
             let is_preserved = !self.files[module.file].is_dirty();
             is_preserved.then_some(id)
         })
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.eintities.len()
     }
 
@@ -92,8 +88,18 @@ impl Modules {
         })
     }
 
-    pub fn module_file(&self, module: ModuleRef) -> FileRef {
+    pub(crate) fn module_file(&self, module: ModuleRef) -> FileRef {
         self.eintities[module].file
+    }
+
+    pub(crate) fn deps_of(
+        &self,
+        module: ModuleRef,
+    ) -> impl Iterator<Item = (InternedStr, ModuleRef)> + '_ {
+        let module = &self.eintities[module];
+        self.deps[module.deps]
+            .iter()
+            .map(move |&m| (self.name_of(m), m))
     }
 }
 
@@ -111,14 +117,14 @@ pub trait Loader {
     ) -> Result<FileRef, io::Error>;
 }
 
-pub struct CacheLoader<'a, L: Loader> {
+pub struct ModuleLoader<'a, L: Loader> {
     loader: &'a mut L,
     modules: &'a mut Modules,
     interner: &'a StrInterner,
     diagnostics: &'a mut Diagnostics,
 }
 
-impl<'a, L: Loader> CacheLoader<'a, L> {
+impl<'a, L: Loader> ModuleLoader<'a, L> {
     pub fn new(
         loader: &'a mut L,
         modules: &'a mut Modules,
@@ -135,7 +141,7 @@ impl<'a, L: Loader> CacheLoader<'a, L> {
 }
 
 #[cfg(test)]
-mod test_util {
+pub mod test_util {
     use std::collections::HashMap;
 
     use crate::*;
@@ -147,7 +153,7 @@ mod test_util {
     }
 
     impl<'a> LoaderMock<'a> {
-        pub(super) fn new(mut files: &'a str) -> Self {
+        pub fn new(mut files: &'a str) -> Self {
             let delim = '`';
             let mut modules = HashMap::new();
             while let Some((_, rest)) = files.split_once(delim) {

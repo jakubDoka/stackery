@@ -1,6 +1,6 @@
 use mini_alloc::*;
 
-use crate::{parser::expr::NamedExprAst, *};
+use crate::*;
 
 #[derive(Default)]
 struct InstrEmiterRes {
@@ -68,6 +68,8 @@ impl<'a> InstrEmiter<'a> {
                 continue;
             };
 
+            res.modules.clear();
+            res.modules.extend(self.modules.deps_of(module));
             let meta = self.emmit_module(ast, res);
             self.instrs.modules[module] = InstrModule { meta };
         }
@@ -268,7 +270,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn ident(&mut self, IdentAst { ident, span }: IdentAst) {
         let instr = match self.res.decl_scope.resolve(instrs::SymData(ident)) {
-            Some(sym) => Instr::Ident(sym),
+            Some(sym) => Instr::Sym(sym),
             None => {
                 self.diags
                     .builder(self.modules.files(), self.interner)
@@ -288,7 +290,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             .iter()
             .find_map(|&(name, module)| (name == ident).then_some(module));
         let instr = match module {
-            Some(instr) => Instr::Import(instr),
+            Some(instr) => Instr::Mod(instr),
             None => {
                 self.diags
                     .builder(self.modules.files(), self.interner)
@@ -411,9 +413,13 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         let scope = self.res.loop_scope.start_frame();
         let label = self.res.loop_scope.push(instrs::LoopData(label));
 
-        self.inner.instrs.push(Instr::Loop);
+        let loop_ = self.inner.instrs.push(Instr::Unkown);
+        let current_len = self.inner.instrs.len();
         self.expr(body);
         self.inner.instrs.push(Instr::Continue(label));
+        self.inner.instrs[loop_] = Instr::Loop {
+            instr_count: (self.inner.instrs.len() - current_len).try_into().unwrap(),
+        };
 
         self.res.loop_scope.end_frame(scope);
     }
@@ -579,3 +585,139 @@ impl<T> Scope<T> {
 }
 
 struct ScopeFrame(usize);
+
+#[cfg(test)]
+mod test {
+    use mini_alloc::*;
+    use pollster::FutureExt;
+
+    use crate::*;
+
+    fn perform_test(sources: &str, ctx: &mut String) {
+        let mut loader = LoaderMock::new(sources);
+
+        let mut diagnostics = Diagnostics::default();
+        let mut modules = Modules::default();
+        let interner = StrInterner::default();
+
+        let root = interner.intern("root");
+
+        let meta = ModuleLoader::new(&mut loader, &mut modules, &interner, &mut diagnostics)
+            .update(root)
+            .block_on();
+
+        if !diagnostics.diagnostic_view().is_empty() {
+            ctx.push_str("loader diagnostics:\n");
+            ctx.push_str(diagnostics.diagnostic_view());
+            diagnostics.clear();
+        }
+
+        let Some(_meta) = meta else {
+            ctx.push_str("no meta");
+            return;
+        };
+
+        let mut instrs = Instrs::default();
+        let mut temp_mem = TempMemBase::default();
+
+        InstrEmiter::new(&mut instrs, &mut modules, &interner, &mut diagnostics)
+            .emmit(&mut temp_mem);
+
+        if !diagnostics.diagnostic_view().is_empty() {
+            ctx.push_str("emmiter diagnostics:\n");
+            ctx.push_str(diagnostics.diagnostic_view());
+        }
+
+        ctx.push_str("instrs:\n");
+        for module in modules.changed() {
+            let module_name = modules.name_of(module);
+            let instr_module = &instrs.modules[module];
+            ctx.push_str("  ");
+            ctx.push_str(&interner[module_name]);
+            ctx.push_str(":\n");
+
+            let meta_view = instrs.module_meta.view(instr_module.meta);
+            for item in meta_view.items {
+                ctx.push_str("    ");
+                ctx.push_str(&interner[item.name]);
+                ctx.push_str(":\n");
+
+                match item.kind {
+                    InstrItemKind::Func(func) => {
+                        let func = &meta_view.funcs[func];
+                        let func_meta_view = instrs.func_meta.view(func.meta);
+                        format_instrs(func_meta_view.instrs, ctx, "      ", &interner);
+                    }
+                }
+            }
+        }
+    }
+
+    macro_rules! cases {
+        ($(
+            $name:ident $sources:literal
+        )*) => {print_test::cases! {$(
+            fn $name(ctx) {
+                perform_test($sources, ctx);
+            }
+        )*}};
+    }
+
+    cases! {
+        single_module "`root
+            main: || foo(1, 1);
+            foo: |a, b| a + b + 1;
+        `"
+
+        multy_module "
+            `root
+                main: || :{a}.foo(1, 1);
+            `
+
+            `a
+                foo: |a, b| a + b + 1;
+            `
+        "
+        variables "`root
+            main: || {
+                a: 1;
+                b: 2;
+                c: a + b;
+                c
+            };
+        `"
+        variables_in_scopes "`root
+            main: || {
+                a: 1;
+                b: 2;
+                c: {
+                    a: 2;
+                    b: 3;
+                    a + b
+                };
+                c + a + b
+            };
+        `"
+        control_flow "`root
+            fib: |x| {
+                if x < 2 {
+                    x
+                } else {
+                    fib(x - 1) + fib(x - 2)
+                }
+            };
+
+            iter_fib: |x| {
+                a: 0;
+                b: 1;
+                loop if x == 0 break else {
+                    c: a + b;
+                    a = b;
+                    b = c;
+                    x -= 1;
+                };
+                a
+            };
+        `"
+    }
+}

@@ -186,6 +186,11 @@ impl Diagnostics {
         self.temp_buffer.clear();
         self.output.push('\n');
     }
+
+    pub fn clear(&mut self) {
+        self.output.clear();
+        self.counters = [0; 4];
+    }
 }
 
 impl Diagnostics {

@@ -130,6 +130,7 @@ gen_func_meta! {
     }
 }
 
+#[derive(Default)]
 pub struct Instrs {
     modules: ShadowStore<Module, ModuleRefRepr, InstrModule>,
     module_meta: InstrModuleMeta,
@@ -174,8 +175,8 @@ pub struct Func {
 #[derive(Copy, Clone)]
 pub enum Instr {
     Const(Const),
-    Ident(Sym),
-    Import(Import),
+    Sym(Sym),
+    Mod(Import),
 
     Block { expr_count: InstrIndex },
     ExprBlock { expr_count: InstrIndex },
@@ -204,7 +205,7 @@ pub enum Instr {
 
     Ret { has_value: bool },
 
-    Loop,
+    Loop { instr_count: InstrIndex },
 
     Continue(Loop),
     Break(Loop),

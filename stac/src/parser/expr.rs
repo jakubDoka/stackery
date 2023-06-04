@@ -24,7 +24,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             kind: Op(kind),
             span,
             ..
-        } = self.peek() && kind.prec() <= prev_prec
+        } = self.peek() && kind.prec() < prev_prec
         {
             self.next();
 
@@ -60,6 +60,8 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             If => self.if_(diver.untyped_dive(), token.span),
             Else => unex_tok(self, token, "else can only follow an if")?,
             Loop => self.loop_(diver.untyped_dive(), token.span),
+            Break => self.break_(diver.untyped_dive(), token.span),
+            Continue => self.continue_(token.span),
             Ret => self.ret(diver.untyped_dive(), token.span),
             For => self.for_(diver.untyped_dive(), token.span),
             In => unex_tok(self, token, "in can only follow a for")?,
@@ -95,8 +97,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 ident: self.interner.intern(token.source),
             })),
             Import => Some(UnitAst::Import({
-                let source =
-                    &token.source[Import.name().len()..token.source.len() - RBracket.name().len()];
+                let source = &token.source[":{".len()..token.source.len() - "}".len()];
 
                 IdentAst {
                     span: token.span,
@@ -119,6 +120,23 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         }?;
 
         self.handle_postfix(diver, expr)
+    }
+
+    fn break_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+        let label = self.label("break")?;
+        let expr = (![Semi, RBrace, Else, Eof, Comma].contains(&self.peek().kind))
+            .then(|| self.expr(diver))
+            .transpose()?;
+        Some(UnitAst::Break(self.arena.alloc(BreakAst {
+            keyword,
+            label,
+            expr,
+        })))
+    }
+
+    fn continue_(&mut self, keyword: Span) -> Option<UnitAst<'arena>> {
+        let label = self.label("continue")?;
+        Some(UnitAst::Continue(ContinueAst { keyword, label }))
     }
 
     fn bool(&mut self, value: bool, span: Span) -> Option<UnitAst<'arena>> {
@@ -399,7 +417,9 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
     fn if_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let cond = self.expr(diver.untyped_dive())?;
+        dbg!(self.peek());
         let then = self.expr(diver.untyped_dive())?;
+        dbg!(self.peek());
         let else_ = self
             .try_advance(Else)
             .map(|_| self.expr(diver))

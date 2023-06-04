@@ -1,0 +1,13 @@
+instrs:
+  root:
+    main:
+      expr_block4
+      const0
+      decl
+      const1
+      decl
+      sym1
+      sym2
+      binary +
+      decl
+      sym3

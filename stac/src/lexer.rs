@@ -165,6 +165,8 @@ define_lexer! {
         If = "if"
         Else = "else"
         Loop = "loop"
+        Break = "break"
+        Continue = "continue"
         Ret = "ret"
         For = "for"
         In = "in"
@@ -296,7 +298,7 @@ mod test {
     #[test]
     fn all_tokens() {
         let code = "
-            if else loop ret for in unknown true false
+            if else loop break continue ret for in unknown true false
             . .. , ; : |{ *{ { } [ ] *( ( )
             ident
             :{import}

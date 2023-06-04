@@ -32,6 +32,9 @@ mod storage;
 mod temp_mem;
 mod types;
 
+#[cfg(test)]
+pub use loader::test_util::LoaderMock;
+
 pub use {
     algorithms::detect_cycles::{CycleDetector, Graph},
     diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics, Severty},
@@ -43,14 +46,14 @@ pub use {
     },
     lexer::{ImportLexer, Lexer, OpCode, Token, TokenKind},
     loader::{
-        CacheLoader, Loader, LoaderCtx, Module, ModuleDeps, ModuleMeta, ModuleRef, ModuleRefRepr,
+        Loader, LoaderCtx, Module, ModuleDeps, ModuleLoader, ModuleMeta, ModuleRef, ModuleRefRepr,
         Modules,
     },
     parser::{
         expr::{
             BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAst,
             FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst, IndexAst, LiteralAst,
-            LiteralKindAst, LoopAst, OpAst, StructFieldAst, UnaryAst, UnitAst,
+            LiteralKindAst, LoopAst, NamedExprAst, OpAst, StructFieldAst, UnaryAst, UnitAst,
         },
         fmt::format_ast,
         Parser, StringParseError, StringParser, TransposeOpt,

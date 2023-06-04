@@ -8,7 +8,7 @@ struct CacheLoaderRes {
     reached_modules: BitSet,
 }
 
-impl<'a, L: Loader> CacheLoader<'a, L> {
+impl<'a, L: Loader> ModuleLoader<'a, L> {
     pub async fn update(mut self, root: InternedStr) -> Option<ModuleMeta> {
         let mut res = CacheLoaderRes::default();
 
@@ -227,13 +227,13 @@ mod test {
         let mut loader = LoaderMock::new(sources);
 
         let mut diagnostics = crate::Diagnostics::default();
-        let mut modules = crate::Modules::new();
+        let mut modules = crate::Modules::default();
         let interner = mini_alloc::StrInterner::default();
 
         let root = interner.intern("root");
 
         let loader_ctx =
-            crate::CacheLoader::new(&mut loader, &mut modules, &interner, &mut diagnostics);
+            crate::ModuleLoader::new(&mut loader, &mut modules, &interner, &mut diagnostics);
 
         let meta = loader_ctx.update(root).block_on();
 

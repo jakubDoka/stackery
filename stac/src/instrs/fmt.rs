@@ -1,9 +1,11 @@
 use crate::*;
 use mini_alloc::*;
 
-pub fn format_instrs(instrs: &[Instr], ctx: &mut String, interner: &StrInterner) {
+pub fn format_instrs(instrs: &[Instr], ctx: &mut String, prefix: &str, interner: &StrInterner) {
     for &instr in instrs {
+        ctx.push_str(prefix);
         format_instr(instr, ctx, interner);
+        ctx.push('\n');
     }
 }
 
@@ -14,10 +16,10 @@ fn format_instr(instr: Instr, ctx: &mut String, _: &StrInterner) {
     }
     match instr {
         Instr::Const(c) => write!("const{}", c.index()),
-        Instr::Ident(i) => write!("ident{}", i.index()),
-        Instr::Import(i) => write!("import{}", i.index()),
-        Instr::Block { expr_count } => write!("block{}", expr_count),
-        Instr::ExprBlock { expr_count } => write!("expr_block{}", expr_count),
+        Instr::Sym(i) => write!("sym{}", i.index()),
+        Instr::Mod(i) => write!("mod{}", i.index()),
+        Instr::Block { expr_count } => write!("block {}", expr_count),
+        Instr::ExprBlock { expr_count } => write!("expr_block {}", expr_count),
         Instr::Array { item_count } => write!("array{}", item_count),
         Instr::FilledArray => write!("filled_array"),
         Instr::Tuple { item_count } => write!("tuple{}", item_count),
@@ -34,7 +36,7 @@ fn format_instr(instr: Instr, ctx: &mut String, _: &StrInterner) {
         Instr::Index => write!("index"),
         Instr::Decl => write!("decl"),
         Instr::Ret { has_value } => write!("ret {}", has_value),
-        Instr::Loop => write!("loop"),
+        Instr::Loop { instr_count } => write!("loop {}", instr_count),
         Instr::Continue(l) => write!("continue loop{}", l.index()),
         Instr::Break(l) => write!("break loop{}", l.index()),
         Instr::ValuelessBreak(l) => write!("valueless_break loop{}", l.index()),
