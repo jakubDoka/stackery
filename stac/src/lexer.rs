@@ -192,6 +192,7 @@ define_lexer! {
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
+        MetaIdent = r"\$(?&ident_start)(?&ident_content)*"
         Import = r":\{[^}]*\}"
         Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
@@ -301,6 +302,7 @@ mod test {
             if else loop break continue ret for in unknown true false
             . .. , ; : |{ *{ { } [ ] *( ( )
             ident
+            $meta_ident
             :{import}
             \"str\"
             123

@@ -17,11 +17,11 @@
     core_intrinsics,
     slice_partition_dedup,
     drain_filter,
-    decl_macro
+    decl_macro,
+    slice_from_ptr_range
 )]
 
 mod algorithms;
-// mod cache;
 mod diagnostics;
 mod instrs;
 mod lexer;
@@ -52,8 +52,9 @@ pub use {
     parser::{
         expr::{
             BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAst,
-            FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst, IndexAst, LiteralAst,
-            LiteralKindAst, LoopAst, NamedExprAst, OpAst, StructFieldAst, UnaryAst, UnitAst,
+            FieldIdentAst, FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst,
+            IndexAst, LiteralAst, LiteralKindAst, LoopAst, NamedExprAst, OpAst, StructFieldAst,
+            UnaryAst, UnitAst,
         },
         fmt::format_ast,
         Parser, StringParseError, StringParser, TransposeOpt,
@@ -65,6 +66,7 @@ pub use {
     },
     temp_mem::{TempMem, TempMemBase},
     types::{
-        ArrayType, BuiltinType, EnumType, FuncType, StructType, Type, Types, UnknownType, Unknowns,
+        ArrayType, BuiltinType, EnumType, FuncInstId, FuncType, Generator, GeneratorArgs,
+        GeneratorCtx, IntType, IntWidth, StructType, Type, Types,
     },
 };

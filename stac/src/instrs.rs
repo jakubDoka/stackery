@@ -7,7 +7,6 @@ pub mod fmt;
 
 pub type InstrIndex = u16;
 pub type FuncIndex = u32;
-pub type FuncId = (ModuleRef, FuncRef);
 pub type Const = Ref<LiteralKindAst, InstrIndex>;
 pub type Sym = Ref<SymData, InstrIndex>;
 pub type Loop = Ref<LoopData, InstrIndex>;
@@ -15,6 +14,12 @@ pub type Import = ModuleRef;
 pub type Ident = Ref<InternedStr, InstrIndex>;
 pub type FuncRef = Ref<Func, InstrIndex>;
 pub type InstrItems = Slice<InstrItem, FuncIndex>;
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct FuncId {
+    pub module: ModuleRef,
+    pub func: FuncRef,
+}
 
 pub struct InstrEmiter<'a> {
     instrs: &'a mut Instrs,
@@ -137,6 +142,18 @@ pub struct Instrs {
     func_meta: FuncMeta,
 }
 
+impl Instrs {
+    pub(crate) fn view_of(&self, func: FuncId) -> FuncMetaView {
+        let module = &self.modules[func.module];
+        let func = &self.module_meta.funcs[module.meta.funcs][func.func];
+        self.func_meta.view(func.meta)
+    }
+
+    pub(crate) fn items_of(&self, module: ModuleRef) -> &[InstrItem] {
+        &self.module_meta.items[self.modules[module].meta.items]
+    }
+}
+
 #[derive(Copy, Clone, Default)]
 pub struct InstrModule {
     meta: InstrModuleMetaSlice,
@@ -152,6 +169,7 @@ pub struct InstrItem {
 #[derive(Copy, Clone)]
 pub enum InstrItemKind {
     Func(FuncRef),
+    Import(ModuleRef),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -163,8 +181,13 @@ pub struct FuncName {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct SymData(InternedStr);
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct LoopData(Option<InternedStr>);
+pub struct LoopData {
+    label: InternedStr,
+    offset: InstrIndex,
+    break_frame: usize,
+    dest: Ref<Instr, InstrIndex>,
+    scope: emiter_impl::ScopeFrame,
+}
 
 #[derive(Copy, Clone, Default)]
 pub struct Func {
@@ -177,44 +200,24 @@ pub enum Instr {
     Const(Const),
     Sym(Sym),
     Mod(Import),
-
-    Block { expr_count: InstrIndex },
-    ExprBlock { expr_count: InstrIndex },
-
     Array { item_count: InstrIndex },
     FilledArray,
-
     Tuple { item_count: InstrIndex },
-
     Struct { field_count: InstrIndex },
-    StructField(Ident),
-    InlinedField(Ident),
+    StructField { name: Ident, has_value: bool },
     Embed,
-
-    Enum(Ident),
-    UnitEnum(Ident),
-
+    Enum { name: Ident, has_value: bool },
     Call { arg_count: InstrIndex },
     Func(FuncRef),
-
     Unary(OpCode),
     Binary(OpCode),
     Index,
-
     Decl,
-
-    Ret { has_value: bool },
-
-    Loop { instr_count: InstrIndex },
-
-    Continue(Loop),
-    Break(Loop),
-    ValuelessBreak(Loop),
-
-    If { instr_count: InstrIndex },
-    Else { instr_count: InstrIndex },
-
-    Field(Ident),
-
+    Drop,
+    DropDecl { decl_count: InstrIndex },
+    BackJumpDest { used: bool },
+    Jump { to: InstrIndex, conditional: bool },
+    Field { name: Ident, is_meta: bool },
     Unkown,
+    Error,
 }

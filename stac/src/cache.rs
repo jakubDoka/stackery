@@ -2,10 +2,6 @@ use mini_alloc::{InternedStr, StrInterner};
 
 use crate::*;
 
-// mod instr_impl;
-// pub mod instrs;
-// mod loader_impl;
-
 macro_rules! decl_ast_model {
     ($name:ident, $view_name:ident, $push_name:ident, $range_name:ident <$lt:lifetime> {$(
         $field:ident: $ty:ty,

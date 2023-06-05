@@ -172,15 +172,6 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
     }
 
     fn add_module(&mut self, res: &mut CacheLoaderRes, file: FileRef) -> ModuleRef {
-        // let &mut module = self.modules.loaded_modules.entry(file).or_insert_with(|| {
-        //     let module = Module::new(file);
-        //     let module = self.modules.eintities.push(module);
-        //     self.collect_imports(res, module);
-        //     res.module_stack.push(module);
-        //     module
-        // });
-        // module
-        //
         let module = match self.modules.loaded_modules.entry(file) {
             hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
             hashbrown::hash_map::Entry::Vacant(entry) => {

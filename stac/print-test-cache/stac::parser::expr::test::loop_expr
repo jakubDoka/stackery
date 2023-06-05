@@ -1,1 +1,3 @@
-loop.label body;
+loop.label {
+    body
+};

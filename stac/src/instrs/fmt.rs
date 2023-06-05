@@ -1,48 +1,61 @@
 use crate::*;
 use mini_alloc::*;
+use std::fmt::Write;
 
 pub fn format_instrs(instrs: &[Instr], ctx: &mut String, prefix: &str, interner: &StrInterner) {
+    let mut jump_targets = BitSet::with_capacity(instrs.len());
     for &instr in instrs {
+        if let Instr::Jump { to, .. } = instr {
+            jump_targets.insert(to as usize);
+        }
+    }
+    for (i, &instr) in instrs.iter().enumerate() {
         ctx.push_str(prefix);
+        if jump_targets.contains(i) {
+            write!(ctx, "{:03} ", i).unwrap();
+        } else {
+            write!(ctx, "    ").unwrap();
+        }
         format_instr(instr, ctx, interner);
         ctx.push('\n');
+    }
+
+    if jump_targets.contains(instrs.len()) {
+        ctx.push_str(prefix);
+        write!(ctx, "{:03}\n", instrs.len()).unwrap();
     }
 }
 
 fn format_instr(instr: Instr, ctx: &mut String, _: &StrInterner) {
-    use std::fmt::Write;
     macro write($($arg:tt)*) {
         std::write!(ctx, $($arg)*).unwrap()
     }
+
     match instr {
         Instr::Const(c) => write!("const{}", c.index()),
         Instr::Sym(i) => write!("sym{}", i.index()),
         Instr::Mod(i) => write!("mod{}", i.index()),
-        Instr::Block { expr_count } => write!("block {}", expr_count),
-        Instr::ExprBlock { expr_count } => write!("expr_block {}", expr_count),
-        Instr::Array { item_count } => write!("array{}", item_count),
+        Instr::Array { item_count } => write!("array{item_count}",),
         Instr::FilledArray => write!("filled_array"),
-        Instr::Tuple { item_count } => write!("tuple{}", item_count),
-        Instr::Struct { field_count } => write!("struct{}", field_count),
-        Instr::StructField(name) => write!("struct_field ident{}", name.index()),
-        Instr::InlinedField(name) => write!("inlined_field ident{}", name.index()),
+        Instr::Tuple { item_count } => write!("tuple{item_count}",),
+        Instr::Struct { field_count } => write!("struct{field_count}",),
+        Instr::StructField { name, has_value } => {
+            write!("struct_field ident{} {has_value}", name.index())
+        }
         Instr::Embed => write!("embed"),
-        Instr::Enum(name) => write!("enum ident{}", name.index()),
-        Instr::UnitEnum(name) => write!("unit_enum ident{}", name.index()),
-        Instr::Call { arg_count } => write!("call {}", arg_count),
+        Instr::Enum { name, has_value } => write!("enum ident{} {has_value}", name.index()),
+        Instr::Call { arg_count } => write!("call {arg_count}"),
         Instr::Func(func) => write!("func{}", func.index()),
         Instr::Unary(op) => write!("unary {}", op.name()),
         Instr::Binary(op) => write!("binary {}", op.name()),
         Instr::Index => write!("index"),
         Instr::Decl => write!("decl"),
-        Instr::Ret { has_value } => write!("ret {}", has_value),
-        Instr::Loop { instr_count } => write!("loop {}", instr_count),
-        Instr::Continue(l) => write!("continue loop{}", l.index()),
-        Instr::Break(l) => write!("break loop{}", l.index()),
-        Instr::ValuelessBreak(l) => write!("valueless_break loop{}", l.index()),
-        Instr::If { instr_count } => write!("if {}", instr_count),
-        Instr::Else { instr_count } => write!("else {}", instr_count),
-        Instr::Field(name) => write!("field ident{}", name.index()),
+        Instr::Field { name, is_meta } => write!("field ident{} {is_meta}", name.index()),
         Instr::Unkown => write!("unkown"),
+        Instr::Jump { to, conditional } => write!("jump {} {}", to, conditional),
+        Instr::BackJumpDest { used } => write!("back_jump_dest {}", used),
+        Instr::Error => write!("error"),
+        Instr::Drop => write!("drop"),
+        Instr::DropDecl { decl_count } => write!("drop_decl {decl_count}"),
     }
 }

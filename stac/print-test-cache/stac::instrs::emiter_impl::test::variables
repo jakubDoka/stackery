@@ -1,7 +1,6 @@
 instrs:
   root:
     main:
-      expr_block4
       const0
       decl
       const1
@@ -11,3 +10,4 @@ instrs:
       binary +
       decl
       sym3
+      drop_decl 3

@@ -1,0 +1,17 @@
+instrs:
+  root:
+    main:
+      back_jump_dest false
+      back_jump_dest false
+      const0
+      jump 4 false
+  004 const1
+      binary +
+      decl
+      back_jump_dest false
+      const0
+      sym1
+      binary +
+      drop_decl 1
+      jump 13 false
+  013 drop_decl 1

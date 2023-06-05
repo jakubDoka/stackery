@@ -1,7 +1,8 @@
 instrs:
   root:
+    a: :{a}
     main:
-      mod1
+      sym0
       field ident0 false
       const0
       const0

@@ -89,17 +89,8 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             LiteralKindAst::Str(s) => ctx.push_str(&interner[s]),
         },
         UnitAst::Import(ident) | UnitAst::Ident(ident) => ctx.push_str(&interner[ident.ident]),
-        UnitAst::Block(b) => {
-            format_list(
-                b.exprs,
-                ctx,
-                indent,
-                interner,
-                [TokenKind::LBrace, TokenKind::Semi, TokenKind::RBrace],
-                true,
-                b.trailing_semi,
-                format_expr,
-            );
+        UnitAst::Block(&b) => {
+            format_block(b, ctx, indent, interner);
         }
         UnitAst::Unary(u) => {
             ctx.push_str(u.op.kind.name());
@@ -232,7 +223,7 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
                 ctx.push_str(&interner[label.ident]);
             }
             ctx.push(' ');
-            format_expr(l.body, ctx, indent, interner);
+            format_block(l.body, ctx, indent, interner);
         }
         UnitAst::ForLoop(fl) => {
             ctx.push_str(TokenKind::For.name());
@@ -261,12 +252,12 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
             ctx.push(' ');
             format_expr(i.cond, ctx, indent, interner);
             ctx.push(' ');
-            format_expr(i.then, ctx, indent, interner);
+            format_block(i.then, ctx, indent, interner);
             if let Some(else_) = i.else_ {
                 ctx.push(' ');
                 ctx.push_str(TokenKind::Else.name());
                 ctx.push(' ');
-                format_expr(else_, ctx, indent, interner);
+                format_block(else_, ctx, indent, interner);
             }
         }
         UnitAst::Ret { value, .. } => {
@@ -281,4 +272,17 @@ pub fn format_unit(unit: UnitAst, ctx: &mut String, indent: usize, interner: &St
         }
         UnitAst::Unknown(..) => ctx.push_str(TokenKind::Unknown.name()),
     }
+}
+
+fn format_block(block: BlockAst, ctx: &mut String, indent: usize, interner: &StrInterner) {
+    format_list(
+        block.exprs,
+        ctx,
+        indent,
+        interner,
+        [TokenKind::LBrace, TokenKind::Semi, TokenKind::RBrace],
+        true,
+        block.trailing_semi,
+        format_expr,
+    );
 }

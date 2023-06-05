@@ -1,4 +1,4 @@
-use std::ops::{Index, Range};
+use std::ops::Index;
 
 use mini_alloc::*;
 
@@ -11,7 +11,6 @@ struct InstrEmiterRes {
     decl_scope: Scope<SymData>,
     loop_scope: Scope<LoopData>,
     breaks: Vec<BreakData>,
-    returns: Vec<RetData>,
     modules: Vec<(InternedStr, ModuleRef)>,
     string_parser: StringParser,
 }
@@ -19,10 +18,6 @@ struct InstrEmiterRes {
 struct BreakData {
     addr: Ref<Instr, InstrIndex>,
     label: Loop,
-}
-
-struct RetData {
-    addr: Ref<Instr, InstrIndex>,
 }
 
 impl InstrEmiterRes {
@@ -244,15 +239,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
         self.expr(body);
 
-        self.end_frame(scope);
-
-        let instr_count = self.current_offset();
-        for ret in self.res.returns.drain(..) {
-            self.inner.instrs[ret.addr] = Instr::Jump {
-                to: instr_count,
-                conditional: false,
-            };
-        }
+        self.res.decl_scope.end_frame(scope);
 
         let func = &mut self.entities.funcs[into];
 
@@ -260,18 +247,18 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         func.arg_count = args.len().try_into().unwrap();
     }
 
-    fn expr(&mut self, expr: ExprAst<'arena>) -> Option<()> {
+    fn expr(&mut self, expr: ExprAst<'arena>) {
         match expr {
             ExprAst::Unit(u) => self.unit(u),
             ExprAst::Binary(&b) => self.binary(b),
         }
     }
 
-    fn unit(&mut self, unit: UnitAst<'arena>) -> Option<()> {
+    fn unit(&mut self, unit: UnitAst<'arena>) {
         match unit {
-            UnitAst::Literal(l) => Some(self.literal(l)),
-            UnitAst::Ident(i) => Some(self.ident(i)),
-            UnitAst::Import(i) => Some(self.import(i)),
+            UnitAst::Literal(l) => self.literal(l),
+            UnitAst::Ident(i) => self.ident(i),
+            UnitAst::Import(i) => self.import(i),
             UnitAst::Block(&b) => self.block(b),
             UnitAst::Unary(&u) => self.unary(u),
             UnitAst::Array { bracket, elems } => self.array(bracket, elems),
@@ -280,18 +267,18 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             UnitAst::Struct { keyword, fields } => self.struct_(keyword, fields),
             UnitAst::Enum(&e) => self.enum_(e),
             UnitAst::Call(&c) => self.call(c),
-            UnitAst::Func(&f) => Some(self.func(f)),
+            UnitAst::Func(&f) => self.func(f),
             UnitAst::Decl(&d) => self.decl(d),
             UnitAst::Loop(&l) => self.loop_(l),
             UnitAst::Index(&i) => self.index(i),
             UnitAst::ForLoop(..) => todo!(),
-            UnitAst::Break(&b) => self.break_(b)?,
-            UnitAst::Continue(c) => self.continue_(c)?,
+            UnitAst::Break(&b) => self.break_(b),
+            UnitAst::Continue(c) => self.continue_(c),
             UnitAst::Field(&f) => self.field(f),
             UnitAst::If(&i) => self.if_(i),
             UnitAst::Ret { value, .. } => self.ret(value.copied()),
             UnitAst::Paren(p) => self.expr(*p),
-            UnitAst::Unknown(u) => Some(self.unknown(u)),
+            UnitAst::Unknown(u) => self.unknown(u),
         }
     }
 
@@ -347,76 +334,57 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             trailing_semi,
             ..
         }: BlockAst<'arena>,
-    ) -> Option<()> {
+    ) {
         let scope = self.res.decl_scope.start_frame();
 
-        for &expr in exprs {
-            self.expr(expr)?;
-            if !matches!(
-                self.inner.instrs.last(),
-                Some(Instr::Drop | Instr::Decl | Instr::Binary(OpCode::Assign))
-            ) {
-                self.add_instr(Instr::Drop);
-            }
-        }
-
-        if !trailing_semi {
-            self.pop_instr();
-        }
-
-        self.end_frame(scope);
-
-        Some(())
-    }
-
-    fn unary(&mut self, UnaryAst { op, expr }: UnaryAst<'arena>) -> Option<()> {
-        self.unit(expr)?;
-        self.add_instr(Instr::Unary(op.kind));
-        Some(())
-    }
-
-    fn array(&mut self, _bracket: Span, elems: &[ExprAst<'arena>]) -> Option<()> {
-        self.expr_list(elems)?;
-        self.add_instr(Instr::Array {
-            item_count: elems.len().try_into().unwrap(),
+        self.expr_list(exprs);
+        let expr_count = exprs.len().try_into().unwrap();
+        self.add_instr(Instr::Block {
+            expr_count,
+            returns: !trailing_semi,
         });
-        Some(())
+
+        self.res.decl_scope.end_frame(scope);
     }
 
-    fn filled_array(
-        &mut self,
-        FilledArrayAst { expr, len, .. }: FilledArrayAst<'arena>,
-    ) -> Option<()> {
-        self.expr(expr)?;
-        self.expr(len)?;
+    fn unary(&mut self, UnaryAst { op, expr }: UnaryAst<'arena>) {
+        self.unit(expr);
+        self.add_instr(Instr::Unary(op.kind));
+    }
+
+    fn array(&mut self, _bracket: Span, elems: &[ExprAst<'arena>]) {
+        let item_count = elems.len().try_into().unwrap();
+        self.add_instr(Instr::Array { item_count });
+
+        self.expr_list(elems);
+    }
+
+    fn filled_array(&mut self, FilledArrayAst { expr, len, .. }: FilledArrayAst<'arena>) {
+        self.expr(expr);
+        self.expr(len);
         self.add_instr(Instr::FilledArray);
-        Some(())
     }
 
-    fn tuple(&mut self, _keyword: Span, values: &[ExprAst<'arena>]) -> Option<()> {
-        self.expr_list(values)?;
-
+    fn tuple(&mut self, _keyword: Span, values: &[ExprAst<'arena>]) {
         let item_count = values.len().try_into().unwrap();
         self.add_instr(Instr::Tuple { item_count });
 
-        Some(())
+        self.expr_list(values);
     }
 
-    fn struct_(&mut self, _keyword: Span, fields: &[StructFieldAst<'arena>]) -> Option<()> {
-        for &field in fields {
-            self.sturct_field(field)?;
-        }
-
+    fn struct_(&mut self, _keyword: Span, fields: &[StructFieldAst<'arena>]) {
         let field_count = fields.len().try_into().unwrap();
         self.add_instr(Instr::Struct { field_count });
 
-        Some(())
+        for &field in fields {
+            self.sturct_field(field);
+        }
     }
 
-    fn sturct_field(&mut self, field: StructFieldAst<'arena>) -> Option<()> {
+    fn sturct_field(&mut self, field: StructFieldAst<'arena>) {
         let instr = match field {
             StructFieldAst::Decl(NamedExprAst { name, expr }) => {
-                self.expr(expr)?;
+                self.expr(expr);
                 let name = self.intern_ident(name.ident);
                 Instr::StructField {
                     name,
@@ -431,35 +399,30 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
                 }
             }
             StructFieldAst::Embed(expr) => {
-                self.expr(expr)?;
+                self.expr(expr);
                 Instr::Embed
             }
         };
 
         self.add_instr(instr);
-
-        Some(())
     }
 
-    fn enum_(&mut self, EnumAst { name, value }: EnumAst<'arena>) -> Option<()> {
+    fn enum_(&mut self, EnumAst { name, value }: EnumAst<'arena>) {
         if let Some(value) = value {
-            self.expr(value)?;
+            self.expr(value);
         }
         let name = self.intern_ident(name.ident);
         self.add_instr(Instr::Enum {
             name,
             has_value: value.is_some(),
         });
-
-        Some(())
     }
 
-    fn call(&mut self, CallAst { caller, args }: CallAst<'arena>) -> Option<()> {
-        self.unit(caller)?;
-        self.expr_list(args)?;
+    fn call(&mut self, CallAst { caller, args }: CallAst<'arena>) {
+        self.unit(caller);
+        self.expr_list(args);
         let arg_count = args.len().try_into().unwrap();
         self.add_instr(Instr::Call { arg_count });
-        Some(())
     }
 
     fn func(&mut self, func: FuncAst<'arena>) {
@@ -468,62 +431,47 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         self.add_instr(Instr::Func(func_ref));
     }
 
-    fn decl(&mut self, NamedExprAst { name, expr }: NamedExprAst<'arena>) -> Option<()> {
+    fn decl(&mut self, NamedExprAst { name, expr }: NamedExprAst<'arena>) {
         self.res.decl_scope.push(instrs::SymData(name.ident));
-        self.expr(expr)?;
+        self.expr(expr);
         self.add_instr(Instr::Decl);
-        Some(())
     }
 
-    fn loop_(&mut self, LoopAst { label, body, .. }: LoopAst<'arena>) -> Option<()> {
+    fn loop_(&mut self, LoopAst { label, body, .. }: LoopAst<'arena>) {
         let label = label.map(|label| label.ident).unwrap_or_default();
 
+        let scope = self.res.loop_scope.start_frame();
         let offset = self.current_offset();
-        let dest = self.add_instr(Instr::BackJumpDest { used: false });
-        let data = LoopData {
+        let break_frame = self.res.breaks.len();
+        self.res.loop_scope.push(LoopData {
             label,
             offset,
-            break_frame: self.res.breaks.len(),
-            dest,
-            scope: self.res.decl_scope.start_frame(),
-        };
-        let label = self.res.loop_scope.push(data);
+            break_frame,
+        });
 
-        if self.block(body).is_some() {
-            self.add_instr(Instr::Jump {
-                to: offset,
-                conditional: false,
-            });
-            self.inner.instrs[dest] = Instr::BackJumpDest { used: true };
-        }
+        self.expr(body);
 
-        let LoopData { break_frame, .. } = self.res.loop_scope.pop();
+        self.add_instr(Instr::Jump {
+            to: offset,
+            conditional: false,
+        });
 
         let offset = self.current_offset();
 
-        let (preserved, to_modify) =
-            partition_by_predicate(&mut self.res.breaks[break_frame..], |b| b.label != label);
-
-        let is_finite = !to_modify.is_empty();
-
-        for break_data in to_modify {
+        for break_data in self.res.breaks.drain(break_frame..) {
             self.inner.instrs[break_data.addr] = Instr::Jump {
                 to: offset,
                 conditional: false,
             };
         }
 
-        let new_len = break_frame + preserved.len();
-        self.res.breaks.truncate(new_len);
-
-        is_finite.then_some(())
+        self.res.loop_scope.end_frame(scope);
     }
 
-    fn index(&mut self, IndexAst { expr, index }: IndexAst<'arena>) -> Option<()> {
-        self.unit(expr)?;
-        self.expr(index)?;
+    fn index(&mut self, IndexAst { expr, index }: IndexAst<'arena>) {
+        self.unit(expr);
+        self.expr(index);
         self.add_instr(Instr::Index);
-        Some(())
     }
 
     fn break_(
@@ -533,45 +481,25 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             expr,
             keyword,
         }: BreakAst<'arena>,
-    ) -> Option<!> {
+    ) {
         let Some(label) = self.find_loop(label, keyword) else {
-            return None;
+            return;
         };
 
         if let Some(expr) = expr {
             self.expr(expr);
         }
 
-        let scope = &self.res.loop_scope[label].scope;
-        let decl_count = self.res.decl_scope.frame_size(scope);
-        self.add_decl_drop(decl_count);
         let addr = self.add_instr(Instr::Error);
         self.res.breaks.push(BreakData { addr, label });
-
-        None
     }
 
-    fn continue_(&mut self, ContinueAst { label, keyword }: ContinueAst) -> Option<!> {
+    fn continue_(&mut self, ContinueAst { label, keyword }: ContinueAst) {
         let Some(label) = self.find_loop(label, keyword) else {
-            return None;
+            return;
         };
 
-        let LoopData {
-            dest,
-            offset,
-            ref scope,
-            ..
-        } = self.res.loop_scope[label];
-
-        self.inner.instrs[dest] = Instr::BackJumpDest { used: true };
-        let decl_count = self.res.decl_scope.frame_size(scope);
-        self.add_decl_drop(decl_count);
-        self.add_instr(Instr::Jump {
-            to: offset,
-            conditional: false,
-        });
-
-        None
+        self.add_instr(Instr::Continue(label));
     }
 
     fn find_loop(&mut self, label: Option<IdentAst>, keyword: Span) -> Option<Loop> {
@@ -595,11 +523,14 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             expr,
             name: FieldIdentAst { ident, is_meta, .. },
         }: FieldAst<'arena>,
-    ) -> Option<()> {
-        self.unit(expr)?;
+    ) {
+        self.unit(expr);
         let name = self.intern_ident(ident);
-        self.add_instr(Instr::Field { name, is_meta });
-        Some(())
+        if is_meta {
+            self.add_instr(Instr::MetaField(name));
+        } else {
+            self.add_instr(Instr::Field(name));
+        }
     }
 
     fn if_(
@@ -607,65 +538,54 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         IfAst {
             cond, then, else_, ..
         }: IfAst<'arena>,
-    ) -> Option<()> {
-        self.expr(cond)?;
+    ) {
+        self.expr(cond);
+        let if_ = self.add_instr(Instr::Unkown);
 
-        let if_ = self.add_instr(Instr::Error);
-        let then_terminated = self.block(then).is_none();
+        let current_len = self.inner.instrs.len();
+        self.expr(then);
+        let mut then = self.inner.instrs.len() - current_len;
 
-        let else_addr = else_.map(|else_| (else_, self.add_instr(Instr::Error)));
+        if let Some(else_) = else_ {
+            let else_instr = self.add_instr(Instr::Unkown);
 
-        self.inner.instrs[if_] = Instr::Jump {
-            to: self.current_offset(),
-            conditional: true,
-        };
-
-        if let Some((else_, else_jump)) = else_addr {
-            let else_terminates = self.block(else_).is_none();
-            self.inner.instrs[else_jump] = Instr::Jump {
-                to: self.current_offset(),
-                conditional: false,
+            let current_len = self.inner.instrs.len();
+            self.expr(else_);
+            self.inner.instrs[else_instr] = Instr::Else {
+                instr_count: (self.inner.instrs.len() - current_len).try_into().unwrap(),
             };
 
-            if then_terminated && else_terminates {
-                return None;
-            }
+            then += 1;
         }
 
-        Some(())
+        self.inner.instrs[if_] = Instr::If {
+            instr_count: then.try_into().unwrap(),
+        };
     }
 
-    fn ret(&mut self, expr: Option<ExprAst<'arena>>) -> Option<()> {
+    fn ret(&mut self, expr: Option<ExprAst<'arena>>) {
         if let Some(expr) = expr {
-            self.expr(expr)?;
+            self.expr(expr);
         }
-
-        let addr = self.add_instr(Instr::Error);
-
-        let decl_count = self.res.decl_scope.len();
-        self.add_decl_drop(decl_count);
-        self.res.returns.push(RetData { addr });
-
-        None
+        self.add_instr(Instr::Ret {
+            has_value: expr.is_some(),
+        });
     }
 
     fn unknown(&mut self, _: Span) {
         self.add_instr(Instr::Unkown);
     }
 
-    fn expr_list(&mut self, exprs: &[ExprAst<'arena>]) -> Option<()> {
+    fn expr_list(&mut self, exprs: &[ExprAst<'arena>]) {
         for &expr in exprs {
-            self.expr(expr)?;
+            self.expr(expr);
         }
-
-        Some(())
     }
 
-    fn binary(&mut self, BinaryAst { op, lhs, rhs }: BinaryAst<'arena>) -> Option<()> {
-        self.expr(lhs)?;
-        self.expr(rhs)?;
+    fn binary(&mut self, BinaryAst { op, lhs, rhs }: BinaryAst<'arena>) {
+        self.expr(lhs);
+        self.expr(rhs);
         self.add_instr(Instr::Binary(op.kind));
-        Some(())
     }
 
     fn intern_ident(&mut self, ident: InternedStr) -> Ident {
@@ -685,57 +605,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
     }
 
     fn add_instr(&mut self, instr: Instr) -> Ref<Instr, InstrIndex> {
-        self.inner.instrs.push(instr)
-    }
-
-    fn pop_instr(&mut self) -> Instr {
-        self.inner.instrs.pop().unwrap()
-    }
-
-    fn add_decl_drop(&mut self, decl_count: InstrIndex) {
-        if decl_count == 0 {
-            return;
-        }
-        if let Some(Instr::DropDecl {
-            decl_count: prev_count,
-        }) = self.inner.instrs.last_mut()
-        {
-            *prev_count += decl_count;
-            return;
-        }
-        self.add_instr(Instr::DropDecl { decl_count });
-    }
-
-    fn end_frame(&mut self, scope: ScopeFrame) {
-        let decl_count = self.res.decl_scope.frame_size(&scope);
-        self.add_decl_drop(decl_count);
-        self.res.decl_scope.end_frame(scope);
-    }
-}
-
-fn partition_by_predicate<T, F>(slice: &mut [T], mut pred: F) -> (&mut [T], &mut [T])
-where
-    F: FnMut(&T) -> bool,
-{
-    let Range { start, end } = slice.as_mut_ptr_range();
-    let mut left_cursor = start;
-    let mut right_cursor = start;
-
-    unsafe {
-        while right_cursor != end {
-            if pred(&*right_cursor) {
-                std::ptr::swap(left_cursor, right_cursor);
-                left_cursor = left_cursor.add(1);
-            }
-            right_cursor = right_cursor.add(1);
-        }
-    }
-
-    unsafe {
-        (
-            std::slice::from_mut_ptr_range(start..left_cursor),
-            std::slice::from_mut_ptr_range(left_cursor..end),
-        )
+        self.add_instr(instr)
     }
 }
 
@@ -766,10 +636,6 @@ impl<T> Scope<T> {
             .find_map(|(id, sym)| (sym.key() == name).then_some(id))
     }
 
-    fn pop(&mut self) -> T {
-        self.vec.pop().unwrap()
-    }
-
     fn start_frame(&self) -> ScopeFrame {
         ScopeFrame(self.vec.len())
     }
@@ -778,16 +644,8 @@ impl<T> Scope<T> {
         self.vec.truncate(frame.0);
     }
 
-    fn frame_size(&self, frame: &ScopeFrame) -> InstrIndex {
-        (self.vec.len() - frame.0).try_into().unwrap()
-    }
-
     fn is_empty(&self) -> bool {
         self.vec.is_empty()
-    }
-
-    fn len(&self) -> InstrIndex {
-        self.vec.len().try_into().unwrap()
     }
 }
 
@@ -799,7 +657,7 @@ impl<T> Index<Ref<T, InstrIndex>> for Scope<T> {
     }
 }
 
-pub(super) struct ScopeFrame(usize);
+struct ScopeFrame(usize);
 
 trait ScopeItem {
     type Key: Eq + Copy;
@@ -882,7 +740,7 @@ mod test {
                         ctx.push_str(":\n");
                         let func = &meta_view.funcs[func];
                         let func_meta_view = instrs.func_meta.view(func.meta);
-                        format_instrs(func_meta_view.instrs, ctx, "  ", &interner);
+                        format_instrs(func_meta_view.instrs, ctx, "      ", &interner);
                     }
                     InstrItemKind::Import(module) => {
                         ctx.push_str(": :{");
@@ -951,12 +809,12 @@ mod test {
             iter_fib: |x| {
                 a: 0;
                 b: 1;
-                loop { if x == 0 {break} else {
+                loop if x == 0 break else {
                     c: a + b;
                     a = b;
                     b = c;
                     x -= 1;
-                } };
+                };
                 a
             };
         `"
@@ -970,16 +828,5 @@ mod test {
                 foo: |a, b| a + b + 1;
             `
         "
-        nested_loops "`root
-            main: || loop.a {
-                a: loop {
-                    break 10;
-                } + 0;
-
-                loop {
-                    break.a 10 + a;
-                }
-            };
-        `"
     }
 }

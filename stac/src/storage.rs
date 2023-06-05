@@ -1,9 +1,11 @@
 use std::{
+    cmp::Ordering,
+    hash,
     intrinsics::unlikely,
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut, Index, IndexMut, Range},
-    ptr, slice, cmp::Ordering, hash,
+    ptr, slice,
 };
 
 use crate::*;
@@ -142,7 +144,7 @@ impl<T, R: RefRepr> PoolStore<T, R> {
             let id = Ref::new(i);
             if let Some(ref mut val) = v && !pred(id, val) {
                 *v = None;
-                self.free.push(id); 
+                self.free.push(id);
             }
         }
     }
@@ -305,6 +307,10 @@ impl<T, R: RefRepr> VecStore<T, R> {
     pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> + ExactSizeIterator {
         self.data.iter_mut()
     }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.data.pop()
+    }
 }
 
 impl<T, R: RefRepr> Index<Slice<T, R>> for VecStore<T, R> {
@@ -385,6 +391,10 @@ impl<'a, T, R: RefRepr, P: RefRepr> VecStoreBuilder<'a, T, R, P> {
 
     pub fn len(&self) -> usize {
         self.within.data.len() - self.start
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.within.data.pop()
     }
 }
 

@@ -11,3 +11,4 @@ instrs:
       binary +
       const0
       binary +
+      drop_decl 2

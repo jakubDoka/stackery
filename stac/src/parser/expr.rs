@@ -40,62 +40,59 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(lhs)
     }
 
+    fn unex_tok(&mut self, span: Token, message: &str) -> Option<!> {
+        self.diags
+            .builder(self.files, self.interner)
+            .footer(Severty::Error, message)
+            .annotation(
+                Severty::Error,
+                span.span,
+                format_args!("unexpected {}", span.kind),
+            )
+            .terminate()
+    }
+
     fn unit(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
         let token = self.next();
 
-        fn unex_tok(parser: &mut Parser, span: Token, message: &str) -> Option<!> {
-            parser
-                .diags
-                .builder(parser.files, parser.interner)
-                .footer(Severty::Error, message)
-                .annotation(
-                    Severty::Error,
-                    span.span,
-                    format_args!("unexpected {}", span.kind),
-                )
-                .terminate()
-        }
-
         let expr = match token.kind {
             If => self.if_(diver.untyped_dive(), token.span),
-            Else => unex_tok(self, token, "else can only follow an if")?,
+            Else => self.unex_tok(token, "else can only follow an if")?,
             Loop => self.loop_(diver.untyped_dive(), token.span),
             Break => self.break_(diver.untyped_dive(), token.span),
             Continue => self.continue_(token.span),
             Ret => self.ret(diver.untyped_dive(), token.span),
             For => self.for_(diver.untyped_dive(), token.span),
-            In => unex_tok(self, token, "in can only follow a for")?,
+            In => self.unex_tok(token, "in can only follow a for")?,
             Unknown => Some(UnitAst::Unknown(token.span)),
-            Dot => unex_tok(
-                self,
+            Dot => self.unex_tok(
                 token,
                 "dot can only follow an expression of labeled keyword",
             )?,
-            DoubleDot => unex_tok(
-                self,
+            DoubleDot => self.unex_tok(
                 token,
                 "double dot can only follow an expression of labeled keyword",
             )?,
-            Comma => unex_tok(self, token, "comma can only follow an expression")?,
-            Semi => unex_tok(
-                self,
+            Comma => self.unex_tok(token, "comma can only follow an expression")?,
+            Semi => self.unex_tok(
                 token,
                 "semicolon can only follow an expression inside a block",
             )?,
-            Colon => unex_tok(self, token, "colon can only follow pattern")?,
+            Colon => self.unex_tok(token, "colon can only follow pattern")?,
             Enum => self.enum_(diver.untyped_dive()),
             Struct => self.struct_(diver.untyped_dive(), token.span),
             LBrace => self.block(diver.untyped_dive(), token.span),
-            RBrace => unex_tok(self, token, "unmatched right brace")?,
+            RBrace => self.unex_tok(token, "unmatched right brace")?,
             LBracket => self.array(diver.untyped_dive(), token.span),
-            RBracket => unex_tok(self, token, "unmatched right bracket")?,
+            RBracket => self.unex_tok(token, "unmatched right bracket")?,
             Tuple => self.tuple(diver.untyped_dive(), token.span),
             LParen => self.paren(diver.untyped_dive()),
-            RParen => unex_tok(self, token, "unmatched right parenthesis")?,
+            RParen => self.unex_tok(token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
                 ident: self.interner.intern(token.source),
             })),
+            MetaIdent => self.unex_tok(token, "meta identifier can only be used as field")?,
             Import => Some(UnitAst::Import({
                 let source = &token.source[":{".len()..token.source.len() - "}".len()];
 
@@ -115,8 +112,8 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                     kind: op,
                 },
             ),
-            Eof => unex_tok(self, token, "got eof when expression is expected")?,
-            Err => unex_tok(self, token, "got error token when expression is expected")?,
+            Eof => self.unex_tok(token, "got eof when expression is expected")?,
+            Err => self.unex_tok(token, "got error token when expression is expected")?,
         }?;
 
         self.handle_postfix(diver, expr)
@@ -124,7 +121,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
     fn break_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let label = self.label("break")?;
-        let expr = (![Semi, RBrace, Else, Eof, Comma].contains(&self.peek().kind))
+        let expr = (!is_not_expression_start(self.peek().kind))
             .then(|| self.expr(diver))
             .transpose()?;
         Some(UnitAst::Break(self.arena.alloc(BreakAst {
@@ -161,8 +158,15 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             expr = match token.kind {
                 Dot => {
                     self.next();
-                    let field = self.ident("field")?;
-                    UnitAst::Field(self.arena.alloc(FieldAst { expr, name: field }))
+                    let tok = self.next();
+                    let (is_meta, source) = match tok.kind {
+                        Ident => (false, tok.source),
+                        MetaIdent => (true, &tok.source["$".len()..]),
+                        _ => self.unex_tok(tok, "field can only be identifier or meta identifier")?,
+                    };
+
+                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: self.interner.intern(source) };
+                    UnitAst::Field(self.arena.alloc(FieldAst { expr, name }))
                 }
                 LParen => {
                     self.next();
@@ -326,13 +330,24 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         })
     }
 
+    fn expect_block(&mut self, diver: Diver, objective: impl Display) -> Option<BlockAst<'arena>> {
+        let token = self.expect_advance(LBrace, format_args!("expected block as {objective}"))?;
+        self.block_low(diver, token.span)
+    }
+
     fn block(&mut self, diver: Diver, brace: Span) -> Option<UnitAst<'arena>> {
+        self.block_low(diver, brace)
+            .map(|b| &*self.arena.alloc(b))
+            .map(UnitAst::Block)
+    }
+
+    fn block_low(&mut self, diver: Diver, brace: Span) -> Option<BlockAst<'arena>> {
         let (exprs, trailing_semi) = self.sequence(diver, Self::expr, Semi, RBrace, "block")?;
-        Some(UnitAst::Block(self.arena.alloc(BlockAst {
+        Some(BlockAst {
             exprs,
             trailing_semi,
             brace,
-        })))
+        })
     }
 
     fn struct_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
@@ -408,7 +423,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         Some(UnitAst::Ret {
             keyword,
 
-            value: (self.peek().kind != Semi)
+            value: (!is_not_expression_start(self.peek().kind))
                 .then(|| self.expr(diver))
                 .transpose()?
                 .map(|expr| &*self.arena.alloc(expr)),
@@ -417,12 +432,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
     fn if_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let cond = self.expr(diver.untyped_dive())?;
-        dbg!(self.peek());
-        let then = self.expr(diver.untyped_dive())?;
-        dbg!(self.peek());
+        let then = self.expect_block(diver.untyped_dive(), "then expression")?;
         let else_ = self
             .try_advance(Else)
-            .map(|_| self.expr(diver))
+            .map(|_| self.expect_block(diver, "else expression"))
             .transpose()?;
 
         Some(UnitAst::If(self.arena.alloc(IfAst {
@@ -436,7 +449,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     fn loop_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         Some(UnitAst::Loop(self.arena.alloc(LoopAst {
             label: self.label("loop")?,
-            body: self.expr(diver)?,
+            body: self.expect_block(diver, "loop expression")?,
             keyword,
         })))
     }
@@ -456,6 +469,13 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             ident: self.interner.intern(token.source),
         })
     }
+}
+
+fn is_not_expression_start(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        Semi | RBrace | RBracket | RParen | Comma | Colon | Else | In | Dot | Eof | Err
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -565,14 +585,14 @@ pub struct EnumAst<'arena> {
 pub struct IfAst<'arena> {
     pub keyword: Span,
     pub cond: ExprAst<'arena>,
-    pub then: ExprAst<'arena>,
-    pub else_: Option<ExprAst<'arena>>,
+    pub then: BlockAst<'arena>,
+    pub else_: Option<BlockAst<'arena>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct FieldAst<'arena> {
     pub expr: UnitAst<'arena>,
-    pub name: IdentAst,
+    pub name: FieldIdentAst,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -588,7 +608,7 @@ pub struct ForLoopAst<'arena> {
 pub struct LoopAst<'arena> {
     pub keyword: Span,
     pub label: Option<IdentAst>,
-    pub body: ExprAst<'arena>,
+    pub body: BlockAst<'arena>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -682,6 +702,13 @@ pub enum LiteralKindAst {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct FieldIdentAst {
+    pub ident: InternedStr,
+    pub span: Span,
+    pub is_meta: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct IdentAst {
     pub ident: InternedStr,
     pub span: Span,
@@ -742,8 +769,8 @@ mod test {
         block "{ a: 1; b: 2; a + b }"
         field_access "foo.bar.baz.rar"
         enum_ctor "|{none}; |{ some: 10 }"
-        if_expr "if cond then else else_"
-        loop_expr "loop.label body"
+        if_expr "if cond {then} else {else_}"
+        loop_expr "loop.label {body}"
         for_each "for.label var in iter body"
         some_code "
             enumerate: |iter| *{

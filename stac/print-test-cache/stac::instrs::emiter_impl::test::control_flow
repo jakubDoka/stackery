@@ -1,0 +1,52 @@
+instrs:
+  root:
+    fib:
+      sym2
+      const0
+      binary <
+      jump 6 true
+      sym2
+      jump 17 false
+  006 sym0
+      sym2
+      const1
+      binary -
+      call 1
+      sym0
+      sym2
+      const0
+      binary -
+      call 1
+      binary +
+  017 drop_decl 1
+    iter_fib:
+      const0
+      decl
+      const1
+      decl
+  004 back_jump_dest true
+      sym2
+      const0
+      binary ==
+      jump 11 true
+      jump 27 false
+      jump 26 false
+  011 sym3
+      sym4
+      binary +
+      decl
+      sym3
+      sym4
+      binary =
+      sym4
+      sym5
+      binary =
+      sym2
+      const1
+      binary -=
+      drop
+      drop_decl 1
+  026 jump 4 false
+  027 drop
+      sym3
+      drop_decl 3
