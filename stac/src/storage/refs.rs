@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display},
     hash,
     marker::PhantomData,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
+    // num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
     ops::Range,
 };
 
@@ -21,7 +21,11 @@ macro_rules! impl_ref_repr {
             type TryFromError = <$ty as TryFrom<usize>>::Error;
 
             fn try_from_usize(repr: usize) -> Result<Self, Self::TryFromError> {
-                repr.try_into()
+                if cfg!(debug_assertions) {
+                    repr.try_into()
+                } else {
+                    Ok(repr as Self)
+                }
             }
 
             fn into_usize(self) -> usize {
@@ -46,7 +50,7 @@ macro_rules! impl_ref_repr {
 }
 
 impl_ref_repr!(u8 u16 u32 u64 usize);
-impl_ref_repr!(@non_zero u8 NonZeroU8 u16 NonZeroU16 u32 NonZeroU32 u64 NonZeroU64 usize NonZeroUsize);
+// impl_ref_repr!(@non_zero u8 NonZeroU8 u16 NonZeroU16 u32 NonZeroU32 u64 NonZeroU64 usize NonZeroUsize);
 
 #[derive(Debug)]
 #[repr(transparent)]

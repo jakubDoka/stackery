@@ -12,7 +12,7 @@ use core::num::NonZeroUsize;
 use core::ops::Index;
 use core::ptr::{self, NonNull};
 use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 #[cfg(feature = "serde128")]
 use serde_base128::Serde128;
@@ -64,7 +64,7 @@ impl<A: Allocator + Clone> Index<InternedStr> for StrInterner<A> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Default, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct InternedStr {
     id: InternedSlice<u8>,
 }
@@ -212,6 +212,70 @@ impl<T, A: Allocator + Clone> Interner<T, A> {
             id,
             _marker: PhantomData,
         }
+    }
+
+    pub fn try_intern_iter<I, E>(&self, values: I) -> Result<InternedSlice<T>, E>
+    where
+        I: IntoIterator<Item = Result<T, E>>,
+        I::IntoIter: TrustedLen + ExactSizeIterator,
+        T: Hash + Eq,
+    {
+        let values = values.into_iter();
+        let Some(len) = NonZeroUsize::new(values.len()) else {
+            return Ok(InternedSlice::default());
+        };
+
+        let (ptr, offset) = {
+            let (_, allocator) = unsafe { self.state() };
+            allocator.bump(len)
+        };
+        unsafe {
+            let mut ptr = ptr.as_ptr();
+            for value in values {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(e) => {
+                        {
+                            let (_, allocator) = self.state();
+                            allocator.rewind(len);
+                        }
+                        return Err(e);
+                    }
+                };
+                ptr.write(value);
+                ptr = ptr.add(1);
+            }
+        }
+
+        let hash = HashView::new(unsafe { slice::from_raw_parts(ptr.as_ptr(), len.get()) });
+
+        let (lookup, allocator) = unsafe { self.state() };
+
+        let entry = lookup.raw_entry_mut().from_key(&hash);
+
+        let entry = match entry {
+            RawEntryMut::Occupied(entry) => {
+                unsafe { allocator.rewind(len) };
+                return Ok(InternedSlice {
+                    id: *entry.get(),
+                    _marker: PhantomData,
+                });
+            }
+            RawEntryMut::Vacant(entry) => entry,
+        };
+
+        let id = InternerSlice {
+            offset: offset as u16,
+            len: len.get() as u16,
+            chunk: allocator.buckets.len() as u16 - 1,
+        };
+
+        entry.insert(hash, id);
+
+        Ok(InternedSlice {
+            id,
+            _marker: PhantomData,
+        })
     }
 
     unsafe fn intern_untyped_low<I>(
@@ -606,6 +670,7 @@ impl core::hash::Hasher for InternerHasher {
 
 pub type FnvBuildHasher = core::hash::BuildHasherDefault<FnvHasher>;
 pub type FnvHashMap<K, V> = HashMap<K, V, FnvBuildHasher>;
+pub type FnvHashSet<T> = HashSet<T, FnvBuildHasher>;
 
 pub struct FnvHasher {
     hash: u64,

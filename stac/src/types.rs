@@ -1,315 +1,265 @@
-use mini_alloc::*;
-
-use crate::*;
+use crate::{FuncId, ModuleRef};
+use core::fmt;
+use mini_alloc::{InternedStr, StrInterner};
+use std::{ops::Deref, rc::Rc};
 
 mod checker_impl;
 
-pub struct GeneratorCtx<'a> {
-    types: &'a Types,
-    files: &'a Files,
-    interner: &'a StrInterner,
-    diags: &'a mut Diagnostics,
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FuncInstanceId {
+    func: FuncId,
+    types: Rc<[Type]>,
 }
 
-pub struct GeneratorArgs<'a> {
-    instance: FuncInstId<Type>,
-    func_view: FuncMetaView<'a>,
-    types: &'a [Type],
-    unknowns: &'a Unknowns,
-}
-
-pub trait Generator {
-    fn generate(&mut self, ctx: GeneratorCtx, args: GeneratorArgs);
-}
-
-pub struct TypeChecker<'a> {
-    types: &'a Types,
-    instrs: &'a Instrs,
-    modules: &'a Modules,
-    interner: &'a StrInterner,
-    diags: &'a mut Diagnostics,
-}
-
-impl<'a> TypeChecker<'a> {
-    pub fn new(
-        types: &'a Types,
-        instrs: &'a Instrs,
-        modules: &'a Modules,
-        interner: &'a StrInterner,
-        diagnostics: &'a mut Diagnostics,
-    ) -> Self {
-        Self {
-            types,
-            instrs,
-            modules,
-            interner,
-            diags: diagnostics,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FuncInstId<T> {
-    id: FuncId,
-    ty: FuncType<T>,
-}
-
-impl FuncInstId<Type> {
-    fn downgrade(&self, types: &Types) -> FuncInstId<TypeValue> {
-        FuncInstId {
-            id: self.id,
-            ty: self.ty.downgrade(types),
-        }
-    }
-}
-
-impl FuncInstId<TypeValue> {
-    fn upgrade(&self, types: &Types, unknowns: &Unknowns) -> Result<FuncInstId<Type>, UnknownType> {
-        Ok(FuncInstId {
-            id: self.id,
-            ty: self.ty.upgrade(types, unknowns)?,
-        })
-    }
-}
-
-pub struct NameSet(InternedSlice<InternedStr>);
-
-pub struct Types {
-    names: Interner<InternedStr>,
-    types: Interner<Type>,
-    values: Interner<TypeValue>,
-}
-impl Types {
-    fn upgrade_slice(
-        &self,
-        slice: InternedSlice<TypeValue>,
-        unknowns: &Unknowns,
-    ) -> Result<InternedSlice<Type>, UnknownType> {
-        self.types.try_intern_iter(
-            self.values[slice]
-                .iter()
-                .map(|&t| t.upgrade(self, unknowns)),
-        )
-    }
-
-    fn upgrade(
-        &self,
-        ty: Interned<TypeValue>,
-        unknowns: &Unknowns,
-    ) -> Result<Interned<Type>, UnknownType> {
-        self.values[ty]
-            .upgrade(self, unknowns)
-            .map(|t| self.types.intern(t))
-    }
-
-    fn downgrade_slice(&self, args: InternedSlice<Type>) -> InternedSlice<TypeValue> {
-        self.values
-            .intern_iter(self.types[args].iter().map(|&t| t.downgrade()))
-    }
-
-    fn downgrade(&self, ret: Interned<Type>) -> Interned<TypeValue> {
-        self.values.intern(self.types[ret].downgrade())
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    Complex(ComplexType<Type>),
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Type {
     Leaf(LeafType),
+    Branch(BranchType<Type>),
 }
 
 impl Type {
-    fn downgrade(self) -> TypeValue {
-        TypeValue::Leaf(self)
-    }
-}
+    fn from_value(value: TypeValue, inferred: &[Option<TypeValue>]) -> Result<Self, InferredType> {
+        match value {
+            TypeValue::Leaf(leaf) => Ok(Self::Leaf(leaf)),
+            TypeValue::Branch(branch) => match branch {
+                BranchType::Enum(e) | BranchType::Struct(e) => Ok(Self::Branch(BranchType::Enum(
+                    e.into_iter()
+                        .map(|(name, ty)| {
+                            Type::from_value(ty.clone(), inferred).map(|ty| (*name, ty))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ))),
+                BranchType::Array {
+                    item_type,
+                    item_count,
+                } => Ok(Self::Branch(BranchType::Array {
+                    item_type: Rc::new(Type::from_value(item_type.deref().clone(), inferred)?),
+                    item_count,
+                })),
+            },
+            TypeValue::Inferred(i) => {
+                let Some(pointed) = inferred[i.0 as usize].clone() else {
+                    return Err(i);
+                };
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub enum ComplexType<T> {
-    Struct(StructType<T>),
-    Enum(EnumType<T>),
-    Array(ArrayType<T>),
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub enum LeafType {
-    Builtin(BuiltinType),
-    Module(ModuleRef),
-    Func(FuncId),
-    Type,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub enum BuiltinType {
-    Int(IntType),
-    Float,
-    Bool,
-    Char,
-    Str,
-    Unit,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct IntType {
-    signed: bool,
-    width: IntWidth,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub enum IntWidth {
-    W8,
-    W16,
-    W32,
-    W64,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct StructType<T> {
-    names: InternedSlice<InternedStr>,
-    types: InternedSlice<T>,
-}
-
-impl<T> StructType<T> {
-    pub fn names(self, types: &Types) -> &[InternedStr] {
-        &types.names[self.names]
-    }
-}
-
-impl StructType<TypeValue> {
-    fn upgrade(&self, types: &Types, unknowns: &Unknowns) -> Result<StructType<Type>, UnknownType> {
-        Ok(StructType {
-            names: self.names,
-            types: types.upgrade_slice(self.types, unknowns)?,
-        })
-    }
-}
-
-impl StructType<Type> {
-    pub fn types(self, types: &Types) -> &[Type] {
-        &types.types[self.types]
-    }
-}
-
-pub type EnumType<T> = StructType<T>;
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct ArrayType<T> {
-    ty: Interned<T>,
-    len: u32,
-}
-
-impl<T> ArrayType<T> {
-    pub fn len(self) -> u32 {
-        self.len
-    }
-}
-
-impl ArrayType<TypeValue> {
-    fn upgrade(&self, types: &Types, unknowns: &Unknowns) -> Result<ArrayType<Type>, UnknownType> {
-        Ok(ArrayType {
-            ty: types.upgrade(self.ty, unknowns)?,
-            len: self.len,
-        })
-    }
-}
-
-impl ArrayType<Type> {
-    pub fn ty(self, types: &Types) -> Type {
-        types.types[self.ty]
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct FuncType<T> {
-    args: InternedSlice<T>,
-    ret: Interned<T>,
-}
-
-impl FuncType<Type> {
-    pub fn args(self, types: &Types) -> &[Type] {
-        &types.types[self.args]
-    }
-
-    pub fn ret(self, types: &Types) -> Type {
-        types.types[self.ret]
-    }
-
-    fn downgrade(&self, types: &Types) -> FuncType<TypeValue> {
-        FuncType {
-            args: types.downgrade_slice(self.args),
-            ret: types.downgrade(self.ret),
+                Type::from_value(pointed, inferred)
+            }
         }
     }
 }
 
-impl FuncType<TypeValue> {
-    fn upgrade(&self, types: &Types, unknowns: &Unknowns) -> Result<FuncType<Type>, UnknownType> {
-        Ok(FuncType {
-            args: types.upgrade_slice(self.args, unknowns)?,
-            ret: types.upgrade(self.ret, unknowns)?,
-        })
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct UnknownType(u32);
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum TypeValue {
-    Unknown(UnknownType),
-    Complex(ComplexType<TypeValue>),
-    Leaf(Type),
+    Leaf(LeafType),
+    Branch(BranchType<TypeValue>),
+    Inferred(InferredType),
 }
 
 impl TypeValue {
-    fn upgrade(self, types: &Types, unknowns: &Unknowns) -> Result<Type, UnknownType> {
-        unknowns.resolve(self, types)
-    }
-}
+    fn combine(self, other: Self, inferred: &mut [Option<Self>]) -> Result<Self, (Self, Self)> {
+        match (self, other) {
+            (a, b) if a == b => Ok(a),
+            (TypeValue::Branch(a), TypeValue::Branch(b)) => match (a, b) {
+                (BranchType::Enum(a), BranchType::Enum(b)) => {
+                    let mut merged = a.iter().chain(b.iter()).cloned().collect::<Vec<_>>();
+                    merged.sort_by_key(|&(name, _)| name);
+                    if merged.group_by(|a, b| a.0 == b.0).any(|g| g.len() > 1) {
+                        return Err((
+                            TypeValue::Branch(BranchType::Enum(a)),
+                            TypeValue::Branch(BranchType::Enum(b)),
+                        ));
+                    }
+                    merged.dedup_by_key(|&mut (name, _)| name);
+                    Ok(TypeValue::Branch(BranchType::Enum(merged.into())))
+                }
+                (BranchType::Struct(a), BranchType::Struct(b)) => {
+                    if a.iter().zip(b.iter()).any(|(a, b)| a.0 != b.0) {
+                        return Err((
+                            TypeValue::Branch(BranchType::Struct(a)),
+                            TypeValue::Branch(BranchType::Struct(b)),
+                        ));
+                    }
 
-#[derive(Default)]
-struct Unknowns {
-    slots: Vec<Option<TypeValue>>,
-}
+                    let merged = a
+                        .iter()
+                        .zip(b.iter())
+                        .map(|(a, b)| a.1.clone().combine(b.1.clone(), inferred).map(|t| (a.0, t)))
+                        .collect::<Result<Vec<_>, _>>()?;
 
-impl Unknowns {
-    fn new() -> Self {
-        Self::default()
-    }
+                    Ok(TypeValue::Branch(BranchType::Struct(merged.into())))
+                }
+                (
+                    BranchType::Array {
+                        item_type: a,
+                        item_count: a_count,
+                    },
+                    BranchType::Array {
+                        item_type: b,
+                        item_count: b_count,
+                    },
+                ) => {
+                    if a_count != b_count {
+                        return Err((
+                            TypeValue::Branch(BranchType::Array {
+                                item_type: a,
+                                item_count: a_count,
+                            }),
+                            TypeValue::Branch(BranchType::Array {
+                                item_type: b,
+                                item_count: b_count,
+                            }),
+                        ));
+                    }
 
-    fn next(&mut self) -> UnknownType {
-        let id = self.slots.len() as u32;
-        self.slots.push(None);
-        types::UnknownType(id)
-    }
-
-    fn set(&mut self, id: UnknownType, ty: Type) -> Option<TypeValue> {
-        self.slots[id.0 as usize].replace(ty.downgrade())
-    }
-
-    fn start_frame(&mut self) -> UnknownFrame {
-        UnknownFrame(self.slots.len())
-    }
-
-    fn end_frame(&mut self, frame: UnknownFrame) {
-        self.slots.truncate(frame.0);
-    }
-
-    fn resolve(&self, value: TypeValue, types: &Types) -> Result<Type, UnknownType> {
-        match value {
-            TypeValue::Unknown(UnknownType(index)) => self.slots[index as usize]
-                .as_ref()
-                .map(|ty| ty.upgrade(types, self))
-                .unwrap_or(Err(UnknownType(index))),
-            TypeValue::Complex(c) => match c {
-                ComplexType::Struct(s) => s.upgrade(types, self).map(ComplexType::Struct),
-                ComplexType::Enum(e) => e.upgrade(types, self).map(ComplexType::Enum),
-                ComplexType::Array(a) => a.upgrade(types, self).map(ComplexType::Array),
+                    Ok(TypeValue::Branch(BranchType::Array {
+                        item_type: a
+                            .deref()
+                            .clone()
+                            .combine(b.deref().clone(), inferred)?
+                            .into(),
+                        item_count: a_count,
+                    }))
+                }
+                (a, b) => Err((TypeValue::Branch(a), TypeValue::Branch(b))),
+            },
+            (Self::Inferred(a), Self::Inferred(b)) => {
+                match (
+                    inferred[a.0 as usize].clone(),
+                    inferred[b.0 as usize].clone(),
+                ) {
+                    (Some(a), Some(b)) => a.combine(b, inferred),
+                    (Some(ia), None) => {
+                        inferred[b.0 as usize] = Some(ia.clone());
+                        Ok(ia)
+                    }
+                    (None, Some(ib)) => {
+                        inferred[a.0 as usize] = Some(ib.clone());
+                        Ok(ib)
+                    }
+                    (None, None) => {
+                        inferred[a.0 as usize] = Some(Self::Inferred(b));
+                        Ok(Self::Inferred(b))
+                    }
+                }
             }
-            .map(Type::Complex),
-            TypeValue::Leaf(ty) => Ok(ty),
+            (Self::Inferred(a), b) => match inferred[a.0 as usize].clone() {
+                Some(a) => a.combine(b, inferred),
+                None => {
+                    inferred[a.0 as usize] = Some(b.clone());
+                    Ok(b)
+                }
+            },
+            (a, Self::Inferred(b)) => match inferred[b.0 as usize].clone() {
+                Some(b) => a.combine(b, inferred),
+                None => {
+                    inferred[b.0 as usize] = Some(a.clone());
+                    Ok(a)
+                }
+            },
+            e => Err(e),
+        }
+    }
+
+    fn display<'a>(&'a self, interner: &'a StrInterner) -> impl fmt::Display + 'a {
+        struct Displayer<'a> {
+            root: &'a TypeValue,
+            interner: &'a StrInterner,
+        }
+
+        fn display(
+            root: &TypeValue,
+            depth: usize,
+            interner: &StrInterner,
+            f: &mut fmt::Formatter<'_>,
+        ) -> fmt::Result {
+            match root {
+                TypeValue::Leaf(l) => match l {
+                    LeafType::Builitin(b) => match b {
+                        BuiltinType::Int => write!(f, "int"),
+                        BuiltinType::Bool => write!(f, "bool"),
+                        BuiltinType::Unit => write!(f, "unit"),
+                    },
+                    LeafType::Func(func) => {
+                        write!(f, "m{}.f{}", func.module.index(), func.func.index())
+                    }
+                    LeafType::Module(m) => write!(f, "m{}", m.index()),
+                },
+                TypeValue::Branch(b) => match b {
+                    BranchType::Enum(e) => {
+                        write!(f, "|{{")?;
+                        for (i, &(name, ref t)) in e.iter().enumerate() {
+                            if i != 0 {
+                                write!(f, ", ")?;
+                            }
+                            for _ in 0..depth {
+                                write!(f, "  ")?;
+                            }
+                            write!(f, "{}: ", &interner[name])?;
+                            display(t.deref(), depth, interner, f)?;
+                        }
+                        write!(f, "}}")
+                    }
+                    BranchType::Struct(s) => {
+                        write!(f, "*{{")?;
+                        for (i, &(name, ref t)) in s.iter().enumerate() {
+                            if i != 0 {
+                                write!(f, ", ")?;
+                            }
+                            for _ in 0..depth {
+                                write!(f, "  ")?;
+                            }
+                            write!(f, "{}: ", &interner[name])?;
+                            display(t.deref(), depth, interner, f)?;
+                        }
+                        write!(f, "}}")
+                    }
+                    BranchType::Array {
+                        item_type,
+                        item_count,
+                    } => {
+                        write!(f, "[")?;
+                        display(item_type.deref(), depth, interner, f)?;
+                        write!(f, "; {}]", item_count)
+                    }
+                },
+                TypeValue::Inferred(_) => todo!(),
+            }
+        }
+
+        impl fmt::Display for Displayer<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                display(self.root, 0, self.interner, f)
+            }
+        }
+
+        Displayer {
+            root: self,
+            interner,
         }
     }
 }
 
-struct UnknownFrame(usize);
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum BranchType<T> {
+    Enum(Rc<[(InternedStr, T)]>),
+    Struct(Rc<[(InternedStr, T)]>),
+    Array { item_type: Rc<T>, item_count: usize },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LeafType {
+    Builitin(BuiltinType),
+    Func(FuncId),
+    Module(ModuleRef),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum BuiltinType {
+    Int,
+    Bool,
+    Unit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct InferredType(u16);

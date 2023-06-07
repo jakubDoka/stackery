@@ -20,8 +20,9 @@ mod interner;
 pub use {
     arena::{ArenaBase, ArenaProxi, ArenaScope},
     diver::{Diver, DiverBase},
+    hashbrown,
     interner::{
-        FnvBuildHasher, FnvHashMap, FnvHasher, Internable, Interned, InternedSlice, InternedStr,
-        Interner, InternerObj, InternerSlice, StrInterner,
+        FnvBuildHasher, FnvHashMap, FnvHashSet, FnvHasher, Internable, Interned, InternedSlice,
+        InternedStr, Interner, InternerObj, InternerSlice, StrInterner,
     },
 };

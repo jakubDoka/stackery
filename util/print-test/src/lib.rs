@@ -127,7 +127,11 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
                 return;
             }
 
-            log!(dump, "no previous result found, current form:\n{}", source);
+            log!(dump, "no previous result found, current form:");
+
+            for line in source.lines() {
+                log!(dump, "  {}", line);
+            }
 
             run_git_add(&mut dump, &path, config.auto_git_add);
 
@@ -153,32 +157,11 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
         }
 
         log!(dump, "changes detected for test '{}':", name);
-        let mut displaying = false;
-        for (i, line) in diff.iter().enumerate() {
+        for line in diff.iter() {
             let ansi_term = "\u{001b}[0m";
             match line {
                 diff::Result::Both(line, ..) => {
-                    let window_radius = 1;
-                    let window = i.saturating_sub(window_radius)
-                        ..=i.saturating_add(window_radius).min(diff.len());
-                    let contains_changes = diff[window]
-                        .iter()
-                        .any(|d| !matches!(d, diff::Result::Both(..)));
-
-                    match (displaying, contains_changes) {
-                        (false, true) => {
-                            displaying = true;
-                        }
-                        (true, false) => {
-                            log!(dump, "...");
-                            displaying = false;
-                        }
-                        _ => {}
-                    }
-
-                    if displaying {
-                        log!(dump, "  {}", line);
-                    }
+                    log!(dump, "  {}", line);
                 }
                 diff::Result::Left(line) => {
                     let ansi_red = "\u{001b}[31m";

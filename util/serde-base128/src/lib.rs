@@ -14,6 +14,10 @@ pub trait UseSerde128<T>: Default {
     unsafe fn deserialize(self, decoder: &mut Decoder) -> T;
 }
 
+pub unsafe trait CheckType: Copy + 'static + Serde128 + Eq {}
+
+unsafe impl CheckType for u64 {}
+
 pub struct Encoder {
     data: Vec<u8>,
 }
@@ -25,6 +29,11 @@ impl Encoder {
 
     pub fn into_vec(self) -> Vec<u8> {
         self.data
+    }
+
+    pub fn save_with_check<K: CheckType, V: Serde128>(&mut self, key: K, value: &V) {
+        key.serialize(self);
+        value.serialize(self);
     }
 
     pub fn write_byte(&mut self, value: u8) {
@@ -67,6 +76,15 @@ pub struct Decoder<'a> {
 impl<'a> Decoder<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Self { data }
+    }
+
+    pub unsafe fn load_with_check<K: CheckType, V: Serde128>(&mut self, against: K) -> Option<V> {
+        let key = K::deserialize(self);
+        if key == against {
+            Some(V::deserialize(self))
+        } else {
+            None
+        }
     }
 
     pub unsafe fn read_byte(&mut self) -> u8 {
