@@ -7,25 +7,21 @@ use std::{
 
 mod diff;
 
-pub fn function_name<T>(_: T) -> &'static str {
-    std::any::type_name::<T>()
+pub fn function_name<T>(_: T) -> String {
+    std::any::type_name::<T>().replace("::", "-")
 }
 
 struct Config {
     cahce_dir: PathBuf,
-    auto_git_add: bool,
     write_changes: bool,
 }
 
 impl Config {
     fn new() -> Self {
         Self {
-            cahce_dir: env::var("PRINT_TEXT_CACHE_DIR")
+            cahce_dir: env::var("PRINT_TEST_CACHE_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("print-test-cache")),
-            auto_git_add: env::var("PRINT_TEST_AUTO_GIT_ADD")
-                .map(|s| s == "1")
-                .unwrap_or(false),
             write_changes: env::var("PRINT_TEST_WRITE_CHANGES")
                 .map(|s| s == "1")
                 .unwrap_or(false),
@@ -94,34 +90,6 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
             true
         }
 
-        fn run_git_add(dump: &mut Dump, path: &Path, should_run: bool) {
-            if !should_run {
-                return;
-            }
-
-            log!(dump, "adding file to git:\n  git add {}", path.display());
-            let output = std::process::Command::new("git")
-                .arg("add")
-                .arg(path)
-                .output()
-                .expect("failed to execute git add");
-
-            if !output.status.success() {
-                log!(dump, "failed to execute git add");
-                log!(dump, "  status: {}", output.status);
-                log!(
-                    dump,
-                    "  stdout: {}",
-                    String::from_utf8_lossy(&output.stdout)
-                );
-                log!(
-                    dump,
-                    "  stderr: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
-
         if !path.exists() {
             if !write_file(&mut dump, &path, source, config.write_changes) {
                 return;
@@ -132,8 +100,6 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
             for line in source.lines() {
                 log!(dump, "  {}", line);
             }
-
-            run_git_add(&mut dump, &path, config.auto_git_add);
 
             if !std::thread::panicking() && !config.write_changes {
                 panic!("new test case detected");
@@ -176,8 +142,6 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
 
         write_file(&mut dump, &path, source, config.write_changes);
 
-        run_git_add(&mut dump, &path, config.auto_git_add);
-
         if !std::thread::panicking() && !config.write_changes {
             panic!("test '{}' failed", name);
         }
@@ -210,7 +174,7 @@ macro_rules! cases {
         fn $name() {
             let fn_name = $crate::function_name($name);
             let test_fn = |$ctx: &mut String| $body;
-            $crate::case(fn_name, test_fn);
+            $crate::case(&fn_name, test_fn);
         }
     )*};
 }
