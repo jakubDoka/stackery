@@ -1,6 +1,9 @@
-use mini_alloc::*;
+use mini_alloc::{InternedStr, StrInterner};
 
-use crate::*;
+use crate::{
+    gen_storage_group, Diagnostics, Enum, LiteralKindAst, Module, ModuleRef, ModuleRefRepr,
+    Modules, OpCode, Ref, ShadowStore, Slice, Span, Struct,
+};
 
 mod emiter_impl;
 pub mod fmt;
@@ -44,79 +47,7 @@ impl<'a> InstrEmiter<'a> {
     }
 }
 
-macro_rules! gen_func_meta {
-    (
-        $name:ident $slice_name:ident $view_name:ident $builder_name:ident
-        $lt:lifetime {$(
-            $field:ident: $field_ty:ty,
-        )*}
-    ) => {
-        #[derive(Default)]
-        pub struct $name {$(
-            $field: VecStore<$field_ty, FuncIndex>,
-        )*}
-
-        impl $name {
-            pub fn new() -> Self {
-                Self::default()
-            }
-
-            pub fn builder(&mut self) -> $builder_name {
-                $builder_name {$(
-                    $field: self.$field.builder(),
-                )*}
-            }
-
-            pub fn view(&self, slice: $slice_name) -> $view_name {
-                $view_name {$(
-                    $field: &self.$field[slice.$field],
-                )*}
-            }
-
-            pub fn clear(&mut self) {
-                $(
-                    self.$field.clear();
-                )*
-            }
-
-            pub fn preserve_ranges(&mut self, ranges: &mut [&mut $slice_name]) {
-                $(
-                    ranges.sort_unstable_by_key(|range| range.$field.start());
-                    self.$field.preserve_chunks_by_slice(ranges.iter_mut().map(|range| &mut range.$field));
-                )*
-            }
-        }
-
-        pub struct $builder_name<$lt> {$(
-            pub $field: VecStoreBuilder<$lt, $field_ty, InstrIndex, FuncIndex>,
-        )*}
-
-        impl<$lt> $builder_name<$lt> {
-            pub fn finish(self) -> $slice_name {
-                $slice_name {$(
-                    $field: self.$field.finish(),
-                )*}
-            }
-
-            pub fn view(&self, slice: $slice_name) -> $view_name {
-                $view_name {$(
-                    $field: &self.$field[slice.$field],
-                )*}
-            }
-        }
-
-        #[derive(Clone, Copy, Default)]
-        pub struct $slice_name {$(
-            $field: VecSlice<$field_ty, InstrIndex, FuncIndex>,
-        )*}
-
-        pub struct $view_name<'a> {$(
-            pub $field: &'a VecSliceView<$field_ty, InstrIndex>,
-        )*}
-    };
-}
-
-gen_func_meta! {
+gen_storage_group! {
     FuncMeta FuncMetaSlice FuncMetaView FuncMetaBuilder
     'a {
         instrs: Instr,
@@ -127,7 +58,7 @@ gen_func_meta! {
     }
 }
 
-gen_func_meta! {
+gen_storage_group! {
     InstrModuleMeta InstrModuleMetaSlice InstrModuleMetaView InstrModuleMetaBuilder
     'a {
         items: InstrItem,
@@ -142,6 +73,7 @@ pub struct Instrs {
     func_meta: FuncMeta,
 }
 
+#[allow(dead_code)]
 impl Instrs {
     pub(crate) fn view_of(&self, func: FuncId) -> FuncMetaView {
         let module = &self.modules[func.module];
@@ -170,6 +102,8 @@ pub struct InstrItem {
 pub enum InstrItemKind {
     Func(FuncRef),
     Import(ModuleRef),
+    Struct(Struct),
+    Enum(Enum),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]

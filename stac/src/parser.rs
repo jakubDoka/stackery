@@ -2,12 +2,10 @@ use std::fmt::Display;
 
 use mini_alloc::{ArenaScope, Diver, InternedStr, StrInterner};
 
-use crate::*;
+use crate::{Diagnostics, ExprAst, FileRef, Files, Lexer, Severty, Token, TokenKind, TokenKind::*};
 
 pub mod expr;
 pub mod fmt;
-
-use crate::TokenKind::*;
 
 pub struct Parser<'ctx, 'src, 'arena> {
     files: &'src Files,

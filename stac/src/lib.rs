@@ -31,6 +31,7 @@ mod parser;
 mod source;
 mod storage;
 mod temp_mem;
+mod types;
 
 #[cfg(test)]
 pub use loader::test_util::{DelayedLoaderMock, LoaderMock};
@@ -65,4 +66,8 @@ pub use {
         BitSet, PoolStore, ShadowStore, VecSlice, VecSliceView, VecStore, VecStoreBuilder,
     },
     temp_mem::{TempMem, TempMemBase},
+    types::{
+        BuiltInType, DefinedType, Enum, InstanceType, IntType, InternedType, ParamType,
+        PointerType, Struct, Type, TypeIndex, TypeRef,
+    },
 };

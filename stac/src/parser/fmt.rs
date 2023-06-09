@@ -1,5 +1,7 @@
-use crate::*;
-use mini_alloc::*;
+use crate::{
+    BinaryAst, BlockAst, ExprAst, LiteralKindAst, OpCode, StructFieldAst, TokenKind, UnitAst,
+};
+use mini_alloc::StrInterner;
 
 pub fn format_ast(ast: &[ExprAst], ctx: &mut String, indent: usize, interner: &StrInterner) {
     for &ast in ast {

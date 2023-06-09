@@ -1,4 +1,4 @@
-use crate::*;
+use crate::BitSet;
 use std::{iter, ops::Range};
 
 pub struct Graph {
@@ -114,7 +114,7 @@ impl CycleDetector {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::{CycleDetector, Graph};
 
     #[test]
     fn no_cycles() {

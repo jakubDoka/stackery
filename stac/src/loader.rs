@@ -1,7 +1,7 @@
 use std::{future::Future, io};
 
-use crate::*;
-use mini_alloc::*;
+use crate::{BitSet, Diagnostics, FileRef, Files, PoolStore, Ref, Slice, VecStore};
+use mini_alloc::{FnvHashMap, InternedStr, StrInterner};
 
 mod loader_impl;
 
@@ -24,12 +24,14 @@ impl Module {
     }
 }
 
+#[allow(dead_code)]
 pub struct ModuleMeta {
     order: Vec<ModuleRef>,
     root: ModuleRef,
     updated_modules: BitSet,
 }
 
+#[allow(dead_code)]
 impl ModuleMeta {
     pub(crate) fn order(&self) -> &[ModuleRef] {
         &self.order
@@ -77,6 +79,7 @@ impl Modules {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.eintities.len()
     }
@@ -145,8 +148,8 @@ pub mod test_util {
     use async_timer::oneshot::Oneshot;
     use std::{collections::HashMap, future::Future};
 
-    use crate::*;
-    use mini_alloc::*;
+    use crate::{File, FileRef, Loader, LoaderCtx};
+    use mini_alloc::InternedStr;
 
     pub struct DelayedLoaderMock<T> {
         delay_ms: u32,

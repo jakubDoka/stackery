@@ -2,8 +2,7 @@ use std::fmt::Display;
 
 use mini_alloc::{Diver, InternedStr};
 
-use crate::TokenKind::*;
-use crate::*;
+use crate::{OpCode, Parser, Severty, Span, Token, TokenKind, TokenKind::*, TransposeOpt};
 
 use super::StringParseError;
 
@@ -716,8 +715,8 @@ pub struct IdentAst {
 
 #[cfg(test)]
 mod test {
-    use crate::*;
-    use mini_alloc::*;
+    use crate::{format_ast, Diagnostics, File, Files, Parser, StringParser};
+    use mini_alloc::{ArenaBase, DiverBase, StrInterner};
 
     fn perform_test(source_code: &str, ctx: &mut String) {
         let mut files = Files::new();

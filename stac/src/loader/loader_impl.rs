@@ -1,11 +1,14 @@
 use std::{collections::VecDeque, future::Future, io, pin::Pin};
 
-use crate::*;
-use mini_alloc::*;
+use crate::{
+    BitSet, CycleDetector, FileRef, Graph, ImportLexer, Loader, LoaderCtx, Module, ModuleLoader,
+    ModuleMeta, ModuleRef, PoolStore, Severty,
+};
+use mini_alloc::{hashbrown, InternedStr};
 
 #[derive(Default)]
 struct CacheLoaderRes {
-    import_stack: Vec<(ModuleRef, InternedStr, usize)>,
+    import_stack: Vec<(InternedStr, usize)>,
     module_stack: Vec<ModuleRef>,
     reached_modules: BitSet,
 }
@@ -200,7 +203,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
                 let module = Module::new(file);
                 let module = self.modules.eintities.push(module);
                 entry.insert(module);
-                self.collect_imports(module, queue);
+                self.collect_imports(module, res, queue);
 
                 module
             }
@@ -211,17 +214,22 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         module
     }
 
-    fn collect_imports<'b>(&mut self, from: ModuleRef, queue: &mut ParallelFileLoader) {
+    fn collect_imports<'b>(
+        &mut self,
+        from: ModuleRef,
+        res: &mut CacheLoaderRes,
+        queue: &mut ParallelFileLoader,
+    ) {
         let file = self.modules.eintities[from].file;
         let source = self.modules.files[file].source();
-        let mut imports = ImportLexer::new(&source)
+        ImportLexer::new(&source)
             .map(|(import, start)| (self.interner.intern(import), start))
-            .collect::<Vec<_>>();
+            .collect_into(&mut res.import_stack);
 
-        imports.sort_unstable();
-        imports.dedup_by_key(|(import, _)| *import);
+        res.import_stack.sort_unstable();
+        res.import_stack.dedup_by_key(|&mut (import, _)| import);
 
-        for (name, pos) in imports {
+        for (name, pos) in res.import_stack.drain(..) {
             let fut = self.load_file(Some((from, pos)), name);
             queue.push(fut);
         }

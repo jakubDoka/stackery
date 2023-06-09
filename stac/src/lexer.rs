@@ -271,7 +271,7 @@ impl<'a> Iterator for ImportLexer<'a> {
 mod test {
     use std::iter;
 
-    use crate::*;
+    use crate::{ImportLexer, TokenKind};
 
     pub struct ImportLexer2<'a> {
         source: &'a str,

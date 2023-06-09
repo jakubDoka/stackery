@@ -1,5 +1,5 @@
-use crate::*;
-use mini_alloc::*;
+use crate::{BitSet, Instr};
+use mini_alloc::StrInterner;
 use std::fmt::Write;
 
 pub fn format_instrs(instrs: &[Instr], ctx: &mut String, prefix: &str, interner: &StrInterner) {

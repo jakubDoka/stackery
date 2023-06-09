@@ -8,7 +8,80 @@ use std::{
     ptr, slice,
 };
 
-use crate::*;
+use crate::{Ref, RefRepr, Slice};
+
+#[macro_export]
+macro_rules! gen_storage_group {
+    (
+        $name:ident $slice_name:ident $view_name:ident $builder_name:ident
+        $lt:lifetime {$(
+            $field:ident: $field_ty:ty,
+        )*}
+    ) => {
+        #[derive(Default)]
+        pub struct $name {$(
+            $field: $crate::VecStore<$field_ty, $crate::FuncIndex>,
+        )*}
+
+        impl $name {
+            pub fn new() -> Self {
+                Self::default()
+            }
+
+            pub fn builder(&mut self) -> $builder_name {
+                $builder_name {$(
+                    $field: self.$field.builder(),
+                )*}
+            }
+
+            pub fn view(&self, slice: $slice_name) -> $view_name {
+                $view_name {$(
+                    $field: &self.$field[slice.$field],
+                )*}
+            }
+
+            pub fn clear(&mut self) {
+                $(
+                    self.$field.clear();
+                )*
+            }
+
+            pub fn preserve_ranges(&mut self, ranges: &mut [&mut $slice_name]) {
+                $(
+                    ranges.sort_unstable_by_key(|range| range.$field.start());
+                    self.$field.preserve_chunks_by_slice(ranges.iter_mut().map(|range| &mut range.$field));
+                )*
+            }
+        }
+
+        pub struct $builder_name<$lt> {$(
+            pub $field: $crate::VecStoreBuilder<$lt, $field_ty, $crate::InstrIndex, $crate::FuncIndex>,
+        )*}
+
+        impl<$lt> $builder_name<$lt> {
+            pub fn finish(self) -> $slice_name {
+                $slice_name {$(
+                    $field: self.$field.finish(),
+                )*}
+            }
+
+            pub fn view(&self, slice: $slice_name) -> $view_name {
+                $view_name {$(
+                    $field: &self.$field[slice.$field],
+                )*}
+            }
+        }
+
+        #[derive(Clone, Copy, Default)]
+        pub struct $slice_name {$(
+            $field: $crate::VecSlice<$field_ty, $crate::InstrIndex, $crate::FuncIndex>,
+        )*}
+
+        pub struct $view_name<'a> {$(
+            pub $field: &'a $crate::VecSliceView<$field_ty, $crate::InstrIndex>,
+        )*}
+    };
+}
 
 pub mod refs;
 // pub mod scope;

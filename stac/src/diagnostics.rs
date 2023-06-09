@@ -335,9 +335,8 @@ impl Severty {
 
 #[cfg(test)]
 mod test {
-    use crate::{File, Lexer, TokenKind};
-
-    use super::*;
+    use crate::{DiagnosticConfig, Diagnostics, File, Files, Lexer, Severty, TokenKind};
+    use mini_alloc::StrInterner;
 
     fn perform_test(code: &str, ctx: &mut String) {
         let mut files = Files::new();

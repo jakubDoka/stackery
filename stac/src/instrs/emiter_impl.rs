@@ -1,8 +1,15 @@
 use std::ops::{Index, Range};
 
-use mini_alloc::*;
+use mini_alloc::{FnvHashMap, InternedStr, StrInterner};
 
-use crate::*;
+use crate::{
+    instrs, BinaryAst, BlockAst, BreakAst, CallAst, Const, ContinueAst, Diagnostics, EnumAst,
+    ExprAst, FieldAst, FieldIdentAst, Files, FilledArrayAst, Func, FuncAst, FuncMetaBuilder,
+    FuncRef, Ident, IdentAst, IfAst, IndexAst, Instr, InstrEmiter, InstrIndex, InstrItem,
+    InstrItemKind, InstrModule, InstrModuleMetaBuilder, InstrModuleMetaSlice, LiteralAst,
+    LiteralKindAst, Loop, LoopAst, LoopData, ModuleRef, Modules, NamedExprAst, OpCode, Parser, Ref,
+    Severty, Span, StringParser, StructFieldAst, SymData, TempMemBase, UnaryAst, UnitAst, VecStore,
+};
 
 #[derive(Default)]
 struct InstrEmiterRes {
@@ -824,10 +831,13 @@ impl ScopeItem for SymData {
 
 #[cfg(test)]
 mod test {
-    use mini_alloc::*;
+    use mini_alloc::StrInterner;
     use pollster::FutureExt;
 
-    use crate::*;
+    use crate::{
+        format_instrs, Diagnostics, InstrEmiter, InstrItemKind, Instrs, LoaderMock, ModuleLoader,
+        Modules, TempMemBase,
+    };
 
     fn perform_test(sources: &str, ctx: &mut String) {
         let mut loader = LoaderMock::new(sources);
@@ -888,6 +898,14 @@ mod test {
                         ctx.push_str(": :{");
                         ctx.push_str(&interner[modules.name_of(module)]);
                         ctx.push_str("}\n");
+                    }
+                    InstrItemKind::Enum(..) => {
+                        ctx.push_str(": |{");
+                        todo!()
+                    }
+                    InstrItemKind::Struct(..) => {
+                        ctx.push_str(": *{");
+                        todo!()
                     }
                 }
             }
