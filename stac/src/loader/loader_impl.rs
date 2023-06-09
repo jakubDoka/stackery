@@ -1,3 +1,5 @@
+use std::{collections::VecDeque, future::Future, io, pin::Pin};
+
 use crate::*;
 use mini_alloc::*;
 
@@ -65,20 +67,19 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         res: &mut CacheLoaderRes,
         root: InternedStr,
     ) -> Option<ModuleRef> {
-        let root = self.load_file(None, root).await?;
-        let root_module = self.add_module(res, root);
+        let loaded = self.load_file(None, root).await;
+        let root = self.handle_file_load_result(loaded)?;
 
+        let mut queue = ParallelFileLoader::new();
+        let root_module = self.add_module(res, root, &mut queue);
         let mut last_from = root_module;
-        let mut cursor = 0;
-        while let Some(&(from, import, pos)) = res.import_stack.get(cursor) {
-            cursor += 1;
 
-            let from_file = self.modules.eintities[from].file;
-            let Some(file) = self.load_file(Some((from_file, pos)), import).await else {
+        while let Some(lf) = Pin::new(&mut queue).await && let Some((from, _)) = lf.from {
+            let Some(file) = self.handle_file_load_result(lf) else {
                 continue;
             };
 
-            let module = self.add_module(res, file);
+            let module = self.add_module(res, file, &mut queue);
 
             if last_from != from {
                 let elems = res.module_stack.drain(..);
@@ -95,18 +96,34 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         Some(root_module)
     }
 
-    async fn load_file(
+    fn load_file(
         &mut self,
-        file_info: Option<(FileRef, usize)>,
+        file_info: Option<(ModuleRef, usize)>,
         import: InternedStr,
-    ) -> Option<FileRef> {
+    ) -> impl Future<Output = LoadedFile> + 'static {
         let ctx = LoaderCtx {
             files: &mut self.modules.files,
             interner: &self.interner,
         };
-        match self.loader.load(ctx, file_info.map(|(f, ..)| f), import).await {
+        let from_file = file_info.map(|(f, ..)| self.modules.eintities[f].file);
+        let fut = self.loader.load(ctx, from_file, import);
+        async move {
+            LoadedFile {
+                id: fut.await,
+                from: file_info,
+                name: import,
+            }
+        }
+    }
+
+    fn handle_file_load_result(
+        &mut self,
+        LoadedFile { id, from, name }: LoadedFile,
+    ) -> Option<FileRef> {
+        match id {
             Ok(id) => Some(id),
-            Err(err) if let Some((from_file, pos)) = file_info => {
+            Err(err) if let Some((from_module, pos)) = from => {
+                let from_file = self.modules.eintities[from_module].file;
                 let span = self.modules.files.span_for_pos(pos, from_file);
                 self.diagnostics
                     .builder(&self.modules.files, self.interner)
@@ -120,7 +137,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
                     .builder(&self.modules.files, self.interner)
                     .footer(Severty::Error, "unable to load a root module")
                     .footer(Severty::Note, format_args!("loader error: {err}"))
-                    .footer(Severty::Note, format_args!("the import string is {}", &self.interner[import]))
+                    .footer(Severty::Note, format_args!("the import string is {}", &self.interner[name]))
                     .terminate()?;
             }
         }
@@ -171,14 +188,19 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         )
     }
 
-    fn add_module(&mut self, res: &mut CacheLoaderRes, file: FileRef) -> ModuleRef {
+    fn add_module<'b>(
+        &mut self,
+        res: &mut CacheLoaderRes,
+        file: FileRef,
+        queue: &mut ParallelFileLoader,
+    ) -> ModuleRef {
         let module = match self.modules.loaded_modules.entry(file) {
             hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
             hashbrown::hash_map::Entry::Vacant(entry) => {
                 let module = Module::new(file);
                 let module = self.modules.eintities.push(module);
                 entry.insert(module);
-                self.collect_imports(res, module);
+                self.collect_imports(module, queue);
 
                 module
             }
@@ -189,20 +211,82 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         module
     }
 
-    fn collect_imports(&mut self, res: &mut CacheLoaderRes, from: ModuleRef) {
-        let prev_len = res.import_stack.len();
-
+    fn collect_imports<'b>(&mut self, from: ModuleRef, queue: &mut ParallelFileLoader) {
         let file = self.modules.eintities[from].file;
         let source = self.modules.files[file].source();
-        let imports = ImportLexer::new(&source)
-            .map(|(import, start)| (from, self.interner.intern(import), start));
+        let mut imports = ImportLexer::new(&source)
+            .map(|(import, start)| (self.interner.intern(import), start))
+            .collect::<Vec<_>>();
 
-        res.import_stack.extend(imports);
-        res.import_stack[prev_len..].sort_unstable();
-        let (uniques, _) =
-            res.import_stack[prev_len..].partition_dedup_by_key(|(_, import, _)| *import);
-        let unique_len = uniques.len();
-        res.import_stack.truncate(prev_len + unique_len);
+        imports.sort_unstable();
+        imports.dedup_by_key(|(import, _)| *import);
+
+        for (name, pos) in imports {
+            let fut = self.load_file(Some((from, pos)), name);
+            queue.push(fut);
+        }
+    }
+}
+
+struct LoadedFile {
+    id: Result<FileRef, io::Error>,
+    from: Option<(ModuleRef, usize)>,
+    name: InternedStr,
+}
+
+type QueueFut = Pin<Box<dyn Future<Output = LoadedFile>>>;
+
+enum QueueItem {
+    Pending(QueueFut),
+    Ready(LoadedFile),
+}
+
+struct ParallelFileLoader {
+    queue: VecDeque<QueueItem>,
+}
+
+impl ParallelFileLoader {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn push<F: Future<Output = LoadedFile> + 'static>(&mut self, fut: F) {
+        self.queue.push_back(QueueItem::Pending(Box::pin(fut)));
+    }
+}
+
+impl Future for ParallelFileLoader {
+    type Output = Option<LoadedFile>;
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        for file in self.queue.iter_mut() {
+            let QueueItem::Pending(fut) = file else {
+                continue;
+            };
+
+            match fut.as_mut().poll(cx) {
+                std::task::Poll::Ready(res) => {
+                    *file = QueueItem::Ready(res);
+                }
+                std::task::Poll::Pending => {}
+            }
+        }
+
+        let Some(item) = self.queue.pop_front() else {
+            return std::task::Poll::Ready(None);
+        };
+
+        let QueueItem::Ready(res) = item else {
+            self.queue.push_front(item);
+            return std::task::Poll::Pending;
+        };
+
+        std::task::Poll::Ready(Some(res))
     }
 }
 
@@ -211,12 +295,19 @@ mod test {
     use mini_alloc::StrInterner;
     use pollster::FutureExt;
 
-    use crate::loader::test_util::LoaderMock;
-    use crate::{ModuleRef, Modules};
+    use crate::{DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules};
 
-    fn perform_test(sources: &str, ctx: &mut String) {
-        let mut loader = LoaderMock::new(sources);
+    fn perform_test(source: &str, ctx: &mut String) {
+        let loader = LoaderMock::new(source);
+        perform_test_low(loader, ctx);
+    }
 
+    fn pefrom_delayed_test(source: &str, ctx: &mut String, delay_ms: u32) {
+        let loader = DelayedLoaderMock::new(delay_ms, LoaderMock::new(source));
+        perform_test_low(loader, ctx);
+    }
+
+    fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
         let mut diagnostics = crate::Diagnostics::default();
         let mut modules = crate::Modules::default();
         let interner = mini_alloc::StrInterner::default();
@@ -265,6 +356,37 @@ mod test {
             }
         }
         log_graph(meta.root, &interner, &modules, 0, ctx);
+    }
+
+    #[test]
+    fn test() {
+        print_test::case("delayed::loading", |ctx| {
+            let now = std::time::Instant::now();
+            pefrom_delayed_test(
+                "
+                    `root
+                        a: :{a}
+                        b: :{b}
+                        c: :{c}
+                        d: :{d}
+                        e: :{e}
+                    `
+                    `a :{b}`
+                    `b `
+                    `c :{f} :{g}`
+                    `d :{e}`
+                    `e `
+                    `f :{b}`
+                    `g `
+                ",
+                ctx,
+                50,
+            );
+            ctx.push_str(&format!(
+                "in time bounds (<250): {:?}",
+                now.elapsed().as_millis() < 250
+            ));
+        })
     }
 
     macro_rules! cases {

@@ -1,5 +1,0 @@
-diagnostics:
-error: cyclic dependency detected
-note: the following modules are involved in the cycle:
-error:  -> root
-no meta

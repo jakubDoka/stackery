@@ -18,7 +18,8 @@
     slice_partition_dedup,
     drain_filter,
     decl_macro,
-    slice_from_ptr_range
+    slice_from_ptr_range,
+    impl_trait_in_assoc_type
 )]
 
 mod algorithms;
@@ -30,10 +31,9 @@ mod parser;
 mod source;
 mod storage;
 mod temp_mem;
-mod types;
 
 #[cfg(test)]
-pub use loader::test_util::LoaderMock;
+pub use loader::test_util::{DelayedLoaderMock, LoaderMock};
 
 pub use {
     algorithms::detect_cycles::{CycleDetector, Graph},
@@ -65,8 +65,4 @@ pub use {
         BitSet, PoolStore, ShadowStore, VecSlice, VecSliceView, VecStore, VecStoreBuilder,
     },
     temp_mem::{TempMem, TempMemBase},
-    types::{
-        ArrayType, BuiltinType, EnumType, FuncInstId, FuncType, Generator, GeneratorArgs,
-        GeneratorCtx, IntType, IntWidth, StructType, Type, Types,
-    },
 };

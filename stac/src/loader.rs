@@ -1,4 +1,4 @@
-use std::io;
+use std::{future::Future, io};
 
 use crate::*;
 use mini_alloc::*;
@@ -109,12 +109,12 @@ pub struct LoaderCtx<'a> {
 }
 
 pub trait Loader {
-    async fn load(
+    fn load(
         &mut self,
         ctx: LoaderCtx<'_>,
         from: Option<FileRef>,
         id: InternedStr,
-    ) -> Result<FileRef, io::Error>;
+    ) -> impl Future<Output = Result<FileRef, io::Error>> + 'static;
 }
 
 pub struct ModuleLoader<'a, L: Loader> {
@@ -142,10 +142,39 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
 #[cfg(test)]
 pub mod test_util {
-    use std::collections::HashMap;
+    use async_timer::oneshot::Oneshot;
+    use std::{collections::HashMap, future::Future};
 
     use crate::*;
     use mini_alloc::*;
+
+    pub struct DelayedLoaderMock<T> {
+        delay_ms: u32,
+        inner: T,
+    }
+
+    impl<T> DelayedLoaderMock<T> {
+        pub fn new(delay_ms: u32, inner: T) -> Self {
+            Self { delay_ms, inner }
+        }
+    }
+
+    impl<T: Loader> Loader for DelayedLoaderMock<T> {
+        fn load(
+            &mut self,
+            ctx: LoaderCtx<'_>,
+            from: Option<FileRef>,
+            id: InternedStr,
+        ) -> impl Future<Output = Result<FileRef, std::io::Error>> + 'static {
+            let delay_ms = self.delay_ms;
+            let fut = self.inner.load(ctx, from, id);
+            async move {
+                async_timer::oneshot::Timer::new(std::time::Duration::from_millis(delay_ms as u64))
+                    .await;
+                fut.await
+            }
+        }
+    }
 
     pub struct LoaderMock<'a> {
         modules: HashMap<&'a str, &'a str>,
@@ -167,10 +196,8 @@ pub mod test_util {
                 loaded: HashMap::new(),
             }
         }
-    }
 
-    impl<'a> Loader for LoaderMock<'a> {
-        async fn load(
+        fn load(
             &mut self,
             ctx: crate::LoaderCtx<'_>,
             _: Option<crate::FileRef>,
@@ -195,6 +222,18 @@ pub mod test_util {
             self.loaded.insert(id, file);
 
             Ok(file)
+        }
+    }
+
+    impl<'a> Loader for LoaderMock<'a> {
+        fn load(
+            &mut self,
+            ctx: crate::LoaderCtx<'_>,
+            f: Option<crate::FileRef>,
+            id: mini_alloc::InternedStr,
+        ) -> impl Future<Output = Result<crate::FileRef, std::io::Error>> {
+            let res = self.load(ctx, f, id);
+            async move { res }
         }
     }
 }

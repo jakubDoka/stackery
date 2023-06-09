@@ -1,0 +1,22 @@
+order:
+b
+a
+f
+g
+c
+e
+d
+root
+graph:
+root
+  a
+    b
+  b
+  c
+    f
+      b
+    g
+  d
+    e
+  e
+in time bounds (<250): true

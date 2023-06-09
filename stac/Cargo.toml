@@ -12,4 +12,5 @@ print-test = { version = "0.1.0", path = "../util/print-test" }
 serde-base128 = { version = "0.1.0", path = "../util/serde-base128" }
 
 [dev-dependencies]
+async-timer = "0.7.4"
 pollster = "0.3.0"
