@@ -41,6 +41,7 @@ impl Encoder {
     }
 
     pub fn write_slice(&mut self, value: &[u8]) {
+        self.write_u64(value.len() as u64);
         self.data.extend_from_slice(value);
     }
 
@@ -60,6 +61,13 @@ impl Encoder {
 
     pub fn write_i64(&mut self, value: i64) {
         self.write_u64(value as u64);
+    }
+
+    pub fn write_object_slice<T: Serde128>(&mut self, slice: &[T]) {
+        self.write_u64(slice.len() as u64);
+        for value in slice {
+            value.serialize(self);
+        }
     }
 }
 

@@ -3,6 +3,7 @@ use core::{
     cell::UnsafeCell,
     iter::TrustedLen,
     mem::{self, MaybeUninit},
+    pin::Pin,
     ptr,
 };
 
@@ -127,6 +128,11 @@ impl<'a, A: Allocator> ArenaScope<'a, A> {
         }
     }
 
+    pub fn pin<T>(&self, value: T) -> Pin<&mut T> {
+        // SAFETY: Resulting pin is the only visible reference to the allocated value.
+        unsafe { Pin::new_unchecked(alloc(self, value)) }
+    }
+
     pub fn alloc<T>(&self, value: T) -> &mut T {
         unsafe { alloc(self, value) }
     }
@@ -239,6 +245,11 @@ pub struct ArenaProxi<'a, A: Allocator = Global> {
 impl<'a, A: Allocator> ArenaProxi<'a, A> {
     unsafe fn state(&self) -> (&'a mut Bump, &'a mut ArenaBase<A>) {
         (&mut *self.bump.get(), &mut *self.base.get())
+    }
+
+    pub fn pin<T>(&self, value: T) -> Pin<&'a mut T> {
+        // SAFETY: Resulting pin is the only visible reference to the allocated value.
+        unsafe { Pin::new_unchecked(alloc(self, value)) }
     }
 
     pub fn alloc<T>(&self, value: T) -> &'a mut T {

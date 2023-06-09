@@ -28,6 +28,16 @@ impl Serde128 for u8 {
     }
 }
 
+impl Serde128 for bool {
+    fn serialize(&self, encoder: &mut Encoder) {
+        encoder.write_byte(*self as u8);
+    }
+
+    unsafe fn deserialize(decoder: &mut Decoder) -> Self {
+        decoder.read_byte() != 0
+    }
+}
+
 impl Serde128 for i8 {
     fn serialize(&self, encoder: &mut Encoder) {
         encoder.write_i64(*self as i64);
@@ -61,10 +71,18 @@ impl<T: Serde128> Serde128 for Option<T> {
 
 impl<T: Serde128> Serde128 for Vec<T> {
     fn serialize(&self, encoder: &mut Encoder) {
-        self.len().serialize(encoder);
-        for value in self {
-            value.serialize(encoder);
-        }
+        encoder.write_object_slice(self);
+    }
+
+    unsafe fn deserialize(decoder: &mut Decoder) -> Self {
+        let len = usize::deserialize(decoder);
+        (0..len).map(|_| T::deserialize(decoder)).collect()
+    }
+}
+
+impl<T: Serde128> Serde128 for Box<[T]> {
+    fn serialize(&self, encoder: &mut Encoder) {
+        encoder.write_object_slice(self);
     }
 
     unsafe fn deserialize(decoder: &mut Decoder) -> Self {
@@ -75,7 +93,6 @@ impl<T: Serde128> Serde128 for Vec<T> {
 
 impl Serde128 for String {
     fn serialize(&self, encoder: &mut Encoder) {
-        self.len().serialize(encoder);
         encoder.write_slice(self.as_bytes());
     }
 

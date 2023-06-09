@@ -1,18 +1,17 @@
-use alloc::alloc::Global;
-use alloc::slice;
-use alloc::vec::Vec;
-use core::alloc::Allocator;
-use core::cell::UnsafeCell;
-use core::hash::{BuildHasherDefault, Hash};
-use core::intrinsics::unlikely;
-use core::iter::TrustedLen;
-use core::marker::PhantomData;
-use core::mem;
-use core::num::NonZeroUsize;
-use core::ops::Index;
-use core::ptr::{self, NonNull};
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::{HashMap, HashSet};
+use alloc::{alloc::Global, slice, vec::Vec};
+use core::{
+    alloc::Allocator,
+    cell::UnsafeCell,
+    hash::{BuildHasherDefault, Hash},
+    intrinsics::unlikely,
+    iter::TrustedLen,
+    marker::PhantomData,
+    mem,
+    num::NonZeroUsize,
+    ops::Index,
+    ptr::{self, NonNull},
+};
+use hashbrown::{hash_map::RawEntryMut, HashMap, HashSet};
 
 #[cfg(feature = "serde128")]
 use serde_base128::Serde128;
