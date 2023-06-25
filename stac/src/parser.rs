@@ -11,7 +11,7 @@ pub struct Parser<'ctx, 'src, 'arena> {
     files: &'src Files,
     next: Token<'src>,
     lexer: Lexer<'src>,
-    interner: &'ctx StrInterner,
+    interner: &'ctx mut StrInterner,
     diags: &'ctx mut Diagnostics,
     arena: &'arena ArenaScope<'arena>,
     string_parser: &'ctx mut StringParser,
@@ -21,7 +21,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     pub fn new(
         files: &'src Files,
         file: FileRef,
-        interner: &'ctx StrInterner,
+        interner: &'ctx mut StrInterner,
         diags: &'ctx mut Diagnostics,
         arena: &'arena ArenaScope<'arena>,
         string_parser: &'ctx mut StringParser,
@@ -175,7 +175,7 @@ impl StringParser {
     pub fn parse(
         &mut self,
         source: &str,
-        interner: &StrInterner,
+        interner: &mut StrInterner,
     ) -> Result<InternedStr, StringParseError> {
         self.buffer.clear();
         let mut chars = source.char_indices();

@@ -5,47 +5,35 @@ use std::{
 
 use mini_alloc::InternedStr;
 
+use crate::{PoolStore, Ref};
+
+type FileRefRepr = u16;
+pub type FileRef = Ref<File, FileRefRepr>;
+
 #[derive(Default)]
 pub struct Files {
-    files: Vec<Option<File>>,
-    free: Vec<FileRef>,
+    files: PoolStore<File, FileRefRepr>,
 }
 
 impl Files {
     pub fn new() -> Self {
-        Self {
-            files: Vec::new(),
-            free: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn add(&mut self, file: File) -> FileRef {
-        let index = self.free.pop().unwrap_or_else(|| {
-            let index = self.files.len();
-            self.files.push(None);
-            FileRef::new(index)
-        });
-
-        self.files[index.0 as usize] = Some(file);
-        index
+        self.files.push(file)
     }
 
     pub fn remove_file(&mut self, file: FileRef) -> File {
-        self.files[file.0 as usize]
-            .take()
-            .expect("file has already been removed")
+        self.files.remove(file)
     }
 
-    pub(crate) fn span_for_pos(&self, pos: usize, from: FileRef) -> Span {
-        let file = &self[from];
-        let (row, col) = file.source()[..pos]
-            .match_indices('\n')
-            .map(|(i, ..)| i)
-            .enumerate()
-            .last()
-            .unwrap_or((0, pos));
+    pub(crate) fn span_for_offset(&self, offset: usize, from: FileRef) -> Span {
+        self[from].span_for_offset(offset, from)
+    }
 
-        Span::new(row, col, from)
+    pub(crate) fn offset_for_span(&self, span: Span) -> usize {
+        self[span.file()].offset_for_span(span)
     }
 }
 
@@ -53,40 +41,19 @@ impl Index<FileRef> for Files {
     type Output = File;
 
     fn index(&self, index: FileRef) -> &Self::Output {
-        self.files[index.0 as usize]
-            .as_ref()
-            .expect("file has been removed")
+        &self.files[index]
     }
 }
 
 impl IndexMut<FileRef> for Files {
     fn index_mut(&mut self, index: FileRef) -> &mut Self::Output {
-        self.files[index.0 as usize]
-            .as_mut()
-            .expect("file has been removed")
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FileRef(u16);
-
-impl FileRef {
-    fn new(index: usize) -> Self {
-        Self(
-            index
-                .try_into()
-                .expect("amount of source files cannot exceed 65535"),
-        )
-    }
-
-    #[cfg(test)]
-    pub fn fake() -> Self {
-        Self(u16::MAX)
+        &mut self.files[index]
     }
 }
 
 pub struct File {
     name: InternedStr,
+    nline_offsets: Vec<u32>,
     source: String,
     modification_id: u64,
     is_dirty: bool,
@@ -99,7 +66,7 @@ impl File {
 
     pub fn with_modification_id(name: InternedStr, source: String, modification_id: u64) -> Self {
         let nline_offsets = iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, ..)| i as u16))
+            .chain(source.match_indices('\n').map(|(i, ..)| i as u32))
             .collect::<Vec<_>>();
 
         assert!(
@@ -109,6 +76,7 @@ impl File {
 
         Self {
             name,
+            nline_offsets,
             source,
             modification_id,
             is_dirty: true,
@@ -139,6 +107,21 @@ impl File {
 
     pub fn is_dirty(&self) -> bool {
         self.is_dirty
+    }
+
+    fn offset_for_span(&self, span: Span) -> usize {
+        self.nline_offsets[span.row as usize] as usize + span.col as usize
+    }
+
+    fn span_for_offset(&self, pos: usize, this_ref: FileRef) -> Span {
+        let row = self
+            .nline_offsets
+            .binary_search(&(pos as u32))
+            .unwrap_or_else(|i| i - 1);
+
+        let col = pos - self.nline_offsets[row] as usize;
+
+        Span::new(row, col, this_ref)
     }
 }
 

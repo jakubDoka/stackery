@@ -2,13 +2,13 @@ instrs:
   root:
     main:
       sym1
-      const0
-      const0
+      const 1
+      const 1
       call 2
     foo:
       sym2
       sym3
       binary +
-      const0
+      const 1
       binary +
       drop_decl 2

@@ -1,0 +1,23 @@
+instrs:
+  root:
+    main:
+      const 1
+      const 2
+      const 3
+      array3
+      decl
+      sym2
+      const 0
+      index
+      sym2
+      const 1
+      index
+      binary +
+      sym2
+      const 2
+      index
+      binary +
+      drop_decl 1
+    filled_main:
+      const 3
+      filled_array len_const 6

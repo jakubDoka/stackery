@@ -3,13 +3,13 @@ instrs:
     main:
       back_jump_dest false
       back_jump_dest false
-      const0
+      const 10
       jump 4 false
-  004 const1
+  004 const 0
       binary +
       decl
       back_jump_dest false
-      const0
+      const 10
       sym1
       binary +
       drop_decl 1

@@ -32,7 +32,7 @@ impl<'a> Lexer<'a> {
     pub fn with_fake_file(source: &'a str) -> Self {
         Self {
             lexer: TokenKind::lexer(source),
-            file: FileRef::fake(),
+            file: FileRef::invalid(),
         }
     }
 
@@ -173,6 +173,7 @@ define_lexer! {
         Unknown = "unknown"
         True = "true"
         False = "false"
+        Self_ = "self"
 
         Dot = "."
         DoubleDot = ".."
@@ -185,7 +186,6 @@ define_lexer! {
         RBrace = "}"
         LBracket = "["
         RBracket = "]"
-        Tuple = "*("
         LParen = "("
         RParen = ")"
     }

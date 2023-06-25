@@ -1,22 +1,39 @@
-use mini_alloc::{InternedStr, StrInterner};
+use mini_alloc::InternedStr;
 
 use crate::{
-    gen_storage_group, Diagnostics, Enum, LiteralKindAst, Module, ModuleRef, ModuleRefRepr,
-    Modules, OpCode, Ref, ShadowStore, Slice, Span, Struct,
+    gen_storage_group, Diagnostics, ExprAst, LitKindAst, Module, ModuleRef, ModuleRefRepr, Modules,
+    OpCode, Ref, ShadowStore, Slice, Span,
 };
 
 mod emiter_impl;
 pub mod fmt;
 
 pub type InstrIndex = u16;
+pub type InstrSourceOffset = i16;
 pub type FuncIndex = u32;
-pub type Const = Ref<LiteralKindAst, InstrIndex>;
+pub type Const = Ref<LitKindAst, InstrIndex>;
 pub type Sym = Ref<SymData, InstrIndex>;
 pub type Loop = Ref<LoopData, InstrIndex>;
 pub type Import = ModuleRef;
 pub type Ident = Ref<InternedStr, InstrIndex>;
 pub type FuncRef = Ref<Func, InstrIndex>;
 pub type InstrItems = Slice<InstrItem, FuncIndex>;
+pub type InstrRef = Ref<Instr, InstrIndex>;
+pub type InstrTypeRef = Ref<InstrType, InstrIndex>;
+
+pub struct ConstFoldCtx<'a> {
+    pub diags: &'a mut Diagnostics,
+}
+
+impl<'a> ConstFoldCtx<'a> {
+    pub fn stack_borrow(&mut self) -> ConstFoldCtx {
+        ConstFoldCtx { diags: self.diags }
+    }
+}
+
+pub trait ArrayLenFolder {
+    fn fold(&mut self, expr: ExprAst, ctx: ConstFoldCtx) -> usize;
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct FuncId {
@@ -24,25 +41,25 @@ pub struct FuncId {
     pub func: FuncRef,
 }
 
-pub struct InstrEmiter<'a> {
-    instrs: &'a mut Instrs,
-    modules: &'a Modules,
-    interner: &'a StrInterner,
-    diags: &'a mut Diagnostics,
+pub struct InstrEmiter<'ctx> {
+    instrs: &'ctx mut Instrs,
+    modules: &'ctx Modules,
+    diags: &'ctx mut Diagnostics,
+    array_len_folder: &'ctx mut (dyn ArrayLenFolder + 'ctx),
 }
 
-impl<'a> InstrEmiter<'a> {
+impl<'ctx> InstrEmiter<'ctx> {
     pub fn new(
-        instrs: &'a mut Instrs,
-        modules: &'a Modules,
-        interner: &'a StrInterner,
-        diagnostics: &'a mut Diagnostics,
+        instrs: &'ctx mut Instrs,
+        modules: &'ctx Modules,
+        diags: &'ctx mut Diagnostics,
+        array_const_folder: &'ctx mut (dyn ArrayLenFolder + 'ctx),
     ) -> Self {
         Self {
             instrs,
             modules,
-            interner,
-            diags: diagnostics,
+            diags,
+            array_len_folder: array_const_folder,
         }
     }
 }
@@ -51,10 +68,9 @@ gen_storage_group! {
     FuncMeta FuncMetaSlice FuncMetaView FuncMetaBuilder
     'a {
         instrs: Instr,
-        consts: LiteralKindAst,
+        consts: LitKindAst,
         idents: InternedStr,
-        labels: LoopData,
-        syms: SymData,
+        called_funcs: FuncRef,
     }
 }
 
@@ -91,7 +107,7 @@ pub struct InstrModule {
     meta: InstrModuleMetaSlice,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct InstrItem {
     pub name: InternedStr,
     pub kind: InstrItemKind,
@@ -102,24 +118,51 @@ pub struct InstrItem {
 pub enum InstrItemKind {
     Func(FuncRef),
     Import(ModuleRef),
-    Struct(Struct),
-    Enum(Enum),
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FuncName {
     pub module: ModuleRef,
     pub name: InternedStr,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct SymData {
+    name: InternedStr,
+    sub_scope: SubScope,
+    in_decaration: bool,
+}
+
+impl SymData {
+    fn new(name: InternedStr) -> Self {
+        Self {
+            name,
+            sub_scope: SubScope::None,
+            in_decaration: false,
+        }
+    }
+
+    fn decl(name: InternedStr) -> Self {
+        Self {
+            name,
+            sub_scope: SubScope::None,
+            in_decaration: true,
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct SymData(InternedStr);
+enum SubScope {
+    None,
+    Module(ModuleRef),
+    Struct { length: InstrIndex },
+}
 
 pub struct LoopData {
     label: InternedStr,
     offset: InstrIndex,
     break_frame: usize,
-    dest: Ref<Instr, InstrIndex>,
+    dest: InstrRef,
     scope: emiter_impl::ScopeFrame,
 }
 
@@ -130,12 +173,24 @@ pub struct Func {
 }
 
 #[derive(Copy, Clone)]
-pub enum Instr {
+pub struct Instr {
+    pub kind: InstrKind,
+    pub offset: InstrSourceOffset,
+}
+
+impl Instr {
+    pub fn new(kind: InstrKind, offset: InstrSourceOffset) -> Self {
+        Self { kind, offset }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum InstrKind {
     Const(Const),
     Sym(Sym),
     Mod(Import),
     Array { item_count: InstrIndex },
-    FilledArray,
+    FilledArray { len_const: Const },
     Tuple { item_count: InstrIndex },
     Struct { field_count: InstrIndex },
     StructField { name: Ident, has_value: bool },
@@ -153,5 +208,8 @@ pub enum Instr {
     Jump { to: InstrIndex, conditional: bool },
     Field { name: Ident, is_meta: bool },
     Unkown,
+    Self_,
     Error,
 }
+
+pub struct InstrType;

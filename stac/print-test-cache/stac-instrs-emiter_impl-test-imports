@@ -4,14 +4,14 @@ instrs:
     main:
       sym0
       field ident0 false
-      const0
-      const0
+      const 1
+      const 1
       call 2
   a:
     foo:
       sym1
       sym2
       binary +
-      const0
+      const 1
       binary +
       drop_decl 2

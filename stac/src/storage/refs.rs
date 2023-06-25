@@ -7,17 +7,18 @@ use std::{
 };
 
 pub trait RefRepr: Copy + Eq + Ord + hash::Hash + Display + Debug + 'static {
+    const MAX: Self;
+    const MIN: Self;
     type TryFromError: Debug;
     fn try_from_usize(repr: usize) -> Result<Self, Self::TryFromError>;
     fn into_usize(self) -> usize;
-    fn default() -> Self {
-        Self::try_from_usize(0).unwrap()
-    }
 }
 
 macro_rules! impl_ref_repr {
     ($($ty:ident)*) => {$(
         impl RefRepr for $ty {
+            const MAX: Self = Self::MAX;
+            const MIN: Self = Self::MIN;
             type TryFromError = <$ty as TryFrom<usize>>::Error;
 
             fn try_from_usize(repr: usize) -> Result<Self, Self::TryFromError> {
@@ -52,9 +53,14 @@ macro_rules! impl_ref_repr {
 impl_ref_repr!(u8 u16 u32 u64 usize);
 // impl_ref_repr!(@non_zero u8 NonZeroU8 u16 NonZeroU16 u32 NonZeroU32 u64 NonZeroU64 usize NonZeroUsize);
 
-#[derive(Debug)]
 #[repr(transparent)]
 pub struct Ref<T, R>(R, PhantomData<T>);
+
+impl<T, R: Debug> Debug for Ref<T, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Ref").field(&self.0).finish()
+    }
+}
 
 impl<T, R: PartialEq> PartialEq for Ref<T, R> {
     fn eq(&self, other: &Self) -> bool {
@@ -101,6 +107,10 @@ impl<T, R: RefRepr> Ref<T, R> {
     pub fn index(&self) -> usize {
         self.0.into_usize()
     }
+
+    pub fn invalid() -> Self {
+        Self(R::MAX, PhantomData)
+    }
 }
 
 #[derive(Debug)]
@@ -134,7 +144,7 @@ impl<T, R: RefRepr> Slice<T, R> {
 
 impl<T, R: RefRepr> Default for Slice<T, R> {
     fn default() -> Self {
-        Self(R::default(), R::default(), PhantomData)
+        Self(R::MIN, R::MIN, PhantomData)
     }
 }
 

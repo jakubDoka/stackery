@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, mem};
 
 use mini_alloc::{Diver, InternedStr};
 
@@ -64,6 +64,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             For => self.for_(diver.untyped_dive(), token.span),
             In => self.unex_tok(token, "in can only follow a for")?,
             Unknown => Some(UnitAst::Unknown(token.span)),
+            Self_ => Some(UnitAst::Self_(token.span)),
             Dot => self.unex_tok(
                 token,
                 "dot can only follow an expression of labeled keyword",
@@ -78,13 +79,12 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                 "semicolon can only follow an expression inside a block",
             )?,
             Colon => self.unex_tok(token, "colon can only follow pattern")?,
-            Enum => self.enum_(diver.untyped_dive()),
+            Enum => self.enum_(diver.untyped_dive(), token.span),
             Struct => self.struct_(diver.untyped_dive(), token.span),
             LBrace => self.block(diver.untyped_dive(), token.span),
             RBrace => self.unex_tok(token, "unmatched right brace")?,
             LBracket => self.array(diver.untyped_dive(), token.span),
             RBracket => self.unex_tok(token, "unmatched right bracket")?,
-            Tuple => self.tuple(diver.untyped_dive(), token.span),
             LParen => self.paren(diver.untyped_dive()),
             RParen => self.unex_tok(token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
@@ -136,15 +136,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     }
 
     fn bool(&mut self, value: bool, span: Span) -> Option<UnitAst<'arena>> {
-        Some(UnitAst::Literal(LiteralAst {
-            kind: LiteralKindAst::Bool(value),
+        Some(UnitAst::Literal(LitAst {
+            kind: LitKindAst::Bool(value),
             span,
         }))
-    }
-
-    fn tuple(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let (values, ..) = self.sequence(diver, Self::expr, Comma, RParen, "tuple element")?;
-        Some(UnitAst::Tuple { keyword, values })
     }
 
     fn handle_postfix(
@@ -251,9 +246,9 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             .source
             .parse::<u64>()
             .expect("lexer should have validated int");
-        Some(UnitAst::Literal(LiteralAst {
+        Some(UnitAst::Literal(LitAst {
             span: token.span,
-            kind: LiteralKindAst::Int(value.to_ne_bytes()),
+            kind: LitKindAst::Int(IntLit::new(value)),
         }))
     }
 
@@ -261,10 +256,10 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         let delim_len = '"'.len_utf8();
         let source = &token.source[delim_len..token.source.len() - delim_len];
 
-        Some(UnitAst::Literal(LiteralAst {
+        Some(UnitAst::Literal(LitAst {
             span: token.span,
             kind: match self.string_parser.parse(&source, self.interner) {
-                Ok(name) => LiteralKindAst::Str(name),
+                Ok(name) => LitKindAst::Str(name),
                 Result::Err(StringParseError::IncompleteEscape) => {
                     self.diags
                         .builder(self.files, self.interner)
@@ -356,50 +351,30 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     }
 
     fn struct_field(&mut self, diver: Diver) -> Option<StructFieldAst<'arena>> {
-        let peek = self.peek();
+        let name = self.ident("struct field name")?;
+        let value = self
+            .try_advance(Colon)
+            .map(|_| self.expr(diver))
+            .transpose()?;
 
-        match peek.kind {
-            Ident => {
-                let name = self.ident("struct field name")?;
-                let value = self
-                    .try_advance(Colon)
-                    .map(|_| self.expr(diver))
-                    .transpose()?;
-
-                Some(match value {
-                    Some(value) => StructFieldAst::Decl(NamedExprAst { name, expr: value }),
-                    None => StructFieldAst::Inline(name),
-                })
-            }
-            DoubleDot => {
-                self.next();
-                let expr = self.expr(diver)?;
-                Some(StructFieldAst::Embed(expr))
-            }
-            _ => self
-                .diags
-                .builder(self.files, self.interner)
-                .footer(
-                    Severty::Error,
-                    "struct field can either start with '..' for embeding or identifier",
-                )
-                .annotation(
-                    Severty::Error,
-                    peek.span,
-                    format_args!("unexpected {}", peek.kind),
-                )
-                .terminate()?,
-        }
+        Some(match value {
+            Some(value) => StructFieldAst::Decl(NamedExprAst { name, expr: value }),
+            None => StructFieldAst::Inline(name),
+        })
     }
 
-    fn enum_(&mut self, mut diver: Diver) -> Option<UnitAst<'arena>> {
+    fn enum_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
         let name = self.ident("enum name")?;
         let value = self
             .try_advance(Colon)
             .map(|_| self.expr(diver.untyped_dive()))
             .transpose()?;
         self.expect_advance(RBrace, "closing the enum")?;
-        Some(UnitAst::Enum(self.arena.alloc(EnumAst { name, value })))
+        Some(UnitAst::Enum(self.arena.alloc(EnumAst {
+            keyword,
+            name,
+            value,
+        })))
     }
 
     fn for_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
@@ -477,7 +452,7 @@ fn is_not_expression_start(kind: TokenKind) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ExprAst<'arena> {
     Unit(UnitAst<'arena>),
     Binary(&'arena BinaryAst<'arena>),
@@ -492,9 +467,9 @@ impl ExprAst<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum UnitAst<'arena> {
-    Literal(LiteralAst),
+    Literal(LitAst),
     Ident(IdentAst),
     Import(IdentAst),
     Block(&'arena BlockAst<'arena>),
@@ -504,10 +479,6 @@ pub enum UnitAst<'arena> {
         elems: &'arena [ExprAst<'arena>],
     },
     FilledArray(&'arena FilledArrayAst<'arena>),
-    Tuple {
-        keyword: Span,
-        values: &'arena [ExprAst<'arena>],
-    },
     Struct {
         keyword: Span,
         fields: &'arena [StructFieldAst<'arena>],
@@ -529,10 +500,11 @@ pub enum UnitAst<'arena> {
     },
     Paren(&'arena ExprAst<'arena>),
     Unknown(Span),
+    Self_(Span),
 }
 
 impl UnitAst<'_> {
-    fn span(&self) -> Span {
+    pub fn span(&self) -> Span {
         match self {
             UnitAst::Literal(literal) => literal.span,
             UnitAst::Ident(ident) => ident.span,
@@ -541,7 +513,6 @@ impl UnitAst<'_> {
             UnitAst::Unary(unary) => unary.op.span,
             UnitAst::Array { bracket, .. } => *bracket,
             UnitAst::FilledArray(array) => array.bracket,
-            UnitAst::Tuple { keyword, .. } => *keyword,
             UnitAst::Struct { keyword, .. } => *keyword,
             UnitAst::Enum(enum_) => enum_.name.span,
             UnitAst::Call(call) => call.caller.span(),
@@ -557,30 +528,32 @@ impl UnitAst<'_> {
             UnitAst::Ret { keyword, .. } => *keyword,
             UnitAst::Paren(expr) => expr.span(),
             UnitAst::Unknown(span) => *span,
+            UnitAst::Self_(span) => *span,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IndexAst<'arena> {
     pub expr: UnitAst<'arena>,
     pub index: ExprAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BlockAst<'arena> {
     pub brace: Span,
     pub exprs: &'arena [ExprAst<'arena>],
     pub trailing_semi: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EnumAst<'arena> {
+    pub keyword: Span,
     pub name: IdentAst,
     pub value: Option<ExprAst<'arena>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IfAst<'arena> {
     pub keyword: Span,
     pub cond: ExprAst<'arena>,
@@ -588,13 +561,13 @@ pub struct IfAst<'arena> {
     pub else_: Option<BlockAst<'arena>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FieldAst<'arena> {
     pub expr: UnitAst<'arena>,
     pub name: FieldIdentAst,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ForLoopAst<'arena> {
     pub keyword: Span,
     pub label: Option<IdentAst>,
@@ -603,72 +576,71 @@ pub struct ForLoopAst<'arena> {
     pub body: ExprAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LoopAst<'arena> {
     pub keyword: Span,
     pub label: Option<IdentAst>,
     pub body: BlockAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BreakAst<'arena> {
     pub keyword: Span,
     pub label: Option<IdentAst>,
     pub expr: Option<ExprAst<'arena>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ContinueAst {
     pub keyword: Span,
     pub label: Option<IdentAst>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum StructFieldAst<'arena> {
     Decl(NamedExprAst<'arena>),
     Inline(IdentAst),
-    Embed(ExprAst<'arena>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct UnaryAst<'arena> {
     pub op: OpAst,
     pub expr: UnitAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FuncAst<'arena> {
     pub pipe: Span,
     pub args: &'arena [FuncArgAst<'arena>],
     pub body: ExprAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FuncArgAst<'arena> {
     pub name: IdentAst,
     pub default: Option<UnitAst<'arena>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CallAst<'arena> {
     pub caller: UnitAst<'arena>,
     pub args: &'arena [ExprAst<'arena>],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NamedExprAst<'arena> {
     pub name: IdentAst,
     pub expr: ExprAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FilledArrayAst<'arena> {
     pub bracket: Span,
     pub expr: ExprAst<'arena>,
     pub len: ExprAst<'arena>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BinaryAst<'arena> {
     pub lhs: ExprAst<'arena>,
     pub rhs: ExprAst<'arena>,
@@ -681,33 +653,65 @@ impl BinaryAst<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct OpAst {
     pub kind: OpCode,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct LiteralAst {
-    pub kind: LiteralKindAst,
+#[derive(Debug, Clone)]
+pub struct LitAst {
+    pub kind: LitKindAst,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LiteralKindAst {
-    Int([u8; 8]),
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IntLit([u8; mem::size_of::<u64>()]);
+
+impl IntLit {
+    pub fn new(value: u64) -> Self {
+        Self(value.to_ne_bytes())
+    }
+
+    pub fn value(&self) -> u64 {
+        u64::from_ne_bytes(self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LitKindAst {
+    Int(IntLit),
     Str(InternedStr),
     Bool(bool),
 }
 
-#[derive(Debug, Clone, Copy)]
+impl LitKindAst {
+    pub fn display<'a>(&'a self, intener: &'a StrInterner) -> impl Display + 'a {
+        struct DisplayLiteral<'a>(&'a LitKindAst, &'a StrInterner);
+
+        use std::fmt;
+        impl fmt::Display for DisplayLiteral<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self.0 {
+                    LitKindAst::Int(int) => write!(f, "{}", int.value()),
+                    LitKindAst::Str(str) => write!(f, "{}", &self.1[*str]),
+                    LitKindAst::Bool(bool) => write!(f, "{}", bool),
+                }
+            }
+        }
+
+        DisplayLiteral(self, intener)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct FieldIdentAst {
     pub ident: InternedStr,
     pub span: Span,
     pub is_meta: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IdentAst {
     pub ident: InternedStr,
     pub span: Span,
@@ -716,12 +720,11 @@ pub struct IdentAst {
 #[cfg(test)]
 mod test {
     use crate::{format_ast, Diagnostics, File, Files, Parser, StringParser};
-    use mini_alloc::{ArenaBase, DiverBase, StrInterner};
+    use mini_alloc::{ArenaBase, DiverBase};
 
     fn perform_test(source_code: &str, ctx: &mut String) {
         let mut files = Files::new();
-        let interner = StrInterner::default();
-        let file = File::new(interner.intern("test"), source_code.into());
+        let file = File::new("test".into(), source_code.into());
         let file_id = files.add(file);
         let mut diags = Diagnostics::default();
         let mut arena = ArenaBase::new(1000);
@@ -729,48 +732,28 @@ mod test {
         let mut string_parser = StringParser::default();
         let mut diver = DiverBase::new(1000);
 
-        let res = Parser::new(
-            &files,
-            file_id,
-            &interner,
-            &mut diags,
-            &scope,
-            &mut string_parser,
-        )
-        .parse(diver.dive());
+        let res = Parser::new(&files, file_id, &mut diags, &scope, &mut string_parser)
+            .parse(diver.dive());
 
         match res {
-            Some(ast) => format_ast(ast, ctx, 0, &interner),
+            Some(ast) => format_ast(ast, ctx, 0),
             None => ctx.push_str(diags.diagnostic_view()),
         }
     }
 
-    macro_rules! cases {
-        ($($name:ident $code:literal)*) => {
-            print_test::cases!($(
-                fn $name(ctx) {
-                    perform_test(
-                        $code,
-                        ctx
-                    );
-                }
-            )*);
-        }
-    }
-
-    cases! {
-        precedence "1 + 2 * 3 - 4 / 5"
-        function "|a, b = 10| a + b"
-        function_call "foo(1, 2, 3)"
-        method_call "foo.bar(1, 2, 3)"
-        struct_ctor "*{ a: 1, b, ..c }"
-        multy_statement "a: 1; b: 2; c: 3;"
-        block "{ a: 1; b: 2; a + b }"
-        field_access "foo.bar.baz.rar"
-        enum_ctor "|{none}; |{ some: 10 }"
-        if_expr "if cond {then} else {else_}"
-        loop_expr "loop.label {body}"
-        for_each "for.label var in iter body"
+    crate::print_cases! { perform_test:
+        precedence "1 + 2 * 3 - 4 / 5";
+        function "|a, b = 10| a + b";
+        function_call "foo(1, 2, 3)";
+        method_call "foo.bar(1, 2, 3)";
+        struct_ctor "*{ a: 1, b, ..c }";
+        multy_statement "a: 1; b: 2; c: 3;";
+        block "{ a: 1; b: 2; a + b }";
+        field_access "foo.bar.baz.rar";
+        enum_ctor "|{none}; |{ some: 10 }";
+        if_expr "if cond {then} else {else_}";
+        loop_expr "loop.label {body}";
+        for_each "for.label var in iter body";
         some_code "
             enumerate: |iter| *{
                 counter: 0,
@@ -780,6 +763,6 @@ mod test {
                     *(self.counter - 1, x)
                 }),
             }
-        "
+        ";
     }
 }

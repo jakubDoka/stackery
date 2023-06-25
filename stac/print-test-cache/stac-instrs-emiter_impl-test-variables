@@ -1,9 +1,9 @@
 instrs:
   root:
     main:
-      const0
+      const 1
       decl
-      const1
+      const 2
       decl
       sym1
       sym2

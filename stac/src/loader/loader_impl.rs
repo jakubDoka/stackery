@@ -127,7 +127,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
             Ok(id) => Some(id),
             Err(err) if let Some((from_module, pos)) = from => {
                 let from_file = self.modules.eintities[from_module].file;
-                let span = self.modules.files.span_for_pos(pos, from_file);
+                let span = self.modules.files.span_for_offset(pos, from_file);
                 self.diagnostics
                     .builder(&self.modules.files, self.interner)
                     .footer(Severty::Error, "unable to load a module")
@@ -156,13 +156,13 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
             let deps = self.modules.deps[module.deps]
                 .iter()
-                .map(|&dep| dep.index() as u32);
+                .map(|&dep| dep.index());
 
             graph.add_node(deps);
         }
 
         let mut detector = CycleDetector::new();
-        if let Some(cycle) = detector.detect(root_module.index() as u32, &graph) {
+        if let Some(cycle) = detector.detect(root_module.index(), &graph) {
             let mut builder = self
                 .diagnostics
                 .builder(&self.modules.files, self.interner)
@@ -173,7 +173,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
                 );
 
             for &module in cycle.iter().rev() {
-                let file = PoolStore::by_index(&self.modules.eintities, module as usize).file;
+                let file = PoolStore::by_index(&self.modules.eintities, module).file;
                 let name = self.modules.files[file].name();
                 let name_str = &self.interner[name];
                 builder = builder.footer(Severty::Error, format_args!(" -> {}", name_str));
@@ -186,7 +186,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
             detector
                 .order()
                 .iter()
-                .map(|&index| PoolStore::index_to_ref(&self.modules.eintities, index as usize))
+                .map(|&index| PoolStore::index_to_ref(&self.modules.eintities, index))
                 .collect(),
         )
     }
@@ -318,12 +318,12 @@ mod test {
     fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
         let mut diagnostics = crate::Diagnostics::default();
         let mut modules = crate::Modules::default();
-        let interner = mini_alloc::StrInterner::default();
+        let mut interner = mini_alloc::StrInterner::default();
 
         let root = interner.intern("root");
 
         let loader_ctx =
-            crate::ModuleLoader::new(&mut loader, &mut modules, &interner, &mut diagnostics);
+            crate::ModuleLoader::new(&mut loader, &mut modules, &mut interner, &mut diagnostics);
 
         let meta = loader_ctx.update(root).block_on();
 

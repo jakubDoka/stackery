@@ -77,6 +77,7 @@ macro_rules! gen_storage_group {
             $field: $crate::VecSlice<$field_ty, $crate::InstrIndex, $crate::FuncIndex>,
         )*}
 
+        #[derive(Clone, Copy)]
         pub struct $view_name<'a> {$(
             pub $field: &'a $crate::VecSliceView<$field_ty, $crate::InstrIndex>,
         )*}

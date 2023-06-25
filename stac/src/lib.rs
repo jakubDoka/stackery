@@ -16,14 +16,16 @@
     array_windows,
     core_intrinsics,
     slice_partition_dedup,
-    drain_filter,
     decl_macro,
     slice_from_ptr_range,
-    impl_trait_in_assoc_type
+    impl_trait_in_assoc_type,
+    iter_next_chunk,
+    iter_advance_by
 )]
 
 mod algorithms;
 mod diagnostics;
+mod graphs;
 mod instrs;
 mod lexer;
 mod loader;
@@ -37,13 +39,14 @@ mod types;
 pub use loader::test_util::{DelayedLoaderMock, LoaderMock};
 
 pub use {
-    algorithms::detect_cycles::{CycleDetector, Graph},
     diagnostics::{Diagnostic, DiagnosticConfig, Diagnostics, Severty},
+    graphs::{CycleDetector, CycleFinder, Graph},
     instrs::{
-        fmt::format_instrs, Const, Func, FuncId, FuncIndex, FuncMeta, FuncMetaBuilder,
-        FuncMetaSlice, FuncMetaView, FuncRef, Ident, Import, Instr, InstrEmiter, InstrIndex,
-        InstrItem, InstrItemKind, InstrItems, InstrModule, InstrModuleMeta, InstrModuleMetaBuilder,
-        InstrModuleMetaSlice, InstrModuleMetaView, Instrs, Loop, LoopData, Sym, SymData,
+        fmt::format_instrs, ArrayLenFolder, Const, ConstFoldCtx, Func, FuncId, FuncIndex, FuncMeta,
+        FuncMetaBuilder, FuncMetaSlice, FuncMetaView, FuncRef, Ident, Import, Instr, InstrEmiter,
+        InstrIndex, InstrItem, InstrItemKind, InstrItems, InstrKind, InstrModule, InstrModuleMeta,
+        InstrModuleMetaBuilder, InstrModuleMetaSlice, InstrModuleMetaView, InstrRef, InstrType,
+        InstrTypeRef, Instrs, Loop, LoopData, Sym, SymData,
     },
     lexer::{ImportLexer, Lexer, OpCode, Token, TokenKind},
     loader::{
@@ -54,7 +57,7 @@ pub use {
         expr::{
             BinaryAst, BlockAst, BreakAst, CallAst, ContinueAst, EnumAst, ExprAst, FieldAst,
             FieldIdentAst, FilledArrayAst, ForLoopAst, FuncArgAst, FuncAst, IdentAst, IfAst,
-            IndexAst, LiteralAst, LiteralKindAst, LoopAst, NamedExprAst, OpAst, StructFieldAst,
+            IndexAst, IntLit, LitAst, LitKindAst, LoopAst, NamedExprAst, OpAst, StructFieldAst,
             UnaryAst, UnitAst,
         },
         fmt::format_ast,

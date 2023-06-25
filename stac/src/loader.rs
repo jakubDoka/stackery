@@ -123,7 +123,7 @@ pub trait Loader {
 pub struct ModuleLoader<'a, L: Loader> {
     loader: &'a mut L,
     modules: &'a mut Modules,
-    interner: &'a StrInterner,
+    interner: &'a mut StrInterner,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -131,7 +131,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
     pub fn new(
         loader: &'a mut L,
         modules: &'a mut Modules,
-        interner: &'a StrInterner,
+        interner: &'a mut StrInterner,
         diagnostics: &'a mut Diagnostics,
     ) -> Self {
         Self {
@@ -150,6 +150,19 @@ pub mod test_util {
 
     use crate::{File, FileRef, Loader, LoaderCtx};
     use mini_alloc::InternedStr;
+
+    #[macro_export]
+    macro_rules! print_cases {
+        ($test_func:ident: $($name:ident $($arg:expr),*;)*) => {
+            print_test::cases! {
+                $(
+                    fn $name(ctx) {
+                        $test_func($($arg)*, ctx);
+                    }
+                )*
+            }
+        };
+    }
 
     pub struct DelayedLoaderMock<T> {
         delay_ms: u32,

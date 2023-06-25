@@ -1,6 +1,8 @@
 use crate::{Ref, Slice};
 use mini_alloc::{Interned, InternedSlice, InternedStr};
 
+mod unify_impl;
+
 pub type TypeIndex = u16;
 pub type NamedTypes = Slice<NamedType, TypeIndex>;
 pub type TypeRef = Ref<Type, TypeIndex>;
@@ -108,7 +110,7 @@ pub struct Enum {
     pub variants: NamedTypes,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NamedType {
     pub name: InternedStr,
     pub ty: Type,

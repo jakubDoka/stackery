@@ -2,31 +2,31 @@ instrs:
   root:
     fib:
       sym2
-      const0
+      const 2
       binary <
       jump 6 true
       sym2
       jump 17 false
   006 sym0
       sym2
-      const1
+      const 1
       binary -
       call 1
       sym0
       sym2
-      const0
+      const 2
       binary -
       call 1
       binary +
   017 drop_decl 1
     iter_fib:
-      const0
+      const 0
       decl
-      const1
+      const 1
       decl
   004 back_jump_dest true
       sym2
-      const0
+      const 0
       binary ==
       jump 11 true
       jump 27 false
@@ -42,7 +42,7 @@ instrs:
       sym5
       binary =
       sym2
-      const1
+      const 1
       binary -=
       drop
       drop_decl 1
