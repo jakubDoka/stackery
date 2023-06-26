@@ -87,8 +87,8 @@ impl File {
         self.is_dirty = false;
     }
 
-    pub fn name(&self) -> InternedStr {
-        self.name
+    pub fn name(&self) -> &InternedStr {
+        &self.name
     }
 
     pub fn source(&self) -> &str {

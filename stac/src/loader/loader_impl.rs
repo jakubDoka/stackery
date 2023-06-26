@@ -106,10 +106,9 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
     ) -> impl Future<Output = LoadedFile> + 'static {
         let ctx = LoaderCtx {
             files: &mut self.modules.files,
-            interner: &self.interner,
         };
         let from_file = file_info.map(|(f, ..)| self.modules.eintities[f].file);
-        let fut = self.loader.load(ctx, from_file, import);
+        let fut = self.loader.load(ctx, from_file, import.clone());
         async move {
             LoadedFile {
                 id: fut.await,
@@ -129,7 +128,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
                 let from_file = self.modules.eintities[from_module].file;
                 let span = self.modules.files.span_for_offset(pos, from_file);
                 self.diagnostics
-                    .builder(&self.modules.files, self.interner)
+                    .builder(&self.modules.files)
                     .footer(Severty::Error, "unable to load a module")
                     .footer(Severty::Note, format_args!("loader error: {err}"))
                     .annotation(Severty::Error, span, "imported here")
@@ -137,10 +136,10 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
             }
             Err(err) => {
                 self.diagnostics
-                    .builder(&self.modules.files, self.interner)
+                    .builder(&self.modules.files)
                     .footer(Severty::Error, "unable to load a root module")
                     .footer(Severty::Note, format_args!("loader error: {err}"))
-                    .footer(Severty::Note, format_args!("the import string is {}", &self.interner[name]))
+                    .footer(Severty::Note, format_args!("the import string is {}", &name))
                     .terminate()?;
             }
         }
@@ -165,7 +164,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         if let Some(cycle) = detector.detect(root_module.index(), &graph) {
             let mut builder = self
                 .diagnostics
-                .builder(&self.modules.files, self.interner)
+                .builder(&self.modules.files)
                 .footer(Severty::Error, "cyclic dependency detected")
                 .footer(
                     Severty::Note,
@@ -175,7 +174,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
             for &module in cycle.iter().rev() {
                 let file = PoolStore::by_index(&self.modules.eintities, module).file;
                 let name = self.modules.files[file].name();
-                let name_str = &self.interner[name];
+                let name_str = name.as_str();
                 builder = builder.footer(Severty::Error, format_args!(" -> {}", name_str));
             }
 
@@ -223,11 +222,11 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         let file = self.modules.eintities[from].file;
         let source = self.modules.files[file].source();
         ImportLexer::new(&source)
-            .map(|(import, start)| (self.interner.intern(import), start))
+            .map(|(import, start)| (InternedStr::from_str(import), start))
             .collect_into(&mut res.import_stack);
 
         res.import_stack.sort_unstable();
-        res.import_stack.dedup_by_key(|&mut (import, _)| import);
+        res.import_stack.dedup_by(|a, b| a.0 == b.0);
 
         for (name, pos) in res.import_stack.drain(..) {
             let fut = self.load_file(Some((from, pos)), name);
@@ -300,7 +299,7 @@ impl Future for ParallelFileLoader {
 
 #[cfg(test)]
 mod test {
-    use mini_alloc::StrInterner;
+    use mini_alloc::InternedStr;
     use pollster::FutureExt;
 
     use crate::{DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules};
@@ -318,12 +317,10 @@ mod test {
     fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
         let mut diagnostics = crate::Diagnostics::default();
         let mut modules = crate::Modules::default();
-        let mut interner = mini_alloc::StrInterner::default();
 
-        let root = interner.intern("root");
+        let root = InternedStr::from_str("root");
 
-        let loader_ctx =
-            crate::ModuleLoader::new(&mut loader, &mut modules, &mut interner, &mut diagnostics);
+        let loader_ctx = crate::ModuleLoader::new(&mut loader, &mut modules, &mut diagnostics);
 
         let meta = loader_ctx.update(root).block_on();
 
@@ -339,31 +336,25 @@ mod test {
 
         ctx.push_str("order:\n");
         for &module in &meta.order {
-            ctx.push_str(&interner[modules.name_of(module)]);
+            ctx.push_str(modules.name_of(module));
             ctx.push('\n');
         }
 
         ctx.push_str("graph:\n");
-        fn log_graph(
-            parent: ModuleRef,
-            interner: &StrInterner,
-            modules: &Modules,
-            depth: usize,
-            ctx: &mut String,
-        ) {
+        fn log_graph(parent: ModuleRef, modules: &Modules, depth: usize, ctx: &mut String) {
             for _ in 0..depth {
                 ctx.push_str("  ");
             }
 
-            ctx.push_str(&interner[modules.name_of(parent)]);
+            ctx.push_str(modules.name_of(parent));
             ctx.push('\n');
 
             let deps = modules.eintities[parent].deps;
             for &child in &modules.deps[deps] {
-                log_graph(child, interner, modules, depth + 1, ctx);
+                log_graph(child, modules, depth + 1, ctx);
             }
         }
-        log_graph(meta.root, &interner, &modules, 0, ctx);
+        log_graph(meta.root, &modules, 0, ctx);
     }
 
     #[test]
@@ -390,10 +381,15 @@ mod test {
                 ctx,
                 50,
             );
+            let delay = if cfg!(miri) { 1500 } else { 250 };
             ctx.push_str(&format!(
                 "in time bounds (<250): {:?}",
-                now.elapsed().as_millis() < 250
+                now.elapsed().as_millis() < delay
             ));
+
+            if now.elapsed().as_millis() >= delay {
+                ctx.push_str(&format!("{:?}", now.elapsed()));
+            }
         })
     }
 

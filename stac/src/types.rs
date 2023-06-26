@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
 use crate::{Ref, Slice};
-use mini_alloc::{Interned, InternedSlice, InternedStr};
+use mini_alloc::InternedStr;
 
 mod unify_impl;
 
 pub type TypeIndex = u16;
 pub type NamedTypes = Slice<NamedType, TypeIndex>;
 pub type TypeRef = Ref<Type, TypeIndex>;
+pub type TySlice<T> = Arc<[T]>;
+pub type TyRef<T> = Arc<T>;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Defined(DefinedType),
     BuiltIn(BuiltInType),
@@ -72,22 +76,22 @@ pub enum IntSize {
     W128,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum InternedType {
     Instance(InstanceType),
     Pointer(PointerType),
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct InstanceType {
     pub ty: DefinedType,
-    pub args: InternedSlice<Type>,
+    pub args: TySlice<Type>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PointerType {
     pub mutability: Mutability,
-    pub ty: Interned<Type>,
+    pub ty: TyRef<Type>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]

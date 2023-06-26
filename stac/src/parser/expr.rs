@@ -1,4 +1,4 @@
-use std::{fmt::Display, mem};
+use std::{fmt, mem};
 
 use mini_alloc::{Diver, InternedStr};
 
@@ -6,7 +6,7 @@ use crate::{OpCode, Parser, Severty, Span, Token, TokenKind, TokenKind::*, Trans
 
 use super::StringParseError;
 
-impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
+impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     pub(super) fn expr(&mut self, mut diver: Diver) -> Option<ExprAst<'arena>> {
         let unit = ExprAst::Unit(self.unit(diver.untyped_dive())?);
 
@@ -41,7 +41,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
     fn unex_tok(&mut self, span: Token, message: &str) -> Option<!> {
         self.diags
-            .builder(self.files, self.interner)
+            .builder(self.files)
             .footer(Severty::Error, message)
             .annotation(
                 Severty::Error,
@@ -89,7 +89,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             RParen => self.unex_tok(token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
-                ident: self.interner.intern(token.source),
+                ident: InternedStr::from_str(token.source),
             })),
             MetaIdent => self.unex_tok(token, "meta identifier can only be used as field")?,
             Import => Some(UnitAst::Import({
@@ -97,7 +97,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
                 IdentAst {
                     span: token.span,
-                    ident: self.interner.intern(source),
+                    ident: InternedStr::from_str(source),
                 }
             })),
             Str => self.str(token),
@@ -159,7 +159,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
                         _ => self.unex_tok(tok, "field can only be identifier or meta identifier")?,
                     };
 
-                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: self.interner.intern(source) };
+                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: InternedStr::from_str(source) };
                     UnitAst::Field(self.arena.alloc(FieldAst { expr, name }))
                 }
                 LParen => {
@@ -258,18 +258,18 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
 
         Some(UnitAst::Literal(LitAst {
             span: token.span,
-            kind: match self.string_parser.parse(&source, self.interner) {
+            kind: match self.string_parser.parse(&source) {
                 Ok(name) => LitKindAst::Str(name),
                 Result::Err(StringParseError::IncompleteEscape) => {
                     self.diags
-                        .builder(self.files, self.interner)
+                        .builder(self.files)
                         .footer(Severty::Error, "incomplete escape sequence")
                         .annotation(Severty::Error, token.span, "in string literal")
                         .terminate()?;
                 }
                 Result::Err(StringParseError::InvalidEscape(index)) => {
                     self.diags
-                        .builder(self.files, self.interner)
+                        .builder(self.files)
                         .footer(Severty::Error, "invalid escape sequence")
                         .annotation(
                             Severty::Error,
@@ -324,7 +324,11 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         })
     }
 
-    fn expect_block(&mut self, diver: Diver, objective: impl Display) -> Option<BlockAst<'arena>> {
+    fn expect_block(
+        &mut self,
+        diver: Diver,
+        objective: impl fmt::Display,
+    ) -> Option<BlockAst<'arena>> {
         let token = self.expect_advance(LBrace, format_args!("expected block as {objective}"))?;
         self.block_low(diver, token.span)
     }
@@ -428,19 +432,19 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
         })))
     }
 
-    fn label(&mut self, objective: impl Display) -> Option<Option<IdentAst>> {
+    fn label(&mut self, objective: impl fmt::Display) -> Option<Option<IdentAst>> {
         self.try_advance(Dot)
             .map(|_| self.ident(format_args!("{objective} label")))
             .transpose()
     }
 
-    fn ident(&mut self, objective: impl Display) -> Option<IdentAst> {
+    fn ident(&mut self, objective: impl fmt::Display) -> Option<IdentAst> {
         let token =
             self.expect_advance(Ident, format_args!("expected identifier for {}", objective))?;
 
         Some(IdentAst {
             span: token.span,
-            ident: self.interner.intern(token.source),
+            ident: InternedStr::from_str(token.source),
         })
     }
 }
@@ -665,7 +669,7 @@ pub struct LitAst {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntLit([u8; mem::size_of::<u64>()]);
 
 impl IntLit {
@@ -685,22 +689,13 @@ pub enum LitKindAst {
     Bool(bool),
 }
 
-impl LitKindAst {
-    pub fn display<'a>(&'a self, intener: &'a StrInterner) -> impl Display + 'a {
-        struct DisplayLiteral<'a>(&'a LitKindAst, &'a StrInterner);
-
-        use std::fmt;
-        impl fmt::Display for DisplayLiteral<'_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self.0 {
-                    LitKindAst::Int(int) => write!(f, "{}", int.value()),
-                    LitKindAst::Str(str) => write!(f, "{}", &self.1[*str]),
-                    LitKindAst::Bool(bool) => write!(f, "{}", bool),
-                }
-            }
+impl fmt::Display for LitKindAst {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LitKindAst::Int(int) => write!(f, "{}", int.value()),
+            LitKindAst::Str(str) => write!(f, "{}", str),
+            LitKindAst::Bool(bool) => write!(f, "{}", bool),
         }
-
-        DisplayLiteral(self, intener)
     }
 }
 
@@ -746,7 +741,7 @@ mod test {
         function "|a, b = 10| a + b";
         function_call "foo(1, 2, 3)";
         method_call "foo.bar(1, 2, 3)";
-        struct_ctor "*{ a: 1, b, ..c }";
+        struct_ctor "*{ a: 1, b }";
         multy_statement "a: 1; b: 2; c: 3;";
         block "{ a: 1; b: 2; a + b }";
         field_access "foo.bar.baz.rar";
@@ -754,15 +749,5 @@ mod test {
         if_expr "if cond {then} else {else_}";
         loop_expr "loop.label {body}";
         for_each "for.label var in iter body";
-        some_code "
-            enumerate: |iter| *{
-                counter: 0,
-                inner: iter,
-                next: |self| self.inner.next().map(|x| {
-                    self.counter += 1;
-                    *(self.counter - 1, x)
-                }),
-            }
-        ";
     }
 }

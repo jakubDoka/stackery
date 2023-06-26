@@ -1,7 +1,7 @@
 use std::{future::Future, io};
 
 use crate::{BitSet, Diagnostics, FileRef, Files, PoolStore, Ref, Slice, VecStore};
-use mini_alloc::{FnvHashMap, InternedStr, StrInterner};
+use mini_alloc::{FnvHashMap, InternedStr};
 
 mod loader_impl;
 
@@ -63,7 +63,7 @@ pub struct Modules {
 }
 
 impl Modules {
-    pub(crate) fn name_of(&self, module: ModuleRef) -> InternedStr {
+    pub(crate) fn name_of(&self, module: ModuleRef) -> &InternedStr {
         let module = &self.eintities[module];
         self.files[module.file].name()
     }
@@ -102,13 +102,12 @@ impl Modules {
         let module = &self.eintities[module];
         self.deps[module.deps]
             .iter()
-            .map(move |&m| (self.name_of(m), m))
+            .map(move |&m| (self.name_of(m).clone(), m))
     }
 }
 
 pub struct LoaderCtx<'a> {
     pub files: &'a mut Files,
-    pub interner: &'a StrInterner,
 }
 
 pub trait Loader {
@@ -123,7 +122,6 @@ pub trait Loader {
 pub struct ModuleLoader<'a, L: Loader> {
     loader: &'a mut L,
     modules: &'a mut Modules,
-    interner: &'a mut StrInterner,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -131,13 +129,11 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
     pub fn new(
         loader: &'a mut L,
         modules: &'a mut Modules,
-        interner: &'a mut StrInterner,
         diagnostics: &'a mut Diagnostics,
     ) -> Self {
         Self {
             loader,
             modules,
-            interner,
             diagnostics,
         }
     }
@@ -145,7 +141,6 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
 #[cfg(test)]
 pub mod test_util {
-    use async_timer::oneshot::Oneshot;
     use std::{collections::HashMap, future::Future};
 
     use crate::{File, FileRef, Loader, LoaderCtx};
@@ -185,8 +180,46 @@ pub mod test_util {
             let delay_ms = self.delay_ms;
             let fut = self.inner.load(ctx, from, id);
             async move {
-                async_timer::oneshot::Timer::new(std::time::Duration::from_millis(delay_ms as u64))
-                    .await;
+                struct Timer {
+                    spawn_time: std::time::Instant,
+                    duration: std::time::Duration,
+                    started: bool,
+                }
+                impl Timer {
+                    fn new(duration: std::time::Duration) -> Self {
+                        Self {
+                            spawn_time: std::time::Instant::now(),
+                            duration,
+                            started: false,
+                        }
+                    }
+                }
+                impl Future for Timer {
+                    type Output = ();
+
+                    fn poll(
+                        mut self: std::pin::Pin<&mut Self>,
+                        cx: &mut std::task::Context<'_>,
+                    ) -> std::task::Poll<Self::Output> {
+                        if !self.started {
+                            self.started = true;
+                            let waker = cx.waker().clone();
+                            let duration = self.duration;
+                            std::thread::spawn(move || {
+                                std::thread::sleep(duration);
+                                waker.wake_by_ref();
+                            });
+                            return std::task::Poll::Pending;
+                        }
+
+                        if self.spawn_time.elapsed() < self.duration {
+                            return std::task::Poll::Pending;
+                        }
+
+                        std::task::Poll::Ready(())
+                    }
+                }
+                Timer::new(std::time::Duration::from_millis(delay_ms as u64)).await;
                 fut.await
             }
         }
@@ -223,7 +256,7 @@ pub mod test_util {
                 return Ok(file);
             }
 
-            let id_str = &ctx.interner[id];
+            let id_str = id.as_str();
 
             let &source = self.modules.get(id_str).ok_or_else(|| {
                 std::io::Error::new(
@@ -232,7 +265,7 @@ pub mod test_util {
                 )
             })?;
 
-            let file = File::new(id, source.to_owned());
+            let file = File::new(id.clone(), source.to_owned());
             let file = ctx.files.add(file);
 
             self.loaded.insert(id, file);

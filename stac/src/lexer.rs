@@ -299,8 +299,8 @@ mod test {
     #[test]
     fn all_tokens() {
         let code = "
-            if else loop break continue ret for in unknown true false
-            . .. , ; : |{ *{ { } [ ] *( ( )
+            if else loop break continue ret for in unknown true false self
+            . .. , ; : |{ *{ { } [ ] ( )
             ident
             $meta_ident
             :{import}

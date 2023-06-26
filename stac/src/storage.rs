@@ -741,6 +741,6 @@ mod test {
         assert!(to_reserve
             .array_windows()
             .all(|[a, b]| a.range().end == b.range().start));
-        assert!(to_reserve.iter().all(|&r| dbg!(&vec[r]) == &[1, 2, 3, 4]));
+        assert!(to_reserve.iter().all(|&r| &vec[r] == &[1, 2, 3, 4]));
     }
 }

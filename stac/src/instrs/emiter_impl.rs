@@ -1,6 +1,5 @@
 use std::ops::{Index, IndexMut, Range};
 
-use instrs::SubScope;
 use mini_alloc::{FnvHashMap, InternedStr};
 
 use crate::{
@@ -82,7 +81,6 @@ impl<'a> InstrEmiter<'a> {
             let Some(ast) = Parser::new(
                 self.modules.files(),
                 self.modules.module_file(module),
-                self.interner,
                 self.diags,
                 &arena,
                 &mut res.string_parser,
@@ -130,7 +128,6 @@ impl<'a> InstrEmiter<'a> {
                 inner: self.instrs.func_meta.builder(),
                 entities: &mut module_meta,
                 modules: self.modules,
-                interner: self.interner,
                 diags: self.diags,
                 res,
                 func_stack: &mut func_stack,
@@ -154,7 +151,7 @@ impl<'a> InstrEmiter<'a> {
     ) -> ScopeFrame {
         let frame = res.decl_scope.start_frame();
 
-        entities.items.sort_unstable_by_key(|item| item.name);
+        entities.items.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
         for group in entities
             .items
@@ -172,14 +169,9 @@ impl<'a> InstrEmiter<'a> {
             }
         }
 
-        for &item in entities.items.iter() {
+        for item in entities.items.iter() {
             res.decl_scope.push(instrs::SymData {
-                name: item.name,
-                sub_scope: match item.kind {
-                    InstrItemKind::Func(..) => SubScope::None,
-                    InstrItemKind::Import(module) => SubScope::Module(module),
-                },
-                in_decaration: true,
+                name: item.name.clone(),
             });
         }
 
@@ -194,9 +186,9 @@ impl<'a> InstrEmiter<'a> {
         entities: &mut InstrModuleMetaBuilder,
     ) -> Vec<FuncStackTask<'arena>> {
         let mut funcs = Vec::with_capacity(items.len());
-        for &item in items {
+        for item in items {
             let NamedExprAst { name, expr } = match item {
-                ExprAst::Unit(UnitAst::Decl(&n)) => n,
+                ExprAst::Unit(UnitAst::Decl(n)) => n,
                 expr => {
                     diags
                         .builder(files)
@@ -207,7 +199,7 @@ impl<'a> InstrEmiter<'a> {
             };
 
             let kind = match expr {
-                ExprAst::Unit(UnitAst::Func(&func)) => {
+                ExprAst::Unit(UnitAst::Func(func)) => {
                     let func_ref = entities.funcs.push(Func::default());
 
                     funcs.push(FuncStackTask {
@@ -218,7 +210,7 @@ impl<'a> InstrEmiter<'a> {
                     InstrItemKind::Func(func_ref)
                 }
                 ExprAst::Unit(UnitAst::Import(module)) => {
-                    let Some(module) = res.modules.iter().find_map(|&(name, id)| (name == module.ident).then_some(id)) else {
+                    let Some(module) = res.modules.iter().find_map(|&(ref name, id)| (name == &module.ident).then_some(id)) else {
                         diags
                             .builder(files)
                             .footer(Severty::Error, "module not found")
@@ -239,7 +231,7 @@ impl<'a> InstrEmiter<'a> {
             };
 
             entities.items.push(InstrItem {
-                name: name.ident,
+                name: name.ident.clone(),
                 kind,
                 span: name.span,
             });
@@ -250,7 +242,7 @@ impl<'a> InstrEmiter<'a> {
 
 struct FuncStackTask<'a> {
     id: FuncRef,
-    func: FuncAst<'a>,
+    func: &'a FuncAst<'a>,
     scope_snapshot: ScopeSnapshot<SymData>,
 }
 
@@ -258,7 +250,6 @@ struct FuncBuilder<'a, 'arena, 'ctx> {
     inner: FuncMetaBuilder<'a>,
     entities: &'a mut InstrModuleMetaBuilder<'ctx>,
     modules: &'a Modules,
-    interner: &'a StrInterner,
     diags: &'a mut Diagnostics,
     res: &'a mut InstrEmiterRes,
     func_stack: &'a mut Vec<FuncStackTask<'arena>>,
@@ -268,13 +259,21 @@ struct FuncBuilder<'a, 'arena, 'ctx> {
 }
 
 impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
-    fn build_func(mut self, FuncAst { args, body, pipe }: FuncAst<'arena>, into: FuncRef) {
+    fn build_func(
+        mut self,
+        &FuncAst {
+            args,
+            ref body,
+            pipe,
+        }: &'arena FuncAst<'arena>,
+        into: FuncRef,
+    ) {
         let scope = self.res.decl_scope.start_frame();
 
         for arg in args {
             self.res
                 .decl_scope
-                .push(instrs::SymData::new(arg.name.ident));
+                .push(instrs::SymData::new(arg.name.ident.clone()));
         }
 
         self.expr(body);
@@ -295,97 +294,97 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         func.arg_count = args.len().try_into().unwrap();
     }
 
-    fn expr(&mut self, expr: ExprAst<'arena>) -> Option<()> {
+    fn expr(&mut self, expr: &'arena ExprAst<'arena>) -> Option<()> {
         match expr {
             ExprAst::Unit(u) => self.unit(u),
-            ExprAst::Binary(&b) => self.binary(b),
+            &ExprAst::Binary(b) => self.binary(b),
         }
     }
 
-    fn unit(&mut self, unit: UnitAst<'arena>) -> Option<()> {
+    fn unit(&mut self, unit: &'arena UnitAst<'arena>) -> Option<()> {
         match unit {
-            UnitAst::Literal(l) => Some(self.literal(l)),
-            UnitAst::Ident(i) => Some(self.ident(i)),
-            UnitAst::Import(i) => Some(self.import(i)),
-            UnitAst::Block(&b) => self.block(b),
-            UnitAst::Unary(&u) => self.unary(u),
-            UnitAst::Array { bracket, elems } => self.array(bracket, elems),
-            UnitAst::FilledArray(&fa) => self.filled_array(fa),
-            UnitAst::Struct { keyword, fields } => self.struct_(keyword, fields),
-            UnitAst::Enum(&e) => self.enum_(e),
-            UnitAst::Call(&c) => self.call(c),
-            UnitAst::Func(&f) => Some(self.func(f)),
-            UnitAst::Decl(&d) => self.decl(d),
-            UnitAst::Loop(&l) => self.loop_(l),
-            UnitAst::Index(&i) => self.index(i),
+            UnitAst::Literal(ref l) => Some(self.literal(l)),
+            UnitAst::Ident(ref i) => Some(self.ident(i)),
+            UnitAst::Import(ref i) => Some(self.import(i)),
+            UnitAst::Block(b) => self.block(b),
+            UnitAst::Unary(u) => self.unary(u),
+            &UnitAst::Array { bracket, elems } => self.array(bracket, elems),
+            UnitAst::FilledArray(fa) => self.filled_array(fa),
+            &UnitAst::Struct { keyword, fields } => self.struct_(keyword, fields),
+            UnitAst::Enum(e) => self.enum_(e),
+            UnitAst::Call(c) => self.call(c),
+            UnitAst::Func(f) => Some(self.func(f)),
+            UnitAst::Decl(d) => self.decl(d),
+            UnitAst::Loop(l) => self.loop_(l),
+            UnitAst::Index(i) => self.index(i),
             UnitAst::ForLoop(..) => todo!(),
-            UnitAst::Break(&b) => self.break_(b)?,
+            UnitAst::Break(b) => self.break_(b)?,
             UnitAst::Continue(c) => self.continue_(c)?,
-            UnitAst::Field(&f) => self.field(f),
-            UnitAst::If(&i) => self.if_(i),
-            UnitAst::Ret { value, keyword } => self.ret(value.copied(), keyword),
-            UnitAst::Paren(p) => self.expr(*p),
+            UnitAst::Field(f) => self.field(f),
+            UnitAst::If(i) => self.if_(i),
+            &UnitAst::Ret { value, keyword } => self.ret(value, keyword),
+            UnitAst::Paren(p) => self.expr(p),
             UnitAst::Unknown(u) => Some(self.unknown(u)),
             UnitAst::Self_(s) => Some(self.self_(s)),
         }
     }
 
-    fn literal(&mut self, LitAst { kind, span }: LitAst) {
+    fn literal(&mut self, LitAst { kind, span }: &'arena LitAst) {
         let &mut lit = self
             .res
             .used_consts
-            .entry(kind)
-            .or_insert_with(|| self.inner.consts.push(kind));
+            .entry(kind.clone())
+            .or_insert_with(|| self.inner.consts.push(kind.clone()));
 
-        self.add_instr(InstrKind::Const(lit), span);
+        self.add_instr(InstrKind::Const(lit), *span);
     }
 
-    fn ident(&mut self, IdentAst { ident, span }: IdentAst) {
-        let instr = match self.res.decl_scope.resolve(ident) {
+    fn ident(&mut self, IdentAst { ident, span }: &'arena IdentAst) {
+        let instr = match self.res.decl_scope.resolve(&ident) {
             Some(sym) => InstrKind::Sym(sym),
             None => {
                 self.diags
-                    .builder(self.modules.files(), self.interner)
+                    .builder(self.modules.files())
                     .footer(Severty::Error, "symbol not found")
-                    .annotation(Severty::Error, span, "requested here");
+                    .annotation(Severty::Error, *span, "requested here");
                 InstrKind::Error
             }
         };
 
-        self.add_instr(instr, span);
+        self.add_instr(instr, *span);
     }
 
-    fn import(&mut self, IdentAst { ident, span }: IdentAst) {
+    fn import(&mut self, IdentAst { ident, span }: &'arena IdentAst) {
         let module = self
             .res
             .modules
             .iter()
-            .find_map(|&(name, module)| (name == ident).then_some(module));
+            .find_map(|&(ref name, module)| (name == ident).then_some(module));
         let instr = match module {
             Some(instr) => InstrKind::Mod(instr),
             None => {
                 self.diags
-                    .builder(self.modules.files(), self.interner)
+                    .builder(self.modules.files())
                     .footer(Severty::Error, "module not found")
-                    .annotation(Severty::Error, span, "requested here");
+                    .annotation(Severty::Error, *span, "requested here");
                 InstrKind::Error
             }
         };
 
-        self.add_instr(instr, span);
+        self.add_instr(instr, *span);
     }
 
     fn block(
         &mut self,
-        BlockAst {
+        &BlockAst {
             exprs,
             trailing_semi,
             brace,
-        }: BlockAst<'arena>,
+        }: &'arena BlockAst<'arena>,
     ) -> Option<()> {
         let scope = self.res.decl_scope.start_frame();
 
-        for &expr in exprs {
+        for expr in exprs {
             self.expr(expr)?;
             if !matches!(
                 self.inner.instrs.last().map(|i| i.kind),
@@ -404,13 +403,13 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn unary(&mut self, UnaryAst { op, expr }: UnaryAst<'arena>) -> Option<()> {
+    fn unary(&mut self, UnaryAst { op, expr }: &'arena UnaryAst<'arena>) -> Option<()> {
         self.unit(expr)?;
         self.add_instr(InstrKind::Unary(op.kind), op.span);
         Some(())
     }
 
-    fn array(&mut self, bracket: Span, elems: &[ExprAst<'arena>]) -> Option<()> {
+    fn array(&mut self, bracket: Span, elems: &'arena [ExprAst<'arena>]) -> Option<()> {
         self.expr_list(elems)?;
         self.add_instr(
             InstrKind::Array {
@@ -423,16 +422,16 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn filled_array(
         &mut self,
-        FilledArrayAst { expr, len, bracket }: FilledArrayAst<'arena>,
+        &FilledArrayAst {
+            ref expr,
+            ref len,
+            bracket,
+        }: &'arena FilledArrayAst<'arena>,
     ) -> Option<()> {
         self.expr(expr)?;
-        let len = self.array_len_folder.fold(
-            len,
-            ConstFoldCtx {
-                interner: self.interner,
-                diags: self.diags,
-            },
-        );
+        let len = self
+            .array_len_folder
+            .fold(len, ConstFoldCtx { diags: self.diags });
         let len_const = self
             .inner
             .consts
@@ -441,8 +440,8 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn struct_(&mut self, keyword: Span, fields: &[StructFieldAst<'arena>]) -> Option<()> {
-        for &field in fields {
+    fn struct_(&mut self, keyword: Span, fields: &'arena [StructFieldAst<'arena>]) -> Option<()> {
+        for field in fields {
             self.sturct_field(field)?;
         }
 
@@ -452,14 +451,14 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn sturct_field(&mut self, field: StructFieldAst<'arena>) -> Option<()> {
+    fn sturct_field(&mut self, field: &'arena StructFieldAst<'arena>) -> Option<()> {
         let (instr, span) = match field {
             StructFieldAst::Decl(NamedExprAst {
                 name: name_ident,
                 expr,
             }) => {
                 self.expr(expr)?;
-                let name = self.intern_ident(name_ident.ident);
+                let name = self.intern_ident(&name_ident.ident);
                 (
                     InstrKind::StructField {
                         name,
@@ -469,7 +468,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
                 )
             }
             StructFieldAst::Inline(name_ident) => {
-                let name = self.intern_ident(name_ident.ident);
+                let name = self.intern_ident(&name_ident.ident);
                 (
                     InstrKind::StructField {
                         name,
@@ -487,16 +486,16 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn enum_(
         &mut self,
-        EnumAst {
-            name,
-            value,
+        &EnumAst {
+            ref name,
+            ref value,
             keyword,
-        }: EnumAst<'arena>,
+        }: &'arena EnumAst<'arena>,
     ) -> Option<()> {
         if let Some(value) = value {
             self.expr(value)?;
         }
-        let name = self.intern_ident(name.ident);
+        let name = self.intern_ident(&name.ident);
         self.add_instr(
             InstrKind::Enum {
                 name,
@@ -508,7 +507,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn call(&mut self, CallAst { caller, args }: CallAst<'arena>) -> Option<()> {
+    fn call(&mut self, &CallAst { ref caller, args }: &'arena CallAst<'arena>) -> Option<()> {
         self.unit(caller)?;
         self.expr_list(args)?;
         let arg_count = args.len().try_into().unwrap();
@@ -516,7 +515,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn func(&mut self, func: FuncAst<'arena>) {
+    fn func(&mut self, func: &'arena FuncAst<'arena>) {
         let func_ref = self.entities.funcs.push(Default::default());
         self.func_stack.push(FuncStackTask {
             id: func_ref,
@@ -526,23 +525,25 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         self.add_instr(InstrKind::Func(func_ref), func.pipe);
     }
 
-    fn decl(&mut self, NamedExprAst { name, expr }: NamedExprAst<'arena>) -> Option<()> {
-        let sym = self.res.decl_scope.push(SymData::decl(name.ident));
+    fn decl(&mut self, NamedExprAst { name, expr }: &'arena NamedExprAst<'arena>) -> Option<()> {
+        self.res.decl_scope.push(SymData::new(name.ident.clone()));
         self.expr(expr)?;
-        self.res.decl_scope[sym].in_decaration = false;
         self.add_instr(InstrKind::Decl, name.span);
         Some(())
     }
 
     fn loop_(
         &mut self,
-        LoopAst {
-            label,
-            body,
+        &LoopAst {
+            ref label,
+            ref body,
             keyword,
-        }: LoopAst<'arena>,
+        }: &'arena LoopAst<'arena>,
     ) -> Option<()> {
-        let label = label.map(|label| label.ident).unwrap_or_default();
+        let label = label
+            .as_ref()
+            .map(|label| label.ident.clone())
+            .unwrap_or_default();
 
         let offset = self.current_offset();
         let dest = self.add_instr(InstrKind::BackJumpDest { used: false }, keyword);
@@ -588,7 +589,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         is_finite.then_some(())
     }
 
-    fn index(&mut self, IndexAst { expr, index }: IndexAst<'arena>) -> Option<()> {
+    fn index(&mut self, IndexAst { expr, index }: &'arena IndexAst<'arena>) -> Option<()> {
         self.unit(expr)?;
         self.expr(index)?;
         self.add_instr(InstrKind::Index, expr.span());
@@ -597,11 +598,11 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn break_(
         &mut self,
-        BreakAst {
-            label,
-            expr,
+        &BreakAst {
+            ref label,
+            ref expr,
             keyword,
-        }: BreakAst<'arena>,
+        }: &'arena BreakAst<'arena>,
     ) -> Option<!> {
         let Some(label) = self.find_loop(label, keyword) else {
             return None;
@@ -620,7 +621,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         None
     }
 
-    fn continue_(&mut self, ContinueAst { label, keyword }: ContinueAst) -> Option<!> {
+    fn continue_(&mut self, &ContinueAst { ref label, keyword }: &'arena ContinueAst) -> Option<!> {
         let Some(label) = self.find_loop(label, keyword) else {
             return None;
         };
@@ -646,13 +647,14 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         None
     }
 
-    fn find_loop(&mut self, label: Option<IdentAst>, keyword: Span) -> Option<Loop> {
-        let label = label.map(|label| label.ident).unwrap_or_default();
-        let res = self.res.loop_scope.resolve(label);
+    fn find_loop(&mut self, label: &Option<IdentAst>, keyword: Span) -> Option<Loop> {
+        let default = InternedStr::default();
+        let label = label.as_ref().map(|label| &label.ident).unwrap_or(&default);
+        let res = self.res.loop_scope.resolve(&label);
 
         if res.is_none() {
             self.diags
-                .builder(self.modules.files(), self.interner)
+                .builder(self.modules.files())
                 .footer(Severty::Error, "control flow does not have a matching loop")
                 .annotation(Severty::Error, keyword, "this");
             self.add_instr(InstrKind::Error, keyword);
@@ -663,37 +665,39 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
 
     fn field(
         &mut self,
-        FieldAst {
-            expr,
+        &FieldAst {
+            ref expr,
             name:
                 FieldIdentAst {
-                    ident,
+                    ref ident,
                     is_meta,
                     span,
                 },
-        }: FieldAst<'arena>,
+        }: &'arena FieldAst<'arena>,
     ) -> Option<()> {
         self.unit(expr)?;
-        let name = self.intern_ident(ident);
+        let name = self.intern_ident(&ident);
         self.add_instr(InstrKind::Field { name, is_meta }, span);
         Some(())
     }
 
     fn if_(
         &mut self,
-        IfAst {
-            cond,
-            then,
-            else_,
+        &IfAst {
+            ref cond,
+            ref then,
+            ref else_,
             keyword,
-        }: IfAst<'arena>,
+        }: &'arena IfAst<'arena>,
     ) -> Option<()> {
         self.expr(cond)?;
 
         let if_ = self.add_instr(InstrKind::Error, keyword);
         let then_terminated = self.block(then).is_none();
 
-        let else_addr = else_.map(|else_| (else_, self.add_instr(InstrKind::Error, else_.brace)));
+        let else_addr = else_
+            .as_ref()
+            .map(|else_| (else_, self.add_instr(InstrKind::Error, else_.brace)));
 
         self.inner.instrs[if_].kind = InstrKind::Jump {
             to: self.current_offset(),
@@ -715,7 +719,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn ret(&mut self, expr: Option<ExprAst<'arena>>, keyword: Span) -> Option<()> {
+    fn ret(&mut self, expr: Option<&'arena ExprAst<'arena>>, keyword: Span) -> Option<()> {
         if let Some(expr) = expr {
             self.expr(expr)?;
         }
@@ -729,35 +733,35 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         None
     }
 
-    fn unknown(&mut self, keyword: Span) {
-        self.add_instr(InstrKind::Unkown, keyword);
+    fn unknown(&mut self, keyword: &Span) {
+        self.add_instr(InstrKind::Unkown, *keyword);
     }
 
-    fn self_(&mut self, keyword: Span) {
-        self.add_instr(InstrKind::Self_, keyword);
+    fn self_(&mut self, keyword: &Span) {
+        self.add_instr(InstrKind::Self_, *keyword);
     }
 
-    fn expr_list(&mut self, exprs: &[ExprAst<'arena>]) -> Option<()> {
-        for &expr in exprs {
+    fn expr_list(&mut self, exprs: &'arena [ExprAst<'arena>]) -> Option<()> {
+        for expr in exprs {
             self.expr(expr)?;
         }
 
         Some(())
     }
 
-    fn binary(&mut self, BinaryAst { op, lhs, rhs }: BinaryAst<'arena>) -> Option<()> {
+    fn binary(&mut self, BinaryAst { op, lhs, rhs }: &'arena BinaryAst<'arena>) -> Option<()> {
         self.expr(lhs)?;
         self.expr(rhs)?;
         self.add_instr(InstrKind::Binary(op.kind), op.span);
         Some(())
     }
 
-    fn intern_ident(&mut self, ident: InternedStr) -> Ident {
+    fn intern_ident(&mut self, ident: &InternedStr) -> Ident {
         *self
             .res
             .used_idents
-            .entry(ident)
-            .or_insert_with(|| self.inner.idents.push(ident))
+            .entry(ident.clone())
+            .or_insert_with(|| self.inner.idents.push(ident.clone()))
     }
 
     fn current_offset(&self) -> InstrIndex {
@@ -849,20 +853,14 @@ impl<T> Scope<T> {
         self.vec.push(sym)
     }
 
-    fn resolve(&self, name: T::Key) -> Option<Ref<T, InstrIndex>>
+    fn resolve(&self, name: &T::Key) -> Option<Ref<T, InstrIndex>>
     where
         T: ScopeItem,
     {
-        let mut iter = self.vec.iter().rev();
-        while let Some((id, item)) = iter.next() {
-            if item.key() == name {
-                return Some(id);
-            }
-
-            iter.advance_by(item.skip_wight()).unwrap();
-        }
-
-        None
+        self.vec
+            .iter()
+            .rev()
+            .find_map(|(index, item)| (item.key() == name).then_some(index))
     }
 
     fn pop(&mut self) -> T {
@@ -920,39 +918,28 @@ type ScopeSnapshot<T> = Vec<T>;
 pub(super) struct ScopeFrame(usize);
 
 trait ScopeItem {
-    type Key: Eq + Copy;
-    fn key(&self) -> Self::Key;
-    fn skip_wight(&self) -> usize {
-        0
-    }
+    type Key: Eq;
+    fn key(&self) -> &Self::Key;
 }
 
 impl ScopeItem for LoopData {
     type Key = InternedStr;
 
-    fn key(&self) -> Self::Key {
-        self.label
+    fn key(&self) -> &Self::Key {
+        &self.label
     }
 }
 
 impl ScopeItem for SymData {
     type Key = InternedStr;
 
-    fn key(&self) -> Self::Key {
-        self.name
-    }
-
-    fn skip_wight(&self) -> usize {
-        match self.sub_scope {
-            SubScope::Module(..) | SubScope::None => 0,
-            SubScope::Struct { length } => length as usize,
-        }
+    fn key(&self) -> &Self::Key {
+        &self.name
     }
 }
 
 #[cfg(test)]
 mod test {
-    use mini_alloc::StrInterner;
     use pollster::FutureExt;
 
     use crate::{
@@ -965,15 +952,15 @@ mod test {
     struct ArrayLenFolderMock;
 
     impl ArrayLenFolder for ArrayLenFolderMock {
-        fn fold(&mut self, expr: ExprAst, mut ctx: crate::ConstFoldCtx) -> usize {
+        fn fold(&mut self, expr: &ExprAst, mut ctx: crate::ConstFoldCtx) -> usize {
             match expr {
                 ExprAst::Unit(UnitAst::Literal(LitAst {
                     kind: LitKindAst::Int(i),
                     ..
                 })) => i.value() as usize,
                 ExprAst::Binary(BinaryAst { lhs, rhs, op }) => {
-                    let lhs = self.fold(*lhs, ctx.stack_borrow());
-                    let rhs = self.fold(*rhs, ctx);
+                    let lhs = self.fold(lhs, ctx.stack_borrow());
+                    let rhs = self.fold(rhs, ctx);
                     match op.kind {
                         OpCode::Add => lhs + rhs,
                         OpCode::Sub => lhs - rhs,
@@ -993,11 +980,10 @@ mod test {
 
         let mut diagnostics = Diagnostics::default();
         let mut modules = Modules::default();
-        let mut interner = StrInterner::default();
 
-        let root = interner.intern("root");
+        let root = "root".into();
 
-        let meta = ModuleLoader::new(&mut loader, &mut modules, &mut interner, &mut diagnostics)
+        let meta = ModuleLoader::new(&mut loader, &mut modules, &mut diagnostics)
             .update(root)
             .block_on();
 
@@ -1019,7 +1005,6 @@ mod test {
         InstrEmiter::new(
             &mut instrs,
             &mut modules,
-            &mut interner,
             &mut diagnostics,
             &mut array_len_folder,
         )
@@ -1035,24 +1020,24 @@ mod test {
             let module_name = modules.name_of(module);
             let instr_module = &instrs.modules[module];
             ctx.push_str("  ");
-            ctx.push_str(&interner[module_name]);
+            ctx.push_str(&module_name);
             ctx.push_str(":\n");
 
             let meta_view = instrs.module_meta.view(instr_module.meta);
             for item in meta_view.items {
                 ctx.push_str("    ");
-                ctx.push_str(&interner[item.name]);
+                ctx.push_str(&item.name);
 
                 match item.kind {
                     InstrItemKind::Func(func) => {
                         ctx.push_str(":\n");
                         let func = &meta_view.funcs[func];
                         let func_meta_view = instrs.func_meta.view(func.meta);
-                        format_instrs(func_meta_view, ctx, "  ", &interner);
+                        format_instrs(func_meta_view, ctx, "  ");
                     }
                     InstrItemKind::Import(module) => {
                         ctx.push_str(": :{");
-                        ctx.push_str(&interner[modules.name_of(module)]);
+                        ctx.push_str(modules.name_of(module));
                         ctx.push_str("}\n");
                     }
                 }

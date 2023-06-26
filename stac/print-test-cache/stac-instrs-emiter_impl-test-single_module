@@ -1,10 +1,5 @@
 instrs:
   root:
-    main:
-      sym1
-      const 1
-      const 1
-      call 2
     foo:
       sym2
       sym3
@@ -12,3 +7,8 @@ instrs:
       const 1
       binary +
       drop_decl 2
+    main:
+      sym0
+      const 1
+      const 1
+      call 2

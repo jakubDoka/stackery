@@ -1,13 +1,7 @@
 use crate::{BitSet, FuncMetaView, InstrKind};
-use mini_alloc::StrInterner;
 use std::fmt::Write;
 
-pub fn format_instrs(
-    func_meta: FuncMetaView,
-    ctx: &mut String,
-    prefix: &str,
-    interner: &StrInterner,
-) {
+pub fn format_instrs(func_meta: FuncMetaView, ctx: &mut String, prefix: &str) {
     let mut jump_targets = BitSet::with_capacity(func_meta.instrs.len());
     for &instr in func_meta.instrs {
         if let InstrKind::Jump { to, .. } = instr.kind {
@@ -31,26 +25,18 @@ pub fn format_instrs(
     }
 }
 
-fn format_instr(
-    instr: InstrKind,
-    func_meta: FuncMetaView,
-    ctx: &mut String,
-    interner: &StrInterner,
-) {
+fn format_instr(instr: InstrKind, func_meta: FuncMetaView, ctx: &mut String) {
     macro write($($arg:tt)*) {
         std::write!(ctx, $($arg)*).unwrap()
     }
 
     match instr {
-        InstrKind::Const(c) => write!("const {}", func_meta.consts[c].display(interner)),
+        InstrKind::Const(c) => write!("const {}", func_meta.consts[c]),
         InstrKind::Sym(i) => write!("sym{}", i.index()),
         InstrKind::Mod(i) => write!("mod{}", i.index()),
         InstrKind::Array { item_count } => write!("array{item_count}",),
         InstrKind::FilledArray { len_const } => {
-            write!(
-                "filled_array len_const {}",
-                func_meta.consts[len_const].display(interner)
-            )
+            write!("filled_array len_const {}", func_meta.consts[len_const])
         }
         InstrKind::Tuple { item_count } => write!("tuple{item_count}",),
         InstrKind::Struct { field_count } => write!("struct{field_count}",),

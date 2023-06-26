@@ -32,7 +32,7 @@ impl<'a> ConstFoldCtx<'a> {
 }
 
 pub trait ArrayLenFolder {
-    fn fold(&mut self, expr: ExprAst, ctx: ConstFoldCtx) -> usize;
+    fn fold(&mut self, expr: &ExprAst, ctx: ConstFoldCtx) -> usize;
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -129,33 +129,12 @@ pub struct FuncName {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SymData {
     name: InternedStr,
-    sub_scope: SubScope,
-    in_decaration: bool,
 }
 
 impl SymData {
     fn new(name: InternedStr) -> Self {
-        Self {
-            name,
-            sub_scope: SubScope::None,
-            in_decaration: false,
-        }
+        Self { name }
     }
-
-    fn decl(name: InternedStr) -> Self {
-        Self {
-            name,
-            sub_scope: SubScope::None,
-            in_decaration: true,
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum SubScope {
-    None,
-    Module(ModuleRef),
-    Struct { length: InstrIndex },
 }
 
 pub struct LoopData {

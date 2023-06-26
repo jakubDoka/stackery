@@ -1,29 +1,27 @@
 use std::fmt::Display;
 
-use mini_alloc::{ArenaScope, Diver, InternedStr, StrInterner};
+use mini_alloc::{ArenaScope, Diver, InternedStr};
 
 use crate::{Diagnostics, ExprAst, FileRef, Files, Lexer, Severty, Token, TokenKind, TokenKind::*};
 
 pub mod expr;
 pub mod fmt;
 
-pub struct Parser<'ctx, 'src, 'arena> {
+pub struct Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     files: &'src Files,
     next: Token<'src>,
     lexer: Lexer<'src>,
-    interner: &'ctx mut StrInterner,
     diags: &'ctx mut Diagnostics,
-    arena: &'arena ArenaScope<'arena>,
+    arena: &'arena ArenaScope<'arena_ctx>,
     string_parser: &'ctx mut StringParser,
 }
 
-impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
+impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     pub fn new(
         files: &'src Files,
         file: FileRef,
-        interner: &'ctx mut StrInterner,
         diags: &'ctx mut Diagnostics,
-        arena: &'arena ArenaScope<'arena>,
+        arena: &'arena ArenaScope<'arena_ctx>,
         string_parser: &'ctx mut StringParser,
     ) -> Self {
         let mut lexer = Lexer::new(files, file);
@@ -31,7 +29,6 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
             files,
             next: lexer.next_tok(),
             lexer,
-            interner,
             diags,
             arena,
             string_parser,
@@ -81,7 +78,7 @@ impl<'ctx, 'src, 'arena> Parser<'ctx, 'src, 'arena> {
     fn expect_advance(&mut self, pat: impl TokenPattern, msg: impl Display) -> Option<Token<'src>> {
         self.try_advance(pat.clone()).or_else(|| {
             self.diags
-                .builder(self.files, self.interner)
+                .builder(self.files)
                 .annotation(
                     Severty::Error,
                     self.next.span,
@@ -172,11 +169,7 @@ pub enum StringParseError {
 }
 
 impl StringParser {
-    pub fn parse(
-        &mut self,
-        source: &str,
-        interner: &mut StrInterner,
-    ) -> Result<InternedStr, StringParseError> {
+    pub fn parse(&mut self, source: &str) -> Result<InternedStr, StringParseError> {
         self.buffer.clear();
         let mut chars = source.char_indices();
         while let Some((_, c)) = chars.next() {
@@ -197,6 +190,6 @@ impl StringParser {
                 _ => self.buffer.push(c),
             }
         }
-        Ok(interner.intern(&self.buffer))
+        Ok(InternedStr::from_str(&self.buffer))
     }
 }
