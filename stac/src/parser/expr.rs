@@ -1,6 +1,6 @@
 use std::{fmt, mem};
 
-use mini_alloc::{Diver, InternedStr};
+use mini_alloc::{Diver, IdentStr};
 
 use crate::{OpCode, Parser, Severty, Span, Token, TokenKind, TokenKind::*, TransposeOpt};
 
@@ -89,7 +89,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
             RParen => self.unex_tok(token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
-                ident: InternedStr::from_str(token.source),
+                ident: IdentStr::from_str(token.source),
             })),
             MetaIdent => self.unex_tok(token, "meta identifier can only be used as field")?,
             Import => Some(UnitAst::Import({
@@ -97,7 +97,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
                 IdentAst {
                     span: token.span,
-                    ident: InternedStr::from_str(source),
+                    ident: IdentStr::from_str(source),
                 }
             })),
             Str => self.str(token),
@@ -159,7 +159,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
                         _ => self.unex_tok(tok, "field can only be identifier or meta identifier")?,
                     };
 
-                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: InternedStr::from_str(source) };
+                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: IdentStr::from_str(source) };
                     UnitAst::Field(self.arena.alloc(FieldAst { expr, name }))
                 }
                 LParen => {
@@ -444,7 +444,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
         Some(IdentAst {
             span: token.span,
-            ident: InternedStr::from_str(token.source),
+            ident: IdentStr::from_str(token.source),
         })
     }
 }
@@ -685,7 +685,7 @@ impl IntLit {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LitKindAst {
     Int(IntLit),
-    Str(InternedStr),
+    Str(IdentStr),
     Bool(bool),
 }
 
@@ -701,14 +701,14 @@ impl fmt::Display for LitKindAst {
 
 #[derive(Debug, Clone)]
 pub struct FieldIdentAst {
-    pub ident: InternedStr,
+    pub ident: IdentStr,
     pub span: Span,
     pub is_meta: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct IdentAst {
-    pub ident: InternedStr,
+    pub ident: IdentStr,
     pub span: Span,
 }
 
@@ -720,7 +720,7 @@ mod test {
     fn perform_test(source_code: &str, ctx: &mut String) {
         let mut files = Files::new();
         let file = File::new("test".into(), source_code.into());
-        let file_id = files.add(file);
+        let file_id = files.push(file);
         let mut diags = Diagnostics::default();
         let mut arena = ArenaBase::new(1000);
         let scope = arena.scope();

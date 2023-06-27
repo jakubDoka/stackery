@@ -105,6 +105,36 @@ impl<K, R: RefRepr, V: Default> ShadowStore<K, R, V> {
             mem::transmute(&mut self[module])
         })
     }
+
+    pub(crate) fn retain(&mut self, mut predicate: impl FnMut(Ref<K, R>, &mut V) -> bool)
+    where
+        V: PartialEq,
+    {
+        let mut last_non_default = 0;
+
+        for (index, data) in self.data.iter_mut().enumerate() {
+            if data == &mut self.default {
+                continue;
+            }
+
+            if !predicate(Ref::new(index), data) {
+                *data = V::default();
+                continue;
+            }
+
+            last_non_default = index + 1;
+        }
+
+        self.data.truncate(last_non_default);
+    }
+
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.data.iter_mut()
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
+        self.data.iter()
+    }
 }
 
 impl<K, R, V: Default> Default for ShadowStore<K, R, V> {
@@ -725,6 +755,97 @@ impl BitSet {
     }
 }
 
+pub struct SubsTable<R: RefRepr> {
+    nodes: Vec<Node>,
+    parents: Vec<R>,
+}
+
+impl<R: RefRepr> SubsTable<R> {
+    pub fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            parents: Vec::new(),
+        }
+    }
+
+    pub fn clear_for(&mut self, len: usize) {
+        self.nodes.clear();
+        self.parents.clear();
+        if let Some(capacity) = len.checked_sub(1) {
+            self.ensure_valid_index(capacity);
+        }
+    }
+
+    pub fn join(&mut self, a: R, b: R) {
+        self.ensure_valid_index(a.into_usize().max(b.into_usize()));
+
+        let (root_a, root_b) = (self.compacted_root_of(a), self.compacted_root_of(b));
+
+        if root_a == root_b {
+            return;
+        }
+
+        let (sorted_root_a, souted_root_b) = (root_a.min(root_b), root_a.max(root_b));
+        let (sorted_root_a_index, sorted_root_b_index) =
+            (sorted_root_a.into_usize(), souted_root_b.into_usize());
+
+        let (left, right) = self.nodes.split_at_mut(sorted_root_b_index);
+        let (node_a, nb) = (&mut left[sorted_root_a_index], &mut right[0]);
+
+        match node_a.rank.cmp(&nb.rank) {
+            Ordering::Less => {
+                self.parents[sorted_root_a_index] = souted_root_b;
+            }
+            Ordering::Greater => {
+                self.parents[sorted_root_b_index] = sorted_root_a;
+            }
+            Ordering::Equal => {
+                self.parents[sorted_root_a_index] = souted_root_b;
+                nb.rank += 1;
+            }
+        }
+    }
+
+    pub fn are_joined(&mut self, a: R, b: R) -> bool {
+        self.root_of(a) == self.root_of(b)
+    }
+
+    pub fn root_of(&mut self, mut node: R) -> R {
+        loop {
+            let parent = self.parents[node.into_usize()];
+            if parent == node {
+                break node;
+            }
+            node = parent;
+        }
+    }
+
+    pub fn compacted_root_of(&mut self, mut node: R) -> R {
+        let root = self.root_of(node);
+        while node != root {
+            let parent = self.parents[node.into_usize()];
+            self.parents[node.into_usize()] = root;
+            node = parent;
+        }
+        root
+    }
+
+    pub fn ensure_valid_index(&mut self, index: usize) {
+        if unlikely(index >= self.nodes.len()) {
+            self.nodes.resize(index + 1, Node { rank: 0 });
+            let parent_indexes = (self.parents.len()..=index)
+                .map(R::try_from_usize)
+                .map(Result::unwrap);
+            self.parents.extend(parent_indexes);
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Node {
+    rank: u8,
+}
+
 #[cfg(test)]
 mod test {
     #[test]
@@ -742,5 +863,51 @@ mod test {
             .array_windows()
             .all(|[a, b]| a.range().end == b.range().start));
         assert!(to_reserve.iter().all(|&r| &vec[r] == &[1, 2, 3, 4]));
+    }
+
+    fn perform_subs_test(source: &str, ctx: &mut String) {
+        let mut subs = super::SubsTable::<u16>::new();
+
+        for line in source.lines() {
+            let mut iter = line
+                .split_whitespace()
+                .map(str::parse::<u16>)
+                .filter_map(Result::ok);
+            let Ok([a, b]) = iter.next_chunk() else {
+                continue;
+            };
+
+            subs.join(a, b);
+        }
+
+        let mut groups = (0..subs.nodes.len() as u16)
+            .map(|i| (subs.compacted_root_of(i), i))
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+
+        for group in groups.group_by(|a, b| a.0 == b.0) {
+            let group = group.iter().map(|(_, i)| i).collect::<Vec<_>>();
+            ctx.push_str(&format!("{group:?}\n"));
+        }
+    }
+
+    crate::print_cases! { perform_subs_test:
+        pair_and_disjoints "0 5";
+        pair "0 1";
+        self_ref "0 0";
+        two_groups "
+            0 3
+            1 2
+        ";
+        big_group "
+            0 3
+            1 2
+            0 1
+        ";
+        triplet "
+            0 1
+            2 3
+            4 5
+        ";
     }
 }

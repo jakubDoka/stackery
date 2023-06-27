@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::{Ref, Slice};
-use mini_alloc::InternedStr;
+use crate::{ModuleRef, Ref, Slice};
+use mini_alloc::IdentStr;
 
 mod unify_impl;
 
@@ -106,16 +106,18 @@ pub struct ParamType(u8);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Struct {
+    pub module: ModuleRef,
     pub fields: NamedTypes,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Enum {
+    pub module: ModuleRef,
     pub variants: NamedTypes,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NamedType {
-    pub name: InternedStr,
+    pub name: IdentStr,
     pub ty: Type,
 }

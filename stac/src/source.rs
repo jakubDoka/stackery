@@ -1,73 +1,29 @@
-use std::{
-    iter,
-    ops::{Index, IndexMut},
-};
+use std::iter;
 
-use mini_alloc::InternedStr;
+use mini_alloc::IdentStr;
 
 use crate::{PoolStore, Ref};
 
 type FileRefRepr = u16;
 pub type FileRef = Ref<File, FileRefRepr>;
-
-#[derive(Default)]
-pub struct Files {
-    files: PoolStore<File, FileRefRepr>,
-}
-
-impl Files {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn add(&mut self, file: File) -> FileRef {
-        self.files.push(file)
-    }
-
-    pub fn remove_file(&mut self, file: FileRef) -> File {
-        self.files.remove(file)
-    }
-
-    pub(crate) fn span_for_offset(&self, offset: usize, from: FileRef) -> Span {
-        self[from].span_for_offset(offset, from)
-    }
-
-    pub(crate) fn offset_for_span(&self, span: Span) -> usize {
-        self[span.file()].offset_for_span(span)
-    }
-}
-
-impl Index<FileRef> for Files {
-    type Output = File;
-
-    fn index(&self, index: FileRef) -> &Self::Output {
-        &self.files[index]
-    }
-}
-
-impl IndexMut<FileRef> for Files {
-    fn index_mut(&mut self, index: FileRef) -> &mut Self::Output {
-        &mut self.files[index]
-    }
-}
+pub type Files = PoolStore<File, FileRefRepr>;
 
 pub struct File {
-    name: InternedStr,
+    name: IdentStr,
     nline_offsets: Vec<u32>,
     source: String,
     modification_id: u64,
+    package: Option<FileRef>,
     is_dirty: bool,
 }
 
 impl File {
-    pub fn new(name: InternedStr, source: String) -> Self {
+    pub fn new(name: IdentStr, source: String) -> Self {
         Self::with_modification_id(name, source, 0)
     }
 
-    pub fn with_modification_id(name: InternedStr, source: String, modification_id: u64) -> Self {
-        let nline_offsets = iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, ..)| i as u32))
-            .collect::<Vec<_>>();
+    pub fn with_modification_id(name: IdentStr, source: String, modification_id: u64) -> Self {
+        let nline_offsets = Self::compute_nline_offsets(&source);
 
         assert!(
             nline_offsets.len() <= u16::MAX as usize,
@@ -79,15 +35,22 @@ impl File {
             nline_offsets,
             source,
             modification_id,
+            package: None,
             is_dirty: true,
         }
+    }
+
+    fn compute_nline_offsets(source: &str) -> Vec<u32> {
+        iter::once(0)
+            .chain(source.match_indices('\n').map(|(i, ..)| i as u32))
+            .collect::<Vec<_>>()
     }
 
     pub fn mark_clean(&mut self) {
         self.is_dirty = false;
     }
 
-    pub fn name(&self) -> &InternedStr {
+    pub fn name(&self) -> &IdentStr {
         &self.name
     }
 
@@ -101,19 +64,28 @@ impl File {
 
     pub fn update(&mut self, source: String, modification_id: u64) {
         self.source = source;
+        self.nline_offsets = Self::compute_nline_offsets(&self.source);
         self.modification_id = modification_id;
         self.is_dirty = true;
+    }
+
+    pub fn set_package(&mut self, package: FileRef) {
+        self.package = Some(package);
+    }
+
+    pub fn package(&self) -> Option<FileRef> {
+        self.package
     }
 
     pub fn is_dirty(&self) -> bool {
         self.is_dirty
     }
 
-    fn offset_for_span(&self, span: Span) -> usize {
+    pub fn offset_for_span(&self, span: Span) -> usize {
         self.nline_offsets[span.row as usize] as usize + span.col as usize
     }
 
-    fn span_for_offset(&self, pos: usize, this_ref: FileRef) -> Span {
+    pub fn span_for_offset(&self, pos: usize, this_ref: FileRef) -> Span {
         let row = self
             .nline_offsets
             .binary_search(&(pos as u32))

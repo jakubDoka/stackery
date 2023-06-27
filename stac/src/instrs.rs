@@ -1,7 +1,7 @@
-use mini_alloc::InternedStr;
+use mini_alloc::IdentStr;
 
 use crate::{
-    gen_storage_group, Diagnostics, ExprAst, LitKindAst, Module, ModuleRef, ModuleRefRepr, Modules,
+    gen_storage_group, Diagnostics, ExprAst, File, LitKindAst, ModuleRef, ModuleRefRepr, Modules,
     OpCode, Ref, ShadowStore, Slice, Span,
 };
 
@@ -15,7 +15,7 @@ pub type Const = Ref<LitKindAst, InstrIndex>;
 pub type Sym = Ref<SymData, InstrIndex>;
 pub type Loop = Ref<LoopData, InstrIndex>;
 pub type Import = ModuleRef;
-pub type Ident = Ref<InternedStr, InstrIndex>;
+pub type Ident = Ref<IdentStr, InstrIndex>;
 pub type FuncRef = Ref<Func, InstrIndex>;
 pub type InstrItems = Slice<InstrItem, FuncIndex>;
 pub type InstrRef = Ref<Instr, InstrIndex>;
@@ -69,7 +69,7 @@ gen_storage_group! {
     'a {
         instrs: Instr,
         consts: LitKindAst,
-        idents: InternedStr,
+        idents: IdentStr,
         called_funcs: FuncRef,
     }
 }
@@ -84,7 +84,7 @@ gen_storage_group! {
 
 #[derive(Default)]
 pub struct Instrs {
-    modules: ShadowStore<Module, ModuleRefRepr, InstrModule>,
+    modules: ShadowStore<File, ModuleRefRepr, InstrModule>,
     module_meta: InstrModuleMeta,
     func_meta: FuncMeta,
 }
@@ -109,7 +109,7 @@ pub struct InstrModule {
 
 #[derive(Clone)]
 pub struct InstrItem {
-    pub name: InternedStr,
+    pub name: IdentStr,
     pub kind: InstrItemKind,
     pub span: Span,
 }
@@ -123,22 +123,22 @@ pub enum InstrItemKind {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FuncName {
     pub module: ModuleRef,
-    pub name: InternedStr,
+    pub name: IdentStr,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct SymData {
-    name: InternedStr,
+    name: IdentStr,
 }
 
 impl SymData {
-    fn new(name: InternedStr) -> Self {
+    fn new(name: IdentStr) -> Self {
         Self { name }
     }
 }
 
 pub struct LoopData {
-    label: InternedStr,
+    label: IdentStr,
     offset: InstrIndex,
     break_frame: usize,
     dest: InstrRef,

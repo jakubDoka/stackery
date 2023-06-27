@@ -1,6 +1,6 @@
 use std::ops::{Index, IndexMut, Range};
 
-use mini_alloc::{FnvHashMap, InternedStr};
+use mini_alloc::{FnvHashMap, IdentStr};
 
 use crate::{
     instrs, ArrayLenFolder, BinaryAst, BlockAst, BreakAst, CallAst, Const, ConstFoldCtx,
@@ -15,12 +15,12 @@ use crate::{
 #[derive(Default)]
 struct InstrEmiterRes {
     used_consts: FnvHashMap<LitKindAst, Const>,
-    used_idents: FnvHashMap<InternedStr, Ident>,
+    used_idents: FnvHashMap<IdentStr, Ident>,
     decl_scope: Scope<SymData>,
     loop_scope: Scope<LoopData>,
     breaks: Vec<BreakData>,
     returns: Vec<RetData>,
-    modules: Vec<(InternedStr, ModuleRef)>,
+    modules: Vec<(IdentStr, ModuleRef)>,
     string_parser: StringParser,
 }
 
@@ -122,7 +122,8 @@ impl<'a> InstrEmiter<'a> {
 
             res.decl_scope.load_snapshot(scope_snapshot);
 
-            let base_source_offset = self.modules.files().offset_for_span(func.pipe);
+            let base_source_offset =
+                self.modules.files()[func.pipe.file()].offset_for_span(func.pipe);
             res.prepare_for_function();
             FuncBuilder {
                 inner: self.instrs.func_meta.builder(),
@@ -648,7 +649,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
     }
 
     fn find_loop(&mut self, label: &Option<IdentAst>, keyword: Span) -> Option<Loop> {
-        let default = InternedStr::default();
+        let default = IdentStr::default();
         let label = label.as_ref().map(|label| &label.ident).unwrap_or(&default);
         let res = self.res.loop_scope.resolve(&label);
 
@@ -756,7 +757,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         Some(())
     }
 
-    fn intern_ident(&mut self, ident: &InternedStr) -> Ident {
+    fn intern_ident(&mut self, ident: &IdentStr) -> Ident {
         *self
             .res
             .used_idents
@@ -773,7 +774,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
     }
 
     fn add_instr(&mut self, instr: InstrKind, span: Span) -> InstrRef {
-        let next_offset = self.modules.files().offset_for_span(span);
+        let next_offset = self.modules.files()[span.file()].offset_for_span(span);
         let incremental_offset = (next_offset as isize - self.last_source_offset as isize)
             .try_into()
             .unwrap();
@@ -923,7 +924,7 @@ trait ScopeItem {
 }
 
 impl ScopeItem for LoopData {
-    type Key = InternedStr;
+    type Key = IdentStr;
 
     fn key(&self) -> &Self::Key {
         &self.label
@@ -931,7 +932,7 @@ impl ScopeItem for LoopData {
 }
 
 impl ScopeItem for SymData {
-    type Key = InternedStr;
+    type Key = IdentStr;
 
     fn key(&self) -> &Self::Key {
         &self.name

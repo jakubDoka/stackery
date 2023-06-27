@@ -50,8 +50,8 @@ pub use {
     },
     lexer::{ImportLexer, Lexer, OpCode, Token, TokenKind},
     loader::{
-        Loader, LoaderCtx, Module, ModuleDeps, ModuleLoader, ModuleMeta, ModuleRef, ModuleRefRepr,
-        Modules,
+        is_visible, Loader, LoaderCtx, Module, ModuleDeps, ModuleLoader, ModuleMeta, ModuleRef,
+        ModuleRefRepr, Modules, Vis, VisError,
     },
     parser::{
         expr::{
@@ -66,7 +66,8 @@ pub use {
     source::{File, FileRef, Files, Span},
     storage::{
         refs::{Ref, RefRepr, Slice},
-        BitSet, PoolStore, ShadowStore, VecSlice, VecSliceView, VecStore, VecStoreBuilder,
+        BitSet, PoolStore, ShadowStore, SubsTable, VecSlice, VecSliceView, VecStore,
+        VecStoreBuilder,
     },
     temp_mem::{TempMem, TempMemBase},
     types::{

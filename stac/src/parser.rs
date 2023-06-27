@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use mini_alloc::{ArenaScope, Diver, InternedStr};
+use mini_alloc::{ArenaScope, Diver, IdentStr};
 
 use crate::{Diagnostics, ExprAst, FileRef, Files, Lexer, Severty, Token, TokenKind, TokenKind::*};
 
@@ -169,7 +169,7 @@ pub enum StringParseError {
 }
 
 impl StringParser {
-    pub fn parse(&mut self, source: &str) -> Result<InternedStr, StringParseError> {
+    pub fn parse(&mut self, source: &str) -> Result<IdentStr, StringParseError> {
         self.buffer.clear();
         let mut chars = source.char_indices();
         while let Some((_, c)) = chars.next() {
@@ -190,6 +190,6 @@ impl StringParser {
                 _ => self.buffer.push(c),
             }
         }
-        Ok(InternedStr::from_str(&self.buffer))
+        Ok(IdentStr::from_str(&self.buffer))
     }
 }

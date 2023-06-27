@@ -328,7 +328,7 @@ mod test {
 
     fn perform_test(code: &str, ctx: &mut String) {
         let mut files = Files::new();
-        let file = files.add(File::new("main".into(), code.into()));
+        let file = files.push(File::new("main".into(), code.into()));
         let lexer = Lexer::new(&files, file);
         let mut diags = Diagnostics::with_config(DiagnosticConfig {
             skip_colors: true,
