@@ -1,6 +1,6 @@
 use std::{iter, ops::Range};
 
-use crate::{BitSet, Ref, RefRepr};
+use crate::BitSet;
 
 #[derive(Debug)]
 pub struct Graph {

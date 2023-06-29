@@ -1,20 +1,74 @@
-list(syntax, sep) := syntax { sep syntax }
+// struct
+let Range = *{
+	start: uint,
+	end: uint,
+};
 
-literal :=
-	| 'true' | 'false'
-	| '[0-9]*'
-	| <TODO>
-ident := '[a-zA-Z_][a-zA-Z_0-9]*'
-path := list(ident, '\.')
-op := '[*&^%/+<>=|]+'
-call := path { unit }
-unit :=
-	| path
-	| '(' expr ')'
-	| call
-	| unit
-expr :=
-	| unit
-	| expr op expr
+// generic struct
+let GenericRange = |t: type|: type = *{
+	start: t,
+	end: t,
+};
 
+// instance
+Instance: GenericRange(Range);
 
+let recur_clone = |on: type, val: *on|: on {
+	let ?true = on.is_copy && {
+		return *val;
+	};
+
+	let ?clone = on.clone && {
+		return clone(val);
+	};
+
+	match on {
+		*{ fields, .. } => {
+			let cloned;
+			for field in fields {
+				cloned[field] = recur_clone(field.ty, &val[field]);
+			}
+			cloned
+		}
+		_ => $panic("'{on}' is not supported type construct"),
+	}
+};
+
+let om = :{other_module};
+
+// kind of inherinatce
+let MyType = *{
+	..om.Type,
+	drop: |s: *mut Self| s.deinit(),
+	clone: |s: *Self| recur_clone(Self, s),
+};
+
+let DbgConfig = *{
+	tab_width := 4,
+	pretty_print := false,
+};
+
+let dbg = |dest: *om.Writer, v: *any, depth: uint = 0, config: DbgConfig = *{}| {
+	let indent = |dest: on.Writer, depth: uint| for _ in count_down(depth * config.tab_width) {
+		dest.write_char(' ');
+	};
+
+	match *v.$ty {
+		*{ fields, .. } => {
+			dest.write(config.pretty_print && "{\n" || "{ ");
+
+			for field in fields {
+				indent(dest, depth + 1);
+				dest.write(field.name);
+				dest.write(": ");
+				dbg(dest, &v[field], depth + 1, config);
+				dest.write(", ");
+			}
+			dest.revert(2);
+
+			indent(dest, depth)
+			dest.write("}");
+		},
+		ty => $panic("'{ty}' is not handled"),
+	}
+};

@@ -299,6 +299,7 @@ pub fn is_visible(
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Vis {
     Exported,
     ModulePrivate,

@@ -71,7 +71,8 @@ pub use {
     },
     temp_mem::{TempMem, TempMemBase},
     types::{
-        BuiltInType, DefinedType, Enum, InstanceType, IntType, InternedType, ParamType,
-        PointerType, Struct, Type, TypeIndex, TypeRef,
+        AsocType, AsocTypeDef, BuiltInType, DefinedType, InstanceType, IntType, InternedType,
+        ParamType, PointerType, Signature, Spec, SpecBase, SpecBaseId, SpecBaseRef, SpecInstance,
+        Struct, StructId, StructRef, TyRef, TySlice, Type, TypeRefRepr,
     },
 };
