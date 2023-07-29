@@ -125,4 +125,14 @@ impl<'a> Decoder<'a> {
     pub unsafe fn read_i64(&mut self) -> i64 {
         self.read_u64() as i64
     }
+
+    pub fn remining(&self) -> usize {
+        self.data.len()
+    }
+
+    pub unsafe fn read_str(&mut self) -> &str {
+        let len = self.read_u64() as usize;
+        let value = unsafe { self.read_slice(len) };
+        unsafe { std::str::from_utf8_unchecked(value) }
+    }
 }

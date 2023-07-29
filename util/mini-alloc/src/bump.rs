@@ -14,6 +14,7 @@ const ALLOC_HEADER_ALIGN: usize = mem::align_of::<AllocHeader>();
 pub(crate) struct AllocList<A: Allocator = Global> {
     alloc: A,
     head: Option<Alloc>,
+    to_drop: Vec<(*mut (), fn(*mut ())), A>,
     base_size: usize,
 }
 
@@ -26,10 +27,18 @@ impl AllocList {
     }
 }
 
+fn drop_in_place_any<T>(ptr: *mut ()) {
+    unsafe { ptr::drop_in_place(ptr as *mut T) }
+}
+
 impl<A: Allocator> AllocList<A> {
-    pub(crate) fn new_in(base_size: usize, alloc: A) -> Self {
+    pub(crate) fn new_in(base_size: usize, alloc: A) -> Self
+    where
+        A: Clone,
+    {
         assert!(base_size >= AllocList::MIN_BASE_SIZE);
         Self {
+            to_drop: Vec::new_in(alloc.clone()),
             alloc,
             head: None,
             base_size,
@@ -38,23 +47,40 @@ impl<A: Allocator> AllocList<A> {
 
     #[inline]
     pub(crate) fn alloc_to_bump<T>(&mut self, bump: &mut Bump) -> NonNull<T> {
-        loop {
+        let ptr = loop {
             match bump.alloc(Layout::new::<T>()) {
-                Some(ptr) => return ptr.cast(),
+                Some(ptr) => break ptr.cast(),
                 None => self.expand(bump),
             }
+        };
+
+        if mem::needs_drop::<T>() {
+            self.to_drop
+                .push((ptr.as_ptr() as *mut (), drop_in_place_any::<T>));
         }
+
+        ptr
     }
 
     pub fn alloc_slice_to_bump<T>(&mut self, bump: &mut Bump, len: usize) -> NonNull<T> {
         let layout = Layout::array::<T>(len).unwrap();
 
-        loop {
+        let ptr = loop {
             match bump.alloc(layout) {
-                Some(ptr) => return ptr.cast(),
+                Some(ptr) => break ptr.cast::<T>(),
                 None => self.expand(bump),
             }
+        };
+
+        if mem::needs_drop::<T>() {
+            let base = ptr.as_ptr();
+            for i in 0..len {
+                let ptr = unsafe { base.add(i).cast::<()>() };
+                self.to_drop.push((ptr, drop_in_place_any::<T>));
+            }
         }
+
+        ptr
     }
 
     #[inline]
@@ -65,6 +91,16 @@ impl<A: Allocator> AllocList<A> {
                 None if *bump == Default::default() => return None,
                 None => self.shrink(bump),
             }
+        }
+    }
+
+    pub fn start_drop_frame(&mut self) -> usize {
+        self.to_drop.len()
+    }
+
+    pub fn end_drop_frame(&mut self, start: usize) {
+        for (ptr, drop) in self.to_drop.drain(start..).rev() {
+            drop(ptr);
         }
     }
 

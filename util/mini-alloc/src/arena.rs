@@ -1,11 +1,4 @@
-use core::{
-    alloc::Allocator,
-    cell::UnsafeCell,
-    iter::TrustedLen,
-    mem::{self, MaybeUninit},
-    pin::Pin,
-    ptr,
-};
+use core::{alloc::Allocator, cell::UnsafeCell, iter::TrustedLen, mem::MaybeUninit, pin::Pin, ptr};
 
 use alloc::{alloc::Global, slice};
 
@@ -21,14 +14,17 @@ impl ArenaBase {
     }
 }
 
-impl<A: Default + Allocator> Default for ArenaBase<A> {
+impl<A: Default + Allocator + Clone> Default for ArenaBase<A> {
     fn default() -> Self {
         Self::new_in(1024, Default::default())
     }
 }
 
 impl<A: Allocator> ArenaBase<A> {
-    pub fn new_in(base_size: usize, alloc: A) -> Self {
+    pub fn new_in(base_size: usize, alloc: A) -> Self
+    where
+        A: Clone,
+    {
         Self {
             alloc: AllocList::new_in(
                 (base_size + AllocList::MIN_BASE_SIZE).next_power_of_two(),
@@ -46,7 +42,6 @@ unsafe fn alloc<'a, T, A>(arena: &impl Arena<A>, value: T) -> &'a mut T
 where
     A: Allocator,
 {
-    const { assert!(!mem::needs_drop::<T>()) }
     let ptr = {
         let (bump, base) = arena.state();
         base.alloc.alloc_to_bump::<T>(bump)
@@ -70,7 +65,6 @@ where
     I::IntoIter: TrustedLen + ExactSizeIterator,
     A: Allocator,
 {
-    const { assert!(!mem::needs_drop::<T>()) }
     let iter = iterator.into_iter();
     let len = iter.len();
 
@@ -95,7 +89,6 @@ where
     I::IntoIter: TrustedLen + ExactSizeIterator,
     A: Allocator,
 {
-    const { assert!(!mem::needs_drop::<T>()) }
     let iter = iterator.into_iter();
     let len = iter.len();
 
@@ -118,12 +111,14 @@ where
 pub struct ArenaScope<'a, A: Allocator = Global> {
     bump: UnsafeCell<Bump>,
     base: UnsafeCell<&'a mut ArenaBase<A>>,
+    drop_frame: usize,
 }
 
 impl<'a, A: Allocator> ArenaScope<'a, A> {
     fn new(bump: Bump, base: &'a mut ArenaBase<A>) -> Self {
         Self {
             bump: bump.into(),
+            drop_frame: base.alloc.start_drop_frame(),
             base: base.into(),
         }
     }
@@ -179,6 +174,12 @@ impl<'a, A: Allocator> ArenaScope<'a, A> {
             old_bump,
             bump,
         }
+    }
+}
+
+impl<'b, A: Allocator> Drop for ArenaScope<'b, A> {
+    fn drop(&mut self) {
+        self.base.get_mut().alloc.end_drop_frame(self.drop_frame);
     }
 }
 
@@ -280,6 +281,7 @@ impl<'a, A: Allocator> ArenaProxi<'a, A> {
         let (&mut bump, base) = unsafe { self.state() };
         ArenaScope {
             bump: bump.into(),
+            drop_frame: base.alloc.start_drop_frame(),
             base: base.into(),
         }
     }

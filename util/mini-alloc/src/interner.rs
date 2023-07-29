@@ -2,7 +2,7 @@ use alloc::{alloc::Global, slice, vec::Vec};
 use core::{
     alloc::Allocator,
     cell::UnsafeCell,
-    hash::{BuildHasherDefault, Hash},
+    hash::{BuildHasher, BuildHasherDefault, Hash},
     intrinsics::unlikely,
     iter::TrustedLen,
     marker::PhantomData,
@@ -16,56 +16,180 @@ use hashbrown::{hash_map::RawEntryMut, HashMap, HashSet};
 #[cfg(feature = "serde128")]
 use serde_base128::Serde128;
 
-#[derive(Default)]
+type IdentStrRepr = u32;
+const ENCODED_STR_LEN_SIZE: usize = 4;
+
+fn encode_str_len(len: usize) -> [u8; ENCODED_STR_LEN_SIZE] {
+    let component_width = 7;
+    let component_mask = (1 << component_width) - 1;
+    [
+        (len & component_mask) as u8,
+        ((len >> component_width) & component_mask) as u8,
+        ((len >> component_width * 2) & component_mask) as u8,
+        0xff,
+    ]
+}
+
+fn decode_str_len(bytes: [u8; ENCODED_STR_LEN_SIZE]) -> Option<usize> {
+    let component_width = 7;
+
+    if unlikely(bytes[3] != 0xff) {
+        return None;
+    }
+
+    Some(
+        bytes[0] as usize
+            | (bytes[1] as usize) << component_width
+            | (bytes[2] as usize) << component_width * 2,
+    )
+}
+
 pub struct StrInterner<A: Allocator + Clone = Global> {
-    interner: Interner<u8, A>,
+    lookup: FnvHashMap<IdentStrRepr, (), A>,
+    strings: Vec<u8, A>,
+}
+
+impl<A: Allocator + Clone + Default> Default for StrInterner<A> {
+    fn default() -> Self {
+        Self::new_in(A::default())
+    }
 }
 
 #[cfg(feature = "serde128")]
 impl<A: Allocator + Clone + Default> Serde128 for StrInterner<A> {
     fn serialize(&self, encoder: &mut serde_base128::Encoder) {
-        self.interner.serialize(encoder);
+        self.lookup.len().serialize(encoder);
+        self.strings.len().serialize(encoder);
+        encoder.write_slice(&self.strings);
     }
 
     unsafe fn deserialize(decoder: &mut serde_base128::Decoder) -> Self {
+        let string_count = usize::deserialize(decoder);
+        let len = usize::deserialize(decoder);
+        let strings = decoder.read_slice(len);
+        let mut lookup = FnvHashMap::with_capacity_and_hasher_in(
+            string_count,
+            FnvBuildHasher::default(),
+            A::default(),
+        );
+
+        let mut string_decoder = strings;
+        for _ in 0..string_count {
+            let offset = len - string_decoder.len();
+            let str = Self::read_str_from_buffer(&mut string_decoder);
+            let hash = lookup.hasher().hash_one(str);
+            lookup
+                .raw_entry_mut()
+                // all strings are unique so comparison is useless
+                .from_hash(hash, |_| false)
+                .insert(offset as u32, ());
+        }
+
         Self {
-            interner: Interner::deserialize(decoder),
+            lookup,
+            strings: {
+                let mut vec = Vec::new_in(A::default());
+                vec.extend_from_slice(strings);
+                vec
+            },
         }
     }
 }
 
 impl StrInterner {
-    pub fn new(bucket_size: u16) -> Self {
-        Self::new_in(bucket_size, Global)
+    pub fn new() -> Self {
+        Self::new_in(Global)
     }
 }
 
 impl<A: Allocator + Clone> StrInterner<A> {
-    pub fn new_in(bucket_size: u16, alloc: A) -> Self {
+    pub fn new_in(alloc: A) -> Self {
         Self {
-            interner: Interner::new_in(bucket_size, alloc),
+            lookup: FnvHashMap::with_hasher_in(FnvBuildHasher::default(), alloc.clone()),
+            strings: Vec::new_in(alloc),
         }
     }
 
-    pub fn intern(&self, value: &str) -> InternedStr {
-        let id = self.interner.intern_slice(value.as_bytes());
+    pub fn intern(&mut self, value: &str) -> IdentStr {
+        let hash = self.lookup.hasher().hash_one(value);
+        let offset = self.intern_low(hash, value);
+        IdentStr::new(offset)
+    }
 
-        InternedStr { id }
+    pub fn intern_low(&mut self, hash: u64, value: &str) -> u32 {
+        let entry = self.lookup.raw_entry_mut().from_hash(hash, |&key| {
+            let str = unsafe { Self::get_str_unchecked(&self.strings, key) };
+            str == value
+        });
+
+        let offset = match entry {
+            RawEntryMut::Occupied(value) => return *value.key(),
+            RawEntryMut::Vacant(vacant) => {
+                *vacant
+                    .insert_hashed_nocheck(hash, self.strings.len() as IdentStrRepr, ())
+                    .0
+            }
+        };
+
+        let total_len = ENCODED_STR_LEN_SIZE + value.len();
+
+        self.strings.reserve(total_len);
+
+        self.strings.extend_from_slice(&encode_str_len(value.len()));
+        self.strings.extend_from_slice(value.as_bytes());
+
+        offset
+    }
+
+    fn get_str(&self, key: IdentStrRepr) -> &str {
+        let offset = key as usize;
+
+        let mut slice = self.strings.get(offset..).expect("invalid string offset");
+
+        if slice.len() < ENCODED_STR_LEN_SIZE {
+            unreachable!("invalid string offset");
+        }
+
+        unsafe { Self::read_str_from_buffer(&mut slice) }
+    }
+
+    unsafe fn get_str_unchecked(strings: &[u8], key: IdentStrRepr) -> &str {
+        let offset = key as usize;
+        let mut slice = strings.get_unchecked(offset..);
+        Self::read_str_from_buffer(&mut slice)
+    }
+
+    unsafe fn read_str_from_buffer<'a>(buffer: &mut &'a [u8]) -> &'a str {
+        let len_bytes = (buffer.as_ptr() as *const [u8; ENCODED_STR_LEN_SIZE]).read();
+        let len = decode_str_len(len_bytes).expect("failed to decode string length");
+        let slice = slice::from_raw_parts(buffer.as_ptr().add(ENCODED_STR_LEN_SIZE), len);
+        *buffer = buffer.get_unchecked(len + ENCODED_STR_LEN_SIZE..);
+        core::str::from_utf8_unchecked(slice)
     }
 }
 
-impl<A: Allocator + Clone> Index<InternedStr> for StrInterner<A> {
+impl<A: Allocator + Clone> Index<IdentStr> for StrInterner<A> {
     type Output = str;
 
-    fn index(&self, index: InternedStr) -> &Self::Output {
-        let slice = &self.interner[index.id];
-        unsafe { core::str::from_utf8_unchecked(slice) }
+    fn index(&self, index: IdentStr) -> &Self::Output {
+        self.get_str(index.index())
     }
 }
 
 #[derive(Clone, Default, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub struct InternedStr {
-    id: InternedSlice<u8>,
+pub struct IdentStr {
+    id: [u8; mem::size_of::<IdentStrRepr>()],
+}
+impl IdentStr {
+    fn new(key: u32) -> IdentStr {
+        IdentStr {
+            id: key.to_ne_bytes(),
+        }
+    }
+
+    pub fn index(self) -> IdentStrRepr {
+        IdentStrRepr::from_ne_bytes(self.id)
+    }
 }
 
 type Lookup<T, A> = HashMap<HashView<T>, InternerSlice, BuildHasherDefault<InternerHasher>, A>;
@@ -668,8 +792,8 @@ impl core::hash::Hasher for InternerHasher {
 }
 
 pub type FnvBuildHasher = core::hash::BuildHasherDefault<FnvHasher>;
-pub type FnvHashMap<K, V> = HashMap<K, V, FnvBuildHasher>;
-pub type FnvHashSet<T> = HashSet<T, FnvBuildHasher>;
+pub type FnvHashMap<K, V, A = Global> = HashMap<K, V, FnvBuildHasher, A>;
+pub type FnvHashSet<T, A = Global> = HashSet<T, FnvBuildHasher, A>;
 
 pub struct FnvHasher {
     hash: u64,
@@ -700,13 +824,18 @@ impl core::hash::Hasher for FnvHasher {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::String;
+    use core::hash::Hasher;
+    use std::{sync::RwLock, thread, time::Instant};
+
+    use alloc::{string::String, sync::Arc};
+
+    use crate::ident_experiment::{comparing_impl::IdentStr, Ident};
 
     use super::*;
 
     #[test]
     fn test_str_interning() {
-        let interner = StrInterner::new(6);
+        let mut interner = StrInterner::new();
 
         let a = interner.intern("hello");
         let b = interner.intern("world of rust");
@@ -755,7 +884,7 @@ mod test {
     #[cfg(feature = "serde128")]
     #[test]
     fn serde() {
-        let interner = StrInterner::new(6);
+        let mut interner = StrInterner::new();
 
         let a = interner.intern("hello");
         let b = interner.intern("world of rust");
@@ -766,12 +895,153 @@ mod test {
 
         let buf = writer.into_vec();
         let mut reader = serde_base128::Decoder::new(&buf[..]);
-        let c = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
-        let d = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
+        let mut c = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
+        let mut d = unsafe { StrInterner::<Global>::deserialize(&mut reader) };
 
         assert_eq!(a, c.intern("hello"));
         assert_eq!(b, c.intern("world of rust"));
         assert_eq!(a, d.intern("hello"));
         assert_eq!(b, d.intern("world of rust"));
+    }
+
+    struct SyncStrInterner {
+        interner: Arc<[spin::Mutex<StrInterner>]>,
+    }
+
+    impl SyncStrInterner {
+        fn new() -> Self {
+            Self {
+                interner: (0..16)
+                    .map(|_| spin::Mutex::new(StrInterner::new()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            }
+        }
+
+        fn intern(&self, s: &str) -> IdentStr {
+            let mut hasher = FnvHasher::default();
+            s.hash(&mut hasher);
+            let hash = hasher.finish();
+
+            let mut interner = self.interner[hash as usize & (self.interner.len() - 1)].lock();
+            interner.intern(s)
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn compare_str_interner_specialization_performance() {
+        let iter_count = 10_000_000;
+        let modulo = 20;
+        let thread_count = 4;
+
+        let mut num_buffer = String::new();
+        let set_buffer = |mut n: usize, buf: &mut String| {
+            let make_big = n & 1 == 0;
+            n &= (1 << modulo) - 1;
+            buf.clear();
+            while n > 0 {
+                buf.push(char::from_digit((n & (32 - 1)) as u32, 32).unwrap());
+                n >>= 5;
+            }
+            if make_big {
+                buf.push_str("hello world and gorld");
+            }
+        };
+
+        let mut interner = StrInterner::new();
+        let now = Instant::now();
+        for i in 0..iter_count {
+            set_buffer(i, &mut num_buffer);
+            let ident = interner.intern(&num_buffer);
+            assert_eq!(&interner[ident], &num_buffer);
+        }
+        println!(
+            "StrInterner: {:?}",
+            now.elapsed().checked_div(iter_count as u32).unwrap()
+        );
+
+        let interner = Interner::<u8, Global>::default();
+        let now = Instant::now();
+        for i in 0..iter_count {
+            set_buffer(i, &mut num_buffer);
+            interner.intern_slice(num_buffer.as_bytes());
+        }
+        println!(
+            "Interner: {:?}",
+            now.elapsed().checked_div(iter_count as u32).unwrap()
+        );
+
+        let interner = SyncStrInterner::new();
+        let now = thread::scope(|s| {
+            (0..thread_count)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut num_buffer = String::new();
+                        let now = Instant::now();
+                        for i in 0..iter_count {
+                            set_buffer(i, &mut num_buffer);
+                            interner.intern(&num_buffer);
+                        }
+                        now.elapsed()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .sum::<std::time::Duration>()
+        });
+        println!(
+            "SyncStrInterner: {:?}",
+            now.checked_div((iter_count * thread_count) as u32).unwrap()
+        );
+
+        let now = thread::scope(|s| {
+            (0..thread_count)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut num_buffer = String::new();
+                        let now = Instant::now();
+                        for i in 0..iter_count {
+                            set_buffer(i, &mut num_buffer);
+                            let ident = Ident::from_str(&num_buffer);
+                            assert_eq!(ident.as_str(), &num_buffer);
+                        }
+                        now.elapsed()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .sum::<std::time::Duration>()
+        });
+        println!(
+            "PackedIdent: {:?}",
+            now.checked_div((iter_count * thread_count) as u32).unwrap()
+        );
+
+        let now = thread::scope(|s| {
+            (0..thread_count)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut num_buffer = String::new();
+                        let now = Instant::now();
+                        for i in 0..iter_count {
+                            set_buffer(i, &mut num_buffer);
+                            let ident = IdentStr::from_str(&num_buffer);
+                            assert_eq!(ident.as_str(), &num_buffer);
+                        }
+                        now.elapsed()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .sum::<std::time::Duration>()
+        });
+        println!(
+            "RocIdent: {:?}",
+            now.checked_div((iter_count * thread_count) as u32).unwrap()
+        );
     }
 }

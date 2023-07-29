@@ -8,7 +8,7 @@ pub struct DiverBase<A: Allocator = Global> {
     list: AllocList<A>,
 }
 
-impl<A: Allocator + Default> Default for DiverBase<A> {
+impl<A: Allocator + Default + Clone> Default for DiverBase<A> {
     fn default() -> Self {
         Self::new_in(1024, Default::default())
     }
@@ -21,7 +21,10 @@ impl DiverBase {
 }
 
 impl<A: Allocator> DiverBase<A> {
-    pub fn new_in(base_size: usize, alloc: A) -> Self {
+    pub fn new_in(base_size: usize, alloc: A) -> Self
+    where
+        A: Clone,
+    {
         Self {
             list: AllocList::new_in(
                 (base_size + AllocList::MIN_BASE_SIZE).next_power_of_two(),
