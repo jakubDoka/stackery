@@ -55,55 +55,57 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         let token = self.next();
 
         let expr = match token.kind {
-            If => self.if_(diver.untyped_dive(), token.span),
-            Else => self.unex_tok(token, "else can only follow an if")?,
-            Loop => self.loop_(diver.untyped_dive(), token.span),
-            Break => self.break_(diver.untyped_dive(), token.span),
-            Continue => self.continue_(token.span),
-            Ret => self.ret(diver.untyped_dive(), token.span),
-            For => self.for_(diver.untyped_dive(), token.span),
-            In => self.unex_tok(token, "in can only follow a for")?,
-            Unknown => Some(UnitAst::Unknown(token.span)),
-            Self_ => Some(UnitAst::Self_(token.span)),
-            Dot => self.unex_tok(
-                token,
-                "dot can only follow an expression of labeled keyword",
-            )?,
-            DoubleDot => self.unex_tok(
-                token,
-                "double dot can only follow an expression of labeled keyword",
-            )?,
+            //If => self.if_(diver.untyped_dive(), token.span),
+            //Else => self.unex_tok(token, "else can only follow an if")?,
+            //Loop => self.loop_(diver.untyped_dive(), token.span),
+            //Break => self.break_(diver.untyped_dive(), token.span),
+            //Continue => self.continue_(token.span),
+            //Return => self.ret(diver.untyped_dive(), token.span),
+            //For => self.for_(diver.untyped_dive(), token.span),
+            //In => self.unex_tok(token, "in can only follow a for")?,
+            //Unknown => Some(UnitAst::Unknown(token.span)),
+            //Self_ => Some(UnitAst::Self_(token.span)),
+            //Dot => self.unex_tok(
+            //    token,
+            //    "dot can only follow an expression of labeled keyword",
+            //)?,
+            //DoubleDot => self.unex_tok(
+            //    token,
+            //    "double dot can only follow an expression of labeled keyword",
+            //)?,
+            Fn => self.func(diver.untyped_dive(), token.span),
             Comma => self.unex_tok(token, "comma can only follow an expression")?,
             Semi => self.unex_tok(
                 token,
                 "semicolon can only follow an expression inside a block",
             )?,
             Colon => self.unex_tok(token, "colon can only follow pattern")?,
-            Enum => self.enum_(diver.untyped_dive(), token.span),
-            Struct => self.struct_(diver.untyped_dive(), token.span),
+            //Enum => self.enum_(diver.untyped_dive(), token.span),
+            //Struct => self.struct_(diver.untyped_dive(), token.span),
             LBrace => self.block(diver.untyped_dive(), token.span),
             RBrace => self.unex_tok(token, "unmatched right brace")?,
-            LBracket => self.array(diver.untyped_dive(), token.span),
-            RBracket => self.unex_tok(token, "unmatched right bracket")?,
+            //LBracket => self.array(diver.untyped_dive(), token.span),
+            //RBracket => self.unex_tok(token, "unmatched right bracket")?,
             LParen => self.paren(diver.untyped_dive()),
             RParen => self.unex_tok(token, "unmatched right parenthesis")?,
             Ident => Some(UnitAst::Ident(IdentAst {
                 span: token.span,
                 ident: IdentStr::from_str(token.source),
             })),
-            MetaIdent => self.unex_tok(token, "meta identifier can only be used as field")?,
-            Import => Some(UnitAst::Import({
-                let source = &token.source[":{".len()..token.source.len() - "}".len()];
+            Ct => todo!(),
+            //MetaIdent => self.unex_tok(token, "meta identifier can only be used as field")?,
+            //Import => Some(UnitAst::Import({
+            //    let source = &token.source[":{".len()..token.source.len() - "}".len()];
 
-                IdentAst {
-                    span: token.span,
-                    ident: IdentStr::from_str(source),
-                }
-            })),
-            Str => self.str(token),
+            //    IdentAst {
+            //        span: token.span,
+            //        ident: IdentStr::from_str(source),
+            //    }
+            //})),
+            //Str => self.str(token),
             Int => self.int(token),
-            True => self.bool(true, token.span),
-            False => self.bool(false, token.span),
+            //True => self.bool(true, token.span),
+            //False => self.bool(false, token.span),
             Op(op) => self.unary(
                 diver.untyped_dive(),
                 OpAst {
@@ -118,29 +120,29 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         self.handle_postfix(diver, expr)
     }
 
-    fn break_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let label = self.label("break")?;
-        let expr = (!is_not_expression_start(self.peek().kind))
-            .then(|| self.expr(diver))
-            .transpose()?;
-        Some(UnitAst::Break(self.arena.alloc(BreakAst {
-            keyword,
-            label,
-            expr,
-        })))
-    }
+    //fn break_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let label = self.label("break")?;
+    //    let expr = (!is_not_expression_start(self.peek().kind))
+    //        .then(|| self.expr(diver))
+    //        .transpose()?;
+    //    Some(UnitAst::Break(self.arena.alloc(BreakAst {
+    //        keyword,
+    //        label,
+    //        expr,
+    //    })))
+    //}
 
-    fn continue_(&mut self, keyword: Span) -> Option<UnitAst<'arena>> {
-        let label = self.label("continue")?;
-        Some(UnitAst::Continue(ContinueAst { keyword, label }))
-    }
+    //fn continue_(&mut self, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let label = self.label("continue")?;
+    //    Some(UnitAst::Continue(ContinueAst { keyword, label }))
+    //}
 
-    fn bool(&mut self, value: bool, span: Span) -> Option<UnitAst<'arena>> {
-        Some(UnitAst::Literal(LitAst {
-            kind: LitKindAst::Bool(value),
-            span,
-        }))
-    }
+    //fn bool(&mut self, value: bool, span: Span) -> Option<UnitAst<'arena>> {
+    //    Some(UnitAst::Literal(LitAst {
+    //        kind: LitKindAst::Bool(value),
+    //        span,
+    //    }))
+    //}
 
     fn handle_postfix(
         &mut self,
@@ -150,18 +152,18 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         loop {
             let token = self.peek();
             expr = match token.kind {
-                Dot => {
-                    self.next();
-                    let tok = self.next();
-                    let (is_meta, source) = match tok.kind {
-                        Ident => (false, tok.source),
-                        MetaIdent => (true, &tok.source["$".len()..]),
-                        _ => self.unex_tok(tok, "field can only be identifier or meta identifier")?,
-                    };
+                //Dot => {
+                //    self.next();
+                //    let tok = self.next();
+                //    let (is_meta, source) = match tok.kind {
+                //        Ident => (false, tok.source),
+                //        MetaIdent => (true, &tok.source["$".len()..]),
+                //        _ => self.unex_tok(tok, "field can only be identifier or meta identifier")?,
+                //    };
 
-                    let name = FieldIdentAst { is_meta,  span: tok.span, ident: IdentStr::from_str(source) };
-                    UnitAst::Field(self.arena.alloc(FieldAst { expr, name }))
-                }
+                //    let name = FieldIdentAst { is_meta,  span: tok.span, ident: IdentStr::from_str(source) };
+                //    UnitAst::Field(self.arena.alloc(FieldAst { expr, name }))
+                //}
                 LParen => {
                     self.next();
                     let args = &*self
@@ -176,19 +178,13 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
                     UnitAst::Call(self.arena.alloc(CallAst { caller: expr, args }))
                 }
-                LBracket => {
-                    self.next();
-                    let index = self.expr(diver.untyped_dive())?;
-                    self.expect_advance(RBracket, "closing index operator");
+                //LBracket => {
+                //    self.next();
+                //    let index = self.expr(diver.untyped_dive())?;
+                //    self.expect_advance(RBracket, "closing index operator");
 
-                    UnitAst::Index(self.arena.alloc(IndexAst { expr, index }))
-                }
-                Colon if let UnitAst::Ident(name) = expr => {
-                    self.next();
-
-                    let expr = self.expr(diver.untyped_dive())?;
-                    break Some(UnitAst::Decl(self.arena.alloc(NamedExprAst { name , expr  })))
-                }
+                //    UnitAst::Index(self.arena.alloc(IndexAst { expr, index }))
+                //}
                 _ => break Some(expr),
             }
         }
@@ -196,8 +192,6 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
     fn unary(&mut self, diver: Diver, op: OpAst) -> Option<UnitAst<'arena>> {
         match op.kind {
-            OpCode::Or => self.func(diver, false, op.span),
-            OpCode::BitOr => self.func(diver, true, op.span),
             _ => {
                 let expr = self.unit(diver)?;
                 Some(UnitAst::Unary(self.arena.alloc(UnaryAst { op, expr })))
@@ -205,40 +199,45 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         }
     }
 
-    fn func(&mut self, mut diver: Diver, has_args: bool, pipe: Span) -> Option<UnitAst<'arena>> {
-        let args = match has_args {
-            true => {
-                &*self
-                    .sequence(
-                        diver.untyped_dive(),
-                        Self::func_arg,
-                        Comma,
-                        Op(OpCode::BitOr),
-                        "function parameter",
-                    )?
-                    .0
-            }
-            false => &[],
-        };
+    fn func(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+        self.expect_advance(LParen, "expected start of argument list")?;
+        let (args, _) = self.sequence(
+            diver.untyped_dive(),
+            Self::func_arg,
+            Comma,
+            RParen,
+            "function parameter",
+        )?;
+
+        let return_ty = self
+            .try_advance(Colon)
+            .map(|_| self.expr(diver.untyped_dive()))
+            .transpose()?;
 
         let body = self.expr(diver)?;
 
         Some(UnitAst::Func(self.arena.alloc(FuncAst {
             args,
+            return_ty,
             body,
-            pipe,
+            pipe: keyword,
         })))
     }
 
     fn func_arg(&mut self, diver: Diver) -> Option<FuncArgAst<'arena>> {
+        let ct = self.try_advance(Ct).map(|token| token.span);
         let name = self.ident("parameter name")?;
+        let colon = self
+            .expect_advance(Colon, "expected colon after parameter name")?
+            .span;
+        let ty = self.expr(diver)?;
 
-        let default = self
-            .try_advance(Op(OpCode::Assign))
-            .map(|_| self.unit(diver))
-            .transpose()?;
-
-        Some(FuncArgAst { name, default })
+        Some(FuncArgAst {
+            ct,
+            name,
+            colon,
+            ty,
+        })
     }
 
     fn int(&mut self, token: Token<'src>) -> Option<UnitAst<'arena>> {
@@ -288,41 +287,41 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         Some(UnitAst::Paren(self.arena.alloc(expr)))
     }
 
-    fn array(&mut self, mut diver: Diver, bracket: Span) -> Option<UnitAst<'arena>> {
-        if self.try_advance(RBracket).is_some() {
-            return Some(UnitAst::Array {
-                bracket,
-                elems: &[],
-            });
-        }
+    //fn array(&mut self, mut diver: Diver, bracket: Span) -> Option<UnitAst<'arena>> {
+    //    if self.try_advance(RBracket).is_some() {
+    //        return Some(UnitAst::Array {
+    //            bracket,
+    //            elems: &[],
+    //        });
+    //    }
 
-        let first = self.expr(diver.untyped_dive())?;
+    //    let first = self.expr(diver.untyped_dive())?;
 
-        if self.try_advance(Semi).is_some() {
-            let len = self.expr(diver.untyped_dive())?;
-            self.expect_advance(RBracket, "end of filled array")?;
-            return Some(UnitAst::FilledArray(self.arena.alloc(FilledArrayAst {
-                expr: first,
-                len,
-                bracket,
-            })));
-        }
+    //    if self.try_advance(Semi).is_some() {
+    //        let len = self.expr(diver.untyped_dive())?;
+    //        self.expect_advance(RBracket, "end of filled array")?;
+    //        return Some(UnitAst::FilledArray(self.arena.alloc(FilledArrayAst {
+    //            expr: first,
+    //            len,
+    //            bracket,
+    //        })));
+    //    }
 
-        let mut elems = diver.dive::<ExprAst<'arena>>();
-        elems.push(first);
+    //    let mut elems = diver.dive::<ExprAst<'arena>>();
+    //    elems.push(first);
 
-        while self.try_advance(Comma).is_some() && self.peek().kind != RBracket {
-            let expr = self.expr(elems.untyped_dive())?;
-            elems.push(expr);
-        }
+    //    while self.try_advance(Comma).is_some() && self.peek().kind != RBracket {
+    //        let expr = self.expr(elems.untyped_dive())?;
+    //        elems.push(expr);
+    //    }
 
-        self.expect_advance(RBracket, "end of array")?;
+    //    self.expect_advance(RBracket, "end of array")?;
 
-        Some(UnitAst::Array {
-            bracket,
-            elems: self.arena.alloc_rev_iter(elems),
-        })
-    }
+    //    Some(UnitAst::Array {
+    //        bracket,
+    //        elems: self.arena.alloc_rev_iter(elems),
+    //    })
+    //}
 
     fn expect_block(
         &mut self,
@@ -348,95 +347,95 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         })
     }
 
-    fn struct_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let (fields, ..) =
-            self.sequence(diver, Self::struct_field, Comma, RBrace, "struct decl")?;
-        Some(UnitAst::Struct { fields, keyword })
-    }
+    //fn struct_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let (fields, ..) =
+    //        self.sequence(diver, Self::struct_field, Comma, RBrace, "struct decl")?;
+    //    Some(UnitAst::Struct { fields, keyword })
+    //}
 
-    fn struct_field(&mut self, diver: Diver) -> Option<StructFieldAst<'arena>> {
-        let name = self.ident("struct field name")?;
-        let value = self
-            .try_advance(Colon)
-            .map(|_| self.expr(diver))
-            .transpose()?;
+    //fn struct_field(&mut self, diver: Diver) -> Option<StructFieldAst<'arena>> {
+    //    let name = self.ident("struct field name")?;
+    //    let value = self
+    //        .try_advance(Colon)
+    //        .map(|_| self.expr(diver))
+    //        .transpose()?;
 
-        Some(match value {
-            Some(value) => StructFieldAst::Decl(NamedExprAst { name, expr: value }),
-            None => StructFieldAst::Inline(name),
-        })
-    }
+    //    Some(match value {
+    //        Some(value) => StructFieldAst::Decl(NamedExprAst { name, expr: value }),
+    //        None => StructFieldAst::Inline(name),
+    //    })
+    //}
 
-    fn enum_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let name = self.ident("enum name")?;
-        let value = self
-            .try_advance(Colon)
-            .map(|_| self.expr(diver.untyped_dive()))
-            .transpose()?;
-        self.expect_advance(RBrace, "closing the enum")?;
-        Some(UnitAst::Enum(self.arena.alloc(EnumAst {
-            keyword,
-            name,
-            value,
-        })))
-    }
+    //fn enum_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let name = self.ident("enum name")?;
+    //    let value = self
+    //        .try_advance(Colon)
+    //        .map(|_| self.expr(diver.untyped_dive()))
+    //        .transpose()?;
+    //    self.expect_advance(RBrace, "closing the enum")?;
+    //    Some(UnitAst::Enum(self.arena.alloc(EnumAst {
+    //        keyword,
+    //        name,
+    //        value,
+    //    })))
+    //}
 
-    fn for_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let label = self.label("for")?;
-        let var = self.ident("for loop variable")?;
-        self.expect_advance(In, "expected in after for")?;
-        let iter = self.expr(diver.untyped_dive())?;
-        let body = self.expr(diver)?;
+    //fn for_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let label = self.label("for")?;
+    //    let var = self.ident("for loop variable")?;
+    //    self.expect_advance(In, "expected in after for")?;
+    //    let iter = self.expr(diver.untyped_dive())?;
+    //    let body = self.expr(diver)?;
 
-        Some(UnitAst::ForLoop(self.arena.alloc(ForLoopAst {
-            label,
-            var,
-            iter,
-            body,
-            keyword,
-        })))
-    }
+    //    Some(UnitAst::ForLoop(self.arena.alloc(ForLoopAst {
+    //        label,
+    //        var,
+    //        iter,
+    //        body,
+    //        keyword,
+    //    })))
+    //}
 
-    fn ret(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        Some(UnitAst::Ret {
-            keyword,
+    //fn ret(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    Some(UnitAst::Ret {
+    //        keyword,
 
-            value: (!is_not_expression_start(self.peek().kind))
-                .then(|| self.expr(diver))
-                .transpose()?
-                .map(|expr| &*self.arena.alloc(expr)),
-        })
-    }
+    //        value: (!is_not_expression_start(self.peek().kind))
+    //            .then(|| self.expr(diver))
+    //            .transpose()?
+    //            .map(|expr| &*self.arena.alloc(expr)),
+    //    })
+    //}
 
-    fn if_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        let cond = self.expr(diver.untyped_dive())?;
-        let then = self.expect_block(diver.untyped_dive(), "then expression")?;
-        let else_ = self
-            .try_advance(Else)
-            .map(|_| self.expect_block(diver, "else expression"))
-            .transpose()?;
+    //fn if_(&mut self, mut diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    let cond = self.expr(diver.untyped_dive())?;
+    //    let then = self.expect_block(diver.untyped_dive(), "then expression")?;
+    //    let else_ = self
+    //        .try_advance(Else)
+    //        .map(|_| self.expect_block(diver, "else expression"))
+    //        .transpose()?;
 
-        Some(UnitAst::If(self.arena.alloc(IfAst {
-            cond,
-            then,
-            else_,
-            keyword,
-        })))
-    }
+    //    Some(UnitAst::If(self.arena.alloc(IfAst {
+    //        cond,
+    //        then,
+    //        else_,
+    //        keyword,
+    //    })))
+    //}
 
-    fn loop_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
-        Some(UnitAst::Loop(self.arena.alloc(LoopAst {
-            label: self.label("loop")?,
-            body: self.expect_block(diver, "loop expression")?,
-            keyword,
-        })))
-    }
+    //fn loop_(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+    //    Some(UnitAst::Loop(self.arena.alloc(LoopAst {
+    //        label: self.label("loop")?,
+    //        body: self.expect_block(diver, "loop expression")?,
+    //        keyword,
+    //    })))
+    //}
 
-    fn label(&mut self, objective: impl fmt::Display) -> Option<Option<IdentAst>> {
-        self.try_advance(Dot)
-            .map(|_| self.ident(format_args!("{objective} label")))
-            .transpose()
-    }
+    //fn label(&mut self, objective: impl fmt::Display) -> Option<Option<IdentAst>> {
+    //    self.try_advance(Dot)
+    //        .map(|_| self.ident(format_args!("{objective} label")))
+    //        .transpose()
+    //}
 
     fn ident(&mut self, objective: impl fmt::Display) -> Option<IdentAst> {
         let token =
@@ -452,7 +451,9 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 fn is_not_expression_start(kind: TokenKind) -> bool {
     matches!(
         kind,
-        Semi | RBrace | RBracket | RParen | Comma | Colon | Else | In | Dot | Eof | Err
+        Semi | Comma | Colon |
+        // Else | In | Dot |
+        Eof | Err
     )
 }
 
@@ -475,36 +476,34 @@ impl ExprAst<'_> {
 pub enum UnitAst<'arena> {
     Literal(LitAst),
     Ident(IdentAst),
-    Import(IdentAst),
+    //Import(IdentAst),
     Block(&'arena BlockAst<'arena>),
     Unary(&'arena UnaryAst<'arena>),
-    Array {
-        bracket: Span,
-        elems: &'arena [ExprAst<'arena>],
-    },
-    FilledArray(&'arena FilledArrayAst<'arena>),
-    Struct {
-        keyword: Span,
-        fields: &'arena [StructFieldAst<'arena>],
-    },
-    Enum(&'arena EnumAst<'arena>),
+    //Array {
+    //    bracket: Span,
+    //    elems: &'arena [ExprAst<'arena>],
+    //},
+    //FilledArray(&'arena FilledArrayAst<'arena>),
+    //Struct {
+    //    keyword: Span,
+    //    fields: &'arena [StructFieldAst<'arena>],
+    //},
+    //Enum(&'arena EnumAst<'arena>),
     Call(&'arena CallAst<'arena>),
     Func(&'arena FuncAst<'arena>),
-    Decl(&'arena NamedExprAst<'arena>),
-    Loop(&'arena LoopAst<'arena>),
-    Index(&'arena IndexAst<'arena>),
-    ForLoop(&'arena ForLoopAst<'arena>),
-    Break(&'arena BreakAst<'arena>),
-    Continue(ContinueAst),
-    Field(&'arena FieldAst<'arena>),
-    If(&'arena IfAst<'arena>),
-    Ret {
-        keyword: Span,
-        value: Option<&'arena ExprAst<'arena>>,
-    },
+    Decl(&'arena DeclAst<'arena>),
+    //Loop(&'arena LoopAst<'arena>),
+    //Index(&'arena IndexAst<'arena>),
+    //ForLoop(&'arena ForLoopAst<'arena>),
+    //Break(&'arena BreakAst<'arena>),
+    //Continue(ContinueAst),
+    //Field(&'arena FieldAst<'arena>),
+    //If(&'arena IfAst<'arena>),
+    //Ret {
+    //    keyword: Span,
+    //    value: Option<&'arena ExprAst<'arena>>,
+    //},
     Paren(&'arena ExprAst<'arena>),
-    Unknown(Span),
-    Self_(Span),
 }
 
 impl UnitAst<'_> {
@@ -512,29 +511,36 @@ impl UnitAst<'_> {
         match self {
             UnitAst::Literal(literal) => literal.span,
             UnitAst::Ident(ident) => ident.span,
-            UnitAst::Import(ident) => ident.span,
+            //UnitAst::Import(ident) => ident.span,
             UnitAst::Block(block) => block.brace,
             UnitAst::Unary(unary) => unary.op.span,
-            UnitAst::Array { bracket, .. } => *bracket,
-            UnitAst::FilledArray(array) => array.bracket,
-            UnitAst::Struct { keyword, .. } => *keyword,
-            UnitAst::Enum(enum_) => enum_.name.span,
+            //UnitAst::Array { bracket, .. } => *bracket,
+            //UnitAst::FilledArray(array) => array.bracket,
+            //UnitAst::Struct { keyword, .. } => *keyword,
+            //UnitAst::Enum(enum_) => enum_.name.span,
             UnitAst::Call(call) => call.caller.span(),
             UnitAst::Func(func) => func.pipe,
-            UnitAst::Decl(decl) => decl.name.span,
-            UnitAst::Loop(loop_) => loop_.keyword,
-            UnitAst::Index(index) => index.expr.span(),
-            UnitAst::ForLoop(for_) => for_.keyword,
-            UnitAst::Break(break_) => break_.keyword,
-            UnitAst::Continue(continue_) => continue_.keyword,
-            UnitAst::Field(field) => field.expr.span(),
-            UnitAst::If(if_) => if_.keyword,
-            UnitAst::Ret { keyword, .. } => *keyword,
+            UnitAst::Decl(decl) => decl.keyword,
+            //UnitAst::Decl(decl) => decl.name.span,
+            //UnitAst::Loop(loop_) => loop_.keyword,
+            //UnitAst::Index(index) => index.expr.span(),
+            //UnitAst::ForLoop(for_) => for_.keyword,
+            //UnitAst::Break(break_) => break_.keyword,
+            //UnitAst::Continue(continue_) => continue_.keyword,
+            //UnitAst::Field(field) => field.expr.span(),
+            //UnitAst::If(if_) => if_.keyword,
+            //UnitAst::Ret { keyword, .. } => *keyword,
             UnitAst::Paren(expr) => expr.span(),
-            UnitAst::Unknown(span) => *span,
-            UnitAst::Self_(span) => *span,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeclAst<'arena> {
+    pub keyword: Span,
+    pub name: IdentAst,
+    pub ty: Option<ExprAst<'arena>>,
+    pub value: Option<ExprAst<'arena>>,
 }
 
 #[derive(Debug, Clone)]
@@ -616,13 +622,16 @@ pub struct UnaryAst<'arena> {
 pub struct FuncAst<'arena> {
     pub pipe: Span,
     pub args: &'arena [FuncArgAst<'arena>],
+    pub return_ty: Option<ExprAst<'arena>>,
     pub body: ExprAst<'arena>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncArgAst<'arena> {
+    pub ct: Option<Span>,
     pub name: IdentAst,
-    pub default: Option<UnitAst<'arena>>,
+    pub colon: Span,
+    pub ty: ExprAst<'arena>,
 }
 
 #[derive(Debug, Clone)]

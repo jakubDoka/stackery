@@ -42,7 +42,9 @@ impl Diagnostics {
         }
 
         let highest_severty = self.annotation_temp.iter().map(|a| a.severty).max();
-        let Some(highest_severty) = highest_severty else {return;};
+        let Some(highest_severty) = highest_severty else {
+            return;
+        };
 
         self.counters[highest_severty as usize] += 1;
 

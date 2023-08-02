@@ -186,8 +186,7 @@ pub enum InstrKind {
     BackJumpDest { used: bool },
     Jump { to: InstrIndex, conditional: bool },
     Field { name: Ident, is_meta: bool },
-    Unkown,
-    Self_,
+    Uninit,
     Error,
 }
 

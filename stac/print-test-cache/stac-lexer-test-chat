@@ -1,0 +1,3 @@
+Ok(Char) "'c'"
+Ok(Char) "'\\''"
+Ok(Char) "'\\xffffffff'"

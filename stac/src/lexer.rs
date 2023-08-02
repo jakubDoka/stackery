@@ -162,39 +162,40 @@ define_lexer! {
     }
 
     tokens {
-        If = "if"
-        Else = "else"
-        Loop = "loop"
-        Break = "break"
-        Continue = "continue"
-        Ret = "ret"
-        For = "for"
-        In = "in"
-        Unknown = "unknown"
-        True = "true"
-        False = "false"
-        Self_ = "self"
+        //If = "if"
+        //Else = "else"
+        //Loop = "loop"
+        //Break = "break"
+        //Continue = "continue"
+        //Return = "return"
+        //For = "for"
+        //In = "in"
+        Fn = "fn"
+        Ct = "ct"
+        //Let = "let"
+        //Mut = "mut"
 
-        Dot = "."
-        DoubleDot = ".."
+        //True = "true"
+        //False = "false"
+
+        //Dot = "."
+        //DoubleDot = ".."
         Comma = ","
         Semi = ";"
         Colon = ":"
-        Enum = "|{"
-        Struct = "*{"
+        //Tilde = "~"
         LBrace = "{"
         RBrace = "}"
-        LBracket = "["
-        RBracket = "]"
+        //LBracket = "["
+        //RBracket = "]"
         LParen = "("
         RParen = ")"
     }
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
-        MetaIdent = r"\$(?&ident_start)(?&ident_content)*"
-        Import = r":\{[^}]*\}"
-        Str = r#""([^"]|\\")*""#
+        //Import = r":\{[^}]*\}"
+        //Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
     }
 
@@ -269,6 +270,34 @@ impl<'a> Iterator for ImportLexer<'a> {
 
 #[cfg(test)]
 mod test {
+    use crate::{print_cases, ImportLexer, TokenKind};
+
+    fn perform_test(imput: &str, ctx: &mut String) {
+        let mut lexer = TokenKind::lexer(imput);
+        while let Some(token) = lexer.next() {
+            ctx.push_str(&format!("{:?} {:?}\n", token, lexer.slice()));
+        }
+    }
+
+    print_cases! { perform_test:
+        label "'label 'c 'c '0";
+        chat "'c' '\\'' '\\xffffffff'";
+    }
+
+    #[test]
+    fn dependency_token() {
+        let code = ":{import} akshd  : { } lkjas hdlas kjhdlakjs dhlsakj dhlsa kjdhlsak jdhalksjd 
+                    hlkjsad hlak jdshlda kshda lkjh alkj hdalks jdhalksj hdaslkj hdalkj hdlas
+                    :{import from here}";
+
+        let actual = ImportLexer::new(code).map(|(s, _)| s).collect::<Vec<_>>();
+
+        assert_eq!(actual, vec!["import", "import from here",]);
+    }
+}
+
+#[cfg(test)]
+mod bench {
     use std::iter;
 
     use crate::{ImportLexer, TokenKind};
@@ -294,39 +323,6 @@ mod test {
             self.source = rest;
             Some(import)
         }
-    }
-
-    #[test]
-    fn all_tokens() {
-        let code = "
-            if else loop break continue ret for in unknown true false self
-            . .. , ; : |{ *{ { } [ ] ( )
-            ident
-            $meta_ident
-            :{import}
-            \"str\"
-            123
-            * / % + - << >> & | ^ == != < <= > >= && || = += -= *= /= %= <<= >>= &= |= ^= //
-        ";
-
-        let actual = TokenKind::lexer(code)
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
-
-        let expected = &TokenKind::ALL[..TokenKind::ALL.len() - 2];
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn dependency_token() {
-        let code = ":{import} akshd  : { } lkjas hdlas kjhdlakjs dhlsakj dhlsa kjdhlsak jdhalksjd 
-                    hlkjsad hlak jdshlda kshda lkjh alkj hdalks jdhalksj hdaslkj hdalkj hdlas
-                    :{import from here}";
-
-        let actual = ImportLexer::new(code).map(|(s, _)| s).collect::<Vec<_>>();
-
-        assert_eq!(actual, vec!["import", "import from here",]);
     }
 
     fn generate_bench_code() -> String {

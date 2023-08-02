@@ -3,13 +3,13 @@ use std::ops::{Index, IndexMut, Range};
 use mini_alloc::{FnvHashMap, IdentStr};
 
 use crate::{
-    instrs, ArrayLenFolder, BinaryAst, BlockAst, BreakAst, CallAst, Const, ConstFoldCtx,
-    ContinueAst, Diagnostics, EnumAst, ExprAst, FieldAst, FieldIdentAst, Files, FilledArrayAst,
-    Func, FuncAst, FuncMetaBuilder, FuncRef, Ident, IdentAst, IfAst, IndexAst, Instr, InstrEmiter,
-    InstrIndex, InstrItem, InstrItemKind, InstrKind, InstrModule, InstrModuleMetaBuilder,
-    InstrModuleMetaSlice, InstrRef, IntLit, LitAst, LitKindAst, Loop, LoopAst, LoopData, ModuleRef,
-    Modules, NamedExprAst, OpCode, Parser, Ref, Severty, Span, StringParser, StructFieldAst,
-    SymData, TempMemBase, UnaryAst, UnitAst, VecStore,
+    instrs, parser::expr::DeclAst, ArrayLenFolder, BinaryAst, BlockAst, BreakAst, CallAst, Const,
+    ConstFoldCtx, ContinueAst, Diagnostics, EnumAst, ExprAst, FieldAst, FieldIdentAst, Files,
+    FilledArrayAst, Func, FuncAst, FuncMetaBuilder, FuncRef, Ident, IdentAst, IfAst, IndexAst,
+    Instr, InstrEmiter, InstrIndex, InstrItem, InstrItemKind, InstrKind, InstrModule,
+    InstrModuleMetaBuilder, InstrModuleMetaSlice, InstrRef, IntLit, LitAst, LitKindAst, Loop,
+    LoopAst, LoopData, ModuleRef, Modules, NamedExprAst, OpCode, Parser, Ref, Severty, Span,
+    StringParser, StructFieldAst, SymData, TempMemBase, UnaryAst, UnitAst, VecStore,
 };
 
 #[derive(Default)]
@@ -84,7 +84,8 @@ impl<'a> InstrEmiter<'a> {
                 self.diags,
                 &arena,
                 &mut res.string_parser,
-            ).parse(diver) else {
+            )
+            .parse(diver) else {
                 continue;
             };
 
@@ -188,7 +189,12 @@ impl<'a> InstrEmiter<'a> {
     ) -> Vec<FuncStackTask<'arena>> {
         let mut funcs = Vec::with_capacity(items.len());
         for item in items {
-            let NamedExprAst { name, expr } = match item {
+            let DeclAst {
+                keyword,
+                name,
+                ty,
+                value,
+            } = match item {
                 ExprAst::Unit(UnitAst::Decl(n)) => n,
                 expr => {
                     diags
@@ -199,7 +205,15 @@ impl<'a> InstrEmiter<'a> {
                 }
             };
 
-            let kind = match expr {
+            let Some(value) = value else {
+                diags
+                    .builder(files)
+                    .footer(Severty::Error, "expected declaration with value")
+                    .annotation(Severty::Error, *keyword, "found declaration without value");
+                continue;
+            };
+
+            let kind = match value {
                 ExprAst::Unit(UnitAst::Func(func)) => {
                     let func_ref = entities.funcs.push(Func::default());
 
@@ -210,17 +224,21 @@ impl<'a> InstrEmiter<'a> {
                     });
                     InstrItemKind::Func(func_ref)
                 }
-                ExprAst::Unit(UnitAst::Import(module)) => {
-                    let Some(module) = res.modules.iter().find_map(|&(ref name, id)| (name == &module.ident).then_some(id)) else {
-                        diags
-                            .builder(files)
-                            .footer(Severty::Error, "module not found")
-                            .annotation(Severty::Error, module.span, "requested here");
-                        continue;
-                    };
+                //ExprAst::Unit(UnitAst::Import(module)) => {
+                //    let Some(module) = res
+                //        .modules
+                //        .iter()
+                //        .find_map(|&(ref name, id)| (name == &module.ident).then_some(id))
+                //    else {
+                //        diags
+                //            .builder(files)
+                //            .footer(Severty::Error, "module not found")
+                //            .annotation(Severty::Error, module.span, "requested here");
+                //        continue;
+                //    };
 
-                    InstrItemKind::Import(module)
-                }
+                //    InstrItemKind::Import(module)
+                //}
                 expr => {
                     diags
                         .builder(files)
@@ -266,6 +284,7 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
             args,
             ref body,
             pipe,
+            ..
         }: &'arena FuncAst<'arena>,
         into: FuncRef,
     ) {
@@ -306,27 +325,27 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         match unit {
             UnitAst::Literal(ref l) => Some(self.literal(l)),
             UnitAst::Ident(ref i) => Some(self.ident(i)),
-            UnitAst::Import(ref i) => Some(self.import(i)),
+            //UnitAst::Import(ref i) => Some(self.import(i)),
             UnitAst::Block(b) => self.block(b),
             UnitAst::Unary(u) => self.unary(u),
-            &UnitAst::Array { bracket, elems } => self.array(bracket, elems),
-            UnitAst::FilledArray(fa) => self.filled_array(fa),
-            &UnitAst::Struct { keyword, fields } => self.struct_(keyword, fields),
-            UnitAst::Enum(e) => self.enum_(e),
+            //&UnitAst::Array { bracket, elems } => self.array(bracket, elems),
+            //UnitAst::FilledArray(fa) => self.filled_array(fa),
+            //&UnitAst::Struct { keyword, fields } => self.struct_(keyword, fields),
+            //UnitAst::Enum(e) => self.enum_(e),
             UnitAst::Call(c) => self.call(c),
             UnitAst::Func(f) => Some(self.func(f)),
             UnitAst::Decl(d) => self.decl(d),
-            UnitAst::Loop(l) => self.loop_(l),
-            UnitAst::Index(i) => self.index(i),
-            UnitAst::ForLoop(..) => todo!(),
-            UnitAst::Break(b) => self.break_(b)?,
-            UnitAst::Continue(c) => self.continue_(c)?,
-            UnitAst::Field(f) => self.field(f),
-            UnitAst::If(i) => self.if_(i),
-            &UnitAst::Ret { value, keyword } => self.ret(value, keyword),
+            //UnitAst::Loop(l) => self.loop_(l),
+            //UnitAst::Index(i) => self.index(i),
+            //UnitAst::ForLoop(..) => todo!(),
+            //UnitAst::Break(b) => self.break_(b)?,
+            //UnitAst::Continue(c) => self.continue_(c)?,
+            //UnitAst::Field(f) => self.field(f),
+            //UnitAst::If(i) => self.if_(i),
+            //&UnitAst::Ret { value, keyword } => self.ret(value, keyword),
             UnitAst::Paren(p) => self.expr(p),
-            UnitAst::Unknown(u) => Some(self.unknown(u)),
-            UnitAst::Self_(s) => Some(self.self_(s)),
+            //UnitAst::Unknown(u) => Some(self.unknown(u)),
+            //UnitAst::Self_(s) => Some(self.self_(s)),
         }
     }
 
@@ -526,9 +545,22 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         self.add_instr(InstrKind::Func(func_ref), func.pipe);
     }
 
-    fn decl(&mut self, NamedExprAst { name, expr }: &'arena NamedExprAst<'arena>) -> Option<()> {
+    fn decl(
+        &mut self,
+        DeclAst {
+            keyword,
+            name,
+            value,
+            ..
+        }: &'arena DeclAst,
+    ) -> Option<()> {
         self.res.decl_scope.push(SymData::new(name.ident.clone()));
-        self.expr(expr)?;
+        match value {
+            Some(value) => self.expr(value)?,
+            None => {
+                self.add_instr(InstrKind::Uninit, *keyword);
+            }
+        }
         self.add_instr(InstrKind::Decl, name.span);
         Some(())
     }
@@ -732,14 +764,6 @@ impl<'a, 'arena, 'ctx> FuncBuilder<'a, 'arena, 'ctx> {
         self.res.returns.push(RetData { addr });
 
         None
-    }
-
-    fn unknown(&mut self, keyword: &Span) {
-        self.add_instr(InstrKind::Unkown, *keyword);
-    }
-
-    fn self_(&mut self, keyword: &Span) {
-        self.add_instr(InstrKind::Self_, *keyword);
     }
 
     fn expr_list(&mut self, exprs: &'arena [ExprAst<'arena>]) -> Option<()> {

@@ -52,12 +52,11 @@ fn format_instr(instr: InstrKind, func_meta: FuncMetaView, ctx: &mut String) {
         InstrKind::Index => write!("index"),
         InstrKind::Decl => write!("decl"),
         InstrKind::Field { name, is_meta } => write!("field ident{} {is_meta}", name.index()),
-        InstrKind::Unkown => write!("unkown"),
-        InstrKind::Self_ => write!("self"),
         InstrKind::Jump { to, conditional } => write!("jump {} {}", to, conditional),
         InstrKind::BackJumpDest { used } => write!("back_jump_dest {}", used),
         InstrKind::Error => write!("error"),
         InstrKind::Drop => write!("drop"),
+        InstrKind::Uninit => write!("uninit"),
         InstrKind::DropDecl { decl_count } => write!("drop_decl {decl_count}"),
     }
 }

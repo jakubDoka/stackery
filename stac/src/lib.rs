@@ -70,9 +70,9 @@ pub use {
         VecStoreBuilder,
     },
     temp_mem::{TempMem, TempMemBase},
-    types::{
-        AsocType, AsocTypeDef, BuiltInType, DefinedType, InstanceType, IntType, InternedType,
-        ParamType, PointerType, Signature, Spec, SpecBase, SpecBaseId, SpecBaseRef, SpecInstance,
-        Struct, StructId, StructRef, TyRef, TySlice, Type, TypeRefRepr,
-    },
+    //types::{
+    //    AsocType, AsocTypeDef, BuiltInType, DefinedType, InstanceType, IntType, InternedType,
+    //    ParamType, PointerType, Signature, Spec, SpecBase, SpecBaseId, SpecBaseRef, SpecInstance,
+    //    Struct, StructId, StructRef, TyRef, TySlice, Type, TypeRefRepr,
+    //},
 };
