@@ -1,0 +1,14 @@
+diagnostics:
+error: unable to load a module
+note: loader error: module b not found
+-> a:
+1|                 b: :{b}
+                      ^ imported here
+2|             
+
+order:
+a
+root
+graph:
+root
+  a

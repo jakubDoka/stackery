@@ -172,13 +172,13 @@ define_lexer! {
         //In = "in"
         Fn = "fn"
         Ct = "ct"
-        //Let = "let"
+        Let = "let"
         //Mut = "mut"
 
         //True = "true"
         //False = "false"
 
-        //Dot = "."
+        Dot = "."
         //DoubleDot = ".."
         Comma = ","
         Semi = ";"
@@ -194,7 +194,7 @@ define_lexer! {
 
     regexes {
         Ident = r"(?&ident_start)(?&ident_content)*"
-        //Import = r":\{[^}]*\}"
+        Import = r":\{[^}]*\}"
         //Str = r#""([^"]|\\")*""#
         Int = r"[0-9]+"
     }
@@ -280,8 +280,7 @@ mod test {
     }
 
     print_cases! { perform_test:
-        label "'label 'c 'c '0";
-        chat "'c' '\\'' '\\xffffffff'";
+        num "100 0 20 40";
     }
 
     #[test]

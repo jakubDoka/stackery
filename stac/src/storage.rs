@@ -20,18 +20,12 @@ macro_rules! gen_storage_group {
     ) => {
         #[derive(Default)]
         pub struct $name {$(
-            $field: $crate::VecStore<$field_ty, $crate::FuncIndex>,
+            $field: $crate::VecStore<$field_ty, u32>,
         )*}
 
         impl $name {
             pub fn new() -> Self {
                 Self::default()
-            }
-
-            pub fn builder(&mut self) -> $builder_name {
-                $builder_name {$(
-                    $field: self.$field.builder(),
-                )*}
             }
 
             pub fn view(&self, slice: $slice_name) -> $view_name {
@@ -52,34 +46,41 @@ macro_rules! gen_storage_group {
                     self.$field.preserve_chunks_by_slice(ranges.iter_mut().map(|range| &mut range.$field));
                 )*
             }
+
+            pub fn finish(&mut self, dest: &mut $builder_name) -> $slice_name {
+                $slice_name {$(
+                    $field: self.$field.finish(&mut dest.$field),
+                )*}
+            }
         }
 
-        pub struct $builder_name<$lt> {$(
-            pub $field: $crate::VecStoreBuilder<$lt, $field_ty, $crate::InstrIndex, $crate::FuncIndex>,
+        #[derive(Default)]
+        pub struct $builder_name {$(
+            pub $field: $crate::VecStore<$field_ty, u16>,
         )*}
 
-        impl<$lt> $builder_name<$lt> {
-            pub fn finish(self) -> $slice_name {
-                $slice_name {$(
-                    $field: self.$field.finish(),
+        impl $builder_name {
+            pub fn view(&self) -> $view_name {
+                $view_name {$(
+                    $field: self.$field.full_view(),
                 )*}
             }
 
-            pub fn view(&self, slice: $slice_name) -> $view_name {
-                $view_name {$(
-                    $field: &self.$field[slice.$field],
-                )*}
+            pub fn clear(&mut self) {
+                $(
+                    self.$field.clear();
+                )*
             }
         }
 
         #[derive(Clone, Copy, Default)]
         pub struct $slice_name {$(
-            $field: $crate::VecSlice<$field_ty, $crate::InstrIndex, $crate::FuncIndex>,
+            $field: $crate::VecSlice<$field_ty, u16, u32>,
         )*}
 
         #[derive(Clone, Copy)]
         pub struct $view_name<'a> {$(
-            pub $field: &'a $crate::VecSliceView<$field_ty, $crate::InstrIndex>,
+            pub $field: &'a $crate::VecSliceView<$field_ty, u16>,
         )*}
     };
 }
@@ -325,6 +326,10 @@ impl<T, R: RefRepr> VecStore<T, R> {
         }
     }
 
+    pub fn full_view(&self) -> &VecSliceView<T, R> {
+        unsafe { mem::transmute(&self.data[..]) }
+    }
+
     pub fn truncate(&mut self, len: usize) {
         self.data.truncate(len);
     }
@@ -415,6 +420,18 @@ impl<T, R: RefRepr> VecStore<T, R> {
     pub fn pop(&mut self) -> Option<T> {
         self.data.pop()
     }
+
+    pub fn finish<P: RefRepr>(&mut self, other: &mut VecStore<T, P>) -> VecSlice<T, P, R> {
+        let strat = self.data.len();
+        let end = strat + other.data.len();
+
+        self.data.append(&mut other.data);
+
+        VecSlice {
+            slice: Slice::new(strat, end),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T, R: RefRepr> Index<Slice<T, R>> for VecStore<T, R> {
@@ -483,14 +500,6 @@ impl<'a, T, R: RefRepr, P: RefRepr> VecStoreBuilder<'a, T, R, P> {
         self.within.data.extend(iter);
         let end = self.len();
         Slice::new(start, end)
-    }
-
-    pub fn finish(self) -> VecSlice<T, R, P> {
-        let end = self.within.data.len();
-        VecSlice {
-            slice: Slice::new(self.start, end),
-            _marker: PhantomData,
-        }
     }
 
     pub fn len(&self) -> usize {

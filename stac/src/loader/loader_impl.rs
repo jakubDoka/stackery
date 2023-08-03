@@ -2,7 +2,7 @@ use std::{collections::VecDeque, future::Future, io, pin::Pin};
 
 use crate::{
     BitSet, CycleDetector, FileRef, Graph, ImportLexer, Loader, LoaderCtx, Module, ModuleLoader,
-    ModuleMeta, ModuleRef, PoolStore, Severty,
+    ModuleMeta, ModuleRef, Modules, PoolStore, Severty,
 };
 use mini_alloc::IdentStr;
 
@@ -18,7 +18,8 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         let mut res = CacheLoaderRes::default();
 
         let root = self.load_modules(&mut res, root).await?;
-        let order = self.detect_cycles(root)?;
+        let mut order = self.detect_cycles(root)?;
+        self.remove_ignored(&mut order);
         self.remove_unreachable(&res);
         let updated_modules = self.mark_updated(&order);
 
@@ -27,6 +28,10 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
             root,
             updated_modules,
         })
+    }
+
+    fn remove_ignored(&mut self, order: &mut Vec<ModuleRef>) {
+        order.retain(|&module| module != Modules::BUILTIN);
     }
 
     fn remove_unreachable(&mut self, res: &CacheLoaderRes) {
@@ -217,6 +222,17 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         res.import_stack.dedup_by(|a, b| a.0 == b.0);
 
         for (name, pos) in res.import_stack.drain(..) {
+            if name.as_str() == Modules::BUILTIN_NAME {
+                queue.push(async move {
+                    LoadedFile {
+                        id: Ok(Modules::BUILTIN),
+                        from: Some((from, pos)),
+                        name,
+                    }
+                });
+                continue;
+            }
+
             let fut = self.load_file(Some((from, pos)), name);
             queue.push(fut);
         }
@@ -282,152 +298,5 @@ impl Future for ParallelFileLoader {
         };
 
         std::task::Poll::Ready(Some(res))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use mini_alloc::IdentStr;
-    use pollster::FutureExt;
-
-    use crate::{DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules};
-
-    fn perform_test(source: &str, ctx: &mut String) {
-        let loader = LoaderMock::new(source);
-        perform_test_low(loader, ctx);
-    }
-
-    fn pefrom_delayed_test(source: &str, ctx: &mut String, delay_ms: u32) {
-        let loader = DelayedLoaderMock::new(delay_ms, LoaderMock::new(source));
-        perform_test_low(loader, ctx);
-    }
-
-    fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
-        let mut diagnostics = crate::Diagnostics::default();
-        let mut modules = crate::Modules::default();
-
-        let root = IdentStr::from_str("root");
-
-        let loader_ctx = crate::ModuleLoader::new(&mut loader, &mut modules, &mut diagnostics);
-
-        let meta = loader_ctx.update(root).block_on();
-
-        if !diagnostics.diagnostic_view().is_empty() {
-            ctx.push_str("diagnostics:\n");
-            ctx.push_str(diagnostics.diagnostic_view());
-        }
-
-        let Some(meta) = meta else {
-            ctx.push_str("no meta");
-            return;
-        };
-
-        ctx.push_str("order:\n");
-        for &module in &meta.order {
-            ctx.push_str(modules.name_of(module));
-            ctx.push('\n');
-        }
-
-        ctx.push_str("graph:\n");
-        fn log_graph(parent: ModuleRef, modules: &Modules, depth: usize, ctx: &mut String) {
-            for _ in 0..depth {
-                ctx.push_str("  ");
-            }
-
-            ctx.push_str(modules.name_of(parent));
-            ctx.push('\n');
-
-            let deps = modules.eintities[parent].deps;
-            for &child in &modules.deps[deps] {
-                log_graph(child, modules, depth + 1, ctx);
-            }
-        }
-        log_graph(meta.root, &modules, 0, ctx);
-    }
-
-    #[test]
-    fn test() {
-        print_test::case("delayed::loading", |ctx| {
-            let now = std::time::Instant::now();
-            pefrom_delayed_test(
-                "
-                    `root
-                        a: :{a}
-                        b: :{b}
-                        c: :{c}
-                        d: :{d}
-                        e: :{e}
-                    `
-                    `a :{b}`
-                    `b `
-                    `c :{f} :{g}`
-                    `d :{e}`
-                    `e `
-                    `f :{b}`
-                    `g `
-                ",
-                ctx,
-                50,
-            );
-            let delay = if cfg!(miri) { 1500 } else { 250 };
-            ctx.push_str(&format!(
-                "in time bounds (<250): {:?}",
-                now.elapsed().as_millis() < delay
-            ));
-
-            if now.elapsed().as_millis() >= delay {
-                ctx.push_str(&format!("{:?}", now.elapsed()));
-            }
-        })
-    }
-
-    macro_rules! cases {
-        ($(
-            $name:ident $sources:literal
-        )*) => {print_test::cases! {$(
-            fn $name(ctx) {
-                perform_test($sources, ctx);
-            }
-        )*}};
-    }
-
-    cases! {
-        one_file "`root
-            hello: || \"hello\"
-        `"
-        cycle "
-            `root
-                a: :{a}
-            `
-            `a
-                b: :{root}
-            `
-        "
-        common_dependency "
-            `root
-                a: :{a}
-                b: :{b}
-            `
-            `a
-                common: :{common}
-            `
-            `b
-                common: :{common}
-            `
-            `common
-                c: || \"c\"
-            `
-        "
-        self_import "`root
-                root: :{root}
-        `"
-        nonexistatnt_import "
-            `root
-                a: :{a}
-            `
-            `a
-                b: :{b}
-            `
-        "
     }
 }

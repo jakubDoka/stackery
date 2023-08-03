@@ -9,6 +9,7 @@ mod loader_impl;
 pub type ModuleRefRepr = u16;
 pub type ModuleRef = FileRef;
 pub type ModuleDeps = Slice<ModuleRef, ModuleRefRepr>;
+pub type ModuleShadowStore<T> = ShadowStore<File, ModuleRefRepr, T>;
 
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub struct Module {
@@ -47,12 +48,25 @@ impl ModuleMeta {
 
 #[derive(Default)]
 pub struct Modules {
-    eintities: ShadowStore<File, ModuleRefRepr, Module>,
+    eintities: ModuleShadowStore<Module>,
     deps: VecStore<ModuleRef, ModuleRefRepr>,
     files: Files,
 }
 
 impl Modules {
+    pub const BUILTIN: ModuleRef = ModuleRef::const_new(0);
+    pub const BUILTIN_NAME: &'static str = "bi";
+
+    pub fn new() -> Self {
+        Self::default().init()
+    }
+
+    pub fn init(mut self) -> Self {
+        let builtin = File::new(IdentStr::from_str("bi"), String::new());
+        assert_eq!(self.files.push(builtin), Self::BUILTIN);
+        self
+    }
+
     pub(crate) fn name_of(&self, module: ModuleRef) -> &IdentStr {
         self.files[module].name()
     }
@@ -61,36 +75,17 @@ impl Modules {
         &self.files
     }
 
-    pub(crate) fn preserved(&self) -> impl Iterator<Item = ModuleRef> + '_ {
-        self.files()
-            .iter()
-            .filter_map(|(id, module)| (!module.is_dirty()).then_some(id))
-    }
-
     #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.files().len()
-    }
-
-    pub(crate) fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
-        self.files().iter().filter_map(|(id, module)| {
-            let is_changed = module.is_dirty();
-            is_changed.then_some(id)
-        })
     }
 
     pub(crate) fn module_file(&self, module: ModuleRef) -> FileRef {
         module // legacy
     }
 
-    pub(crate) fn deps_of(
-        &self,
-        module: ModuleRef,
-    ) -> impl Iterator<Item = (IdentStr, ModuleRef)> + '_ {
-        let module = &self.eintities[module];
-        self.deps[module.deps]
-            .iter()
-            .map(move |&m| (self.name_of(m).clone(), m))
+    pub(crate) fn deps_of(&self, module_ref: ModuleRef) -> impl Iterator<Item = ModuleRef> + '_ {
+        self.deps[self.eintities[module_ref].deps].iter().copied()
     }
 }
 
@@ -222,12 +217,23 @@ pub mod test_util {
         pub fn new(mut files: &'a str) -> Self {
             let delim = '`';
             let mut modules = HashMap::new();
+
+            if !files.contains(delim) {
+                modules.insert("root", files);
+
+                return Self {
+                    modules,
+                    loaded: HashMap::new(),
+                };
+            }
+
             while let Some((_, rest)) = files.split_once(delim) {
                 let (name, rest) = rest.split_once(char::is_whitespace).unwrap();
                 let (source, rest) = rest.split_once(delim).unwrap();
                 modules.insert(name, source);
                 files = rest;
             }
+
             Self {
                 modules,
                 loaded: HashMap::new(),
@@ -335,4 +341,138 @@ impl fmt::Display for VisError {
 enum VisErrorReason {
     NotExported,
     FilePrivate,
+}
+
+#[cfg(test)]
+mod test {
+    use mini_alloc::IdentStr;
+    use pollster::FutureExt;
+
+    use crate::{print_cases, DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules};
+
+    fn perform_test(source: &str, ctx: &mut String) {
+        let loader = LoaderMock::new(source);
+        perform_test_low(loader, ctx);
+    }
+
+    fn pefrom_delayed_test(source: &str, ctx: &mut String, delay_ms: u32) {
+        let loader = DelayedLoaderMock::new(delay_ms, LoaderMock::new(source));
+        perform_test_low(loader, ctx);
+    }
+
+    fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
+        let mut diagnostics = crate::Diagnostics::default();
+        let mut modules = crate::Modules::new();
+
+        let root = IdentStr::from_str("root");
+
+        let loader_ctx = crate::ModuleLoader::new(&mut loader, &mut modules, &mut diagnostics);
+
+        let meta = loader_ctx.update(root).block_on();
+
+        if !diagnostics.diagnostic_view().is_empty() {
+            ctx.push_str("diagnostics:\n");
+            ctx.push_str(diagnostics.diagnostic_view());
+        }
+
+        let Some(meta) = meta else {
+            ctx.push_str("no meta");
+            return;
+        };
+
+        ctx.push_str("order:\n");
+        for &module in &meta.order {
+            ctx.push_str(modules.name_of(module));
+            ctx.push('\n');
+        }
+
+        ctx.push_str("graph:\n");
+        fn log_graph(parent: ModuleRef, modules: &Modules, depth: usize, ctx: &mut String) {
+            for _ in 0..depth {
+                ctx.push_str("  ");
+            }
+
+            ctx.push_str(modules.name_of(parent));
+            ctx.push('\n');
+
+            let deps = modules.eintities[parent].deps;
+            for &child in &modules.deps[deps] {
+                log_graph(child, modules, depth + 1, ctx);
+            }
+        }
+        log_graph(meta.root, &modules, 0, ctx);
+    }
+
+    #[test]
+    fn test() {
+        print_test::case("delayed::loading", |ctx| {
+            let now = std::time::Instant::now();
+            pefrom_delayed_test(
+                "
+                    `root
+                        a: :{a}
+                        b: :{b}
+                        c: :{c}
+                        d: :{d}
+                        e: :{e}
+                    `
+                    `a :{b}`
+                    `b `
+                    `c :{f} :{g}`
+                    `d :{e}`
+                    `e `
+                    `f :{b}`
+                    `g `
+                ",
+                ctx,
+                50,
+            );
+            let delay = if cfg!(miri) { 1500 } else { 250 };
+            ctx.push_str(&format!(
+                "in time bounds (<250): {:?}",
+                now.elapsed().as_millis() < delay
+            ));
+
+            if now.elapsed().as_millis() >= delay {
+                ctx.push_str(&format!("{:?}", now.elapsed()));
+            }
+        })
+    }
+
+    print_cases! { perform_test:
+        one_file "hello: || \"hello\"";
+        cycle "
+            `root
+                a: :{a}
+            `
+            `a
+                b: :{root}
+            `
+        ";
+        common_dependency "
+            `root
+                a: :{a}
+                b: :{b}
+            `
+            `a
+                common: :{common}
+            `
+            `b
+                common: :{common}
+            `
+            `common
+                c: || \"c\"
+            `
+        ";
+        self_import "root: :{root}";
+        nonexistatnt_import "
+            `root
+                a: :{a}
+            `
+            `a
+                b: :{b}
+            `
+        ";
+        builtin ":{bi}";
+    }
 }

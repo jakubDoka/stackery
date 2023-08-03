@@ -1,8 +1,10 @@
-use crate::{BinaryAst, BlockAst, ExprAst, LitKindAst, OpCode, StructFieldAst, TokenKind, UnitAst};
+use crate::{BinaryAst, BlockAst, ExprAst, LitKindAst, ModItemAst, TokenKind, UnitAst};
 
-pub fn format_ast(ast: &[ExprAst], ctx: &mut String, indent: usize) {
+pub fn format_ast(ast: &[ModItemAst], ctx: &mut String, indent: usize) {
     for ast in ast {
-        format_expr(ast, ctx, indent);
+        match ast {
+            ModItemAst::Decl(l) => format_unit(&UnitAst::Decl(&l), ctx, indent),
+        }
         ctx.push_str(";\n");
     }
 }
@@ -83,11 +85,9 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
     match unit {
         UnitAst::Literal(ref l) => match l.kind {
             LitKindAst::Int(i) => ctx.push_str(&i.value().to_string()),
-            LitKindAst::Bool(b) => ctx.push_str(if b { "true" } else { "false" }),
-            LitKindAst::Str(ref s) => ctx.push_str(s),
         },
-        //UnitAst::Import(ident) |
         UnitAst::Ident(ident) => ctx.push_str(ident.ident.as_str()),
+        UnitAst::Import(ident) => ctx.push_str(ident.ident.as_str()),
         UnitAst::Block(b) => {
             format_block(b, ctx, indent);
         }
@@ -95,66 +95,6 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
             ctx.push_str(u.op.kind.name());
             format_unit(&u.expr, ctx, indent);
         }
-        //UnitAst::Array { elems, .. } => {
-        //    format_list(
-        //        elems,
-        //        ctx,
-        //        indent,
-        //        [TokenKind::LBracket, TokenKind::Comma, TokenKind::RBracket],
-        //        false,
-        //        false,
-        //        format_expr,
-        //    );
-        //}
-        //UnitAst::FilledArray(a) => {
-        //    ctx.push('[');
-        //    format_expr(&a.expr, ctx, indent);
-        //    ctx.push(';');
-        //    format_expr(&a.len, ctx, indent);
-        //    ctx.push(']');
-        //}
-        //UnitAst::Struct { fields, .. } => {
-        //    format_list(
-        //        fields,
-        //        ctx,
-        //        indent,
-        //        [TokenKind::Struct, TokenKind::Comma, TokenKind::RBrace],
-        //        true,
-        //        true,
-        //        |field, ctx, indent| match field {
-        //            StructFieldAst::Decl(named) => {
-        //                ctx.push_str(named.name.ident.as_str());
-        //                ctx.push_str(": ");
-        //                format_expr(&named.expr, ctx, indent);
-        //            }
-        //            StructFieldAst::Inline(name) => {
-        //                ctx.push_str(name.ident.as_str());
-        //            }
-        //        },
-        //    );
-        //}
-        //UnitAst::Index(i) => {
-        //    format_unit(&i.expr, ctx, indent);
-        //    ctx.push('[');
-        //    format_expr(&i.index, ctx, indent);
-        //    ctx.push(']');
-        //}
-        //UnitAst::Enum(e) => {
-        //    ctx.push_str(TokenKind::Enum.name());
-        //    match e.value {
-        //        Some(ref val) => {
-        //            ctx.push(' ');
-        //            ctx.push_str(e.name.ident.as_str());
-        //            ctx.push_str(": ");
-        //            format_expr(&val, ctx, indent);
-        //            ctx.push_str(" }");
-        //        }
-        //        None => {
-        //            ctx.push_str(e.name.ident.as_str());
-        //            ctx.push('}');
-        //        }
-        //    }
-        //}
         UnitAst::Call(c) => {
             format_unit(&c.caller, ctx, indent);
             format_list(
@@ -168,6 +108,7 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
             );
         }
         UnitAst::Func(f) => {
+            ctx.push_str("fn");
             format_list(
                 f.args,
                 ctx,
@@ -184,6 +125,12 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
                     format_expr(&param.ty, ctx, indent);
                 },
             );
+
+            if let Some(ty) = &f.return_ty {
+                ctx.push_str(": ");
+                format_expr(ty, ctx, indent);
+            }
+
             ctx.push(' ');
             format_expr(&f.body, ctx, indent);
         }
@@ -199,59 +146,13 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
                 format_expr(expr, ctx, indent);
             }
         }
-        //UnitAst::Loop(l) => {
-        //    ctx.push_str(TokenKind::Loop.name());
-        //    if let Some(ref label) = l.label {
-        //        ctx.push('.');
-        //        ctx.push_str(label.ident.as_str());
-        //    }
-        //    ctx.push(' ');
-        //    format_block(&l.body, ctx, indent);
-        //}
-        //UnitAst::ForLoop(fl) => {
-        //    ctx.push_str(TokenKind::For.name());
-        //    if let Some(ref label) = fl.label {
-        //        ctx.push('.');
-        //        ctx.push_str(label.ident.as_str());
-        //    }
-        //    ctx.push(' ');
-        //    ctx.push_str(fl.var.ident.as_str());
-        //    ctx.push(' ');
-        //    ctx.push_str(TokenKind::In.name());
-        //    ctx.push(' ');
-        //    format_expr(&fl.iter, ctx, indent);
-        //    ctx.push(' ');
-        //    format_expr(&fl.body, ctx, indent);
-        //}
-        //UnitAst::Break(_) => todo!(),
-        //UnitAst::Continue(_) => todo!(),
-        //UnitAst::Field(fa) => {
-        //    format_unit(&fa.expr, ctx, indent);
-        //    ctx.push('.');
-        //    ctx.push_str(fa.name.ident.as_str());
-        //}
-        //UnitAst::If(i) => {
-        //    ctx.push_str(TokenKind::If.name());
-        //    ctx.push(' ');
-        //    format_expr(&i.cond, ctx, indent);
-        //    ctx.push(' ');
-        //    format_block(&i.then, ctx, indent);
-        //    if let Some(ref else_) = i.else_ {
-        //        ctx.push(' ');
-        //        ctx.push_str(TokenKind::Else.name());
-        //        ctx.push(' ');
-        //        format_block(&else_, ctx, indent);
-        //    }
-        //}
-        //UnitAst::Ret { value, .. } => {
-        //    ctx.push_str(TokenKind::Return.name());
-        //    if let Some(expr) = value {
-        //        ctx.push(' ');
-        //        format_expr(&expr, ctx, indent);
-        //    }
-        //}
         UnitAst::Paren(p) => {
             format_expr(p, ctx, indent);
+        }
+        UnitAst::Field(f) => {
+            format_unit(&f.on, ctx, indent);
+            ctx.push('.');
+            ctx.push_str(f.name.ident.as_str());
         }
     }
 }

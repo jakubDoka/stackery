@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use mini_alloc::{ArenaScope, Diver, IdentStr};
 
-use crate::{Diagnostics, ExprAst, FileRef, Files, Lexer, Severty, Token, TokenKind, TokenKind::*};
+use crate::{Diagnostics, FileRef, Files, Lexer, Severty, Token, TokenKind};
 
 pub mod expr;
 pub mod fmt;
@@ -13,7 +13,6 @@ pub struct Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     lexer: Lexer<'src>,
     diags: &'ctx mut Diagnostics,
     arena: &'arena ArenaScope<'arena_ctx>,
-    string_parser: &'ctx mut StringParser,
 }
 
 impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
@@ -22,7 +21,6 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         file: FileRef,
         diags: &'ctx mut Diagnostics,
         arena: &'arena ArenaScope<'arena_ctx>,
-        string_parser: &'ctx mut StringParser,
     ) -> Self {
         let mut lexer = Lexer::new(files, file);
         Self {
@@ -31,13 +29,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
             lexer,
             diags,
             arena,
-            string_parser,
         }
-    }
-
-    pub fn parse(mut self, diver: Diver) -> Option<&'arena [ExprAst<'arena>]> {
-        self.sequence(diver, Self::expr, Semi, Eof, "declaration")
-            .map(|(decls, _)| &*decls)
     }
 
     fn sequence<T>(

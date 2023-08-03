@@ -124,12 +124,4 @@ impl Span {
     pub fn col(&self) -> usize {
         self.col as usize
     }
-
-    pub(crate) fn shift(&self, index: usize) -> Span {
-        Span {
-            row: self.row,
-            col: self.col + index as u16,
-            file: self.file,
-        }
-    }
 }

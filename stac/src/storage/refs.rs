@@ -97,6 +97,10 @@ impl<T, R: RefRepr> PartialOrd for Ref<T, R> {
 }
 
 impl<T, R: RefRepr> Ref<T, R> {
+    pub const fn const_new(repr: R) -> Self {
+        Self(repr, PhantomData)
+    }
+
     pub(super) fn new(index: usize) -> Self {
         Self(
             R::try_from_usize(index).expect("exceeded cache entiry limit"),
