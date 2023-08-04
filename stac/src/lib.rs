@@ -26,6 +26,7 @@
 mod algorithms;
 mod diagnostics;
 mod graphs;
+mod instantiate;
 mod instrs;
 mod lexer;
 mod loader;

@@ -213,7 +213,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
             args,
             return_ty,
             body,
-            pipe: keyword,
+            keyword,
         })))
     }
 
@@ -332,7 +332,7 @@ impl UnitAst<'_> {
             UnitAst::Block(block) => block.brace,
             UnitAst::Unary(unary) => unary.op.span,
             UnitAst::Call(call) => call.caller.span(),
-            UnitAst::Func(func) => func.pipe,
+            UnitAst::Func(func) => func.keyword,
             UnitAst::Decl(decl) => decl.keyword,
             UnitAst::Paren(expr) => expr.span(),
             UnitAst::Field(field) => field.dot,
@@ -370,7 +370,7 @@ pub struct UnaryAst<'arena> {
 
 #[derive(Debug, Clone)]
 pub struct FuncAst<'arena> {
-    pub pipe: Span,
+    pub keyword: Span,
     pub args: &'arena [FuncArgAst<'arena>],
     pub return_ty: Option<ExprAst<'arena>>,
     pub body: ExprAst<'arena>,

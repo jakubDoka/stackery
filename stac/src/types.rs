@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::instantiate::Layout;
+
 mod unify_impl;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -125,6 +127,10 @@ impl IntSize {
             Self::W64 => 64,
             Self::W128 => 128,
         }
+    }
+
+    pub(crate) fn bite_width(&self) -> u8 {
+        self.bit_width() / 8
     }
 }
 

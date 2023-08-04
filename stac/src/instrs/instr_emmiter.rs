@@ -1,13 +1,13 @@
-use mini_alloc::{FnvHashMap, IdentStr};
+use mini_alloc::IdentStr;
 
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
     BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FuncArgAst, InstrBodyRef, ModItemAst,
-    ModuleRef, Severty, Signature, Span, Type, UnaryAst, UnitAst,
+    ModuleRef, Resolved, Severty, Signature, Span, Type, UnaryAst, UnitAst,
 };
 
 use super::{
-    Decl, DeclData, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, InternedIdent,
+    Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, InternedIdent,
     ModuleDeclBuilder, ScopeFrame, TyResolverCtx,
 };
 
@@ -79,21 +79,38 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         Signature { args, ret }
     }
 
-    fn resolve_ty<'arena>(&mut self, ty: &ExprAst<'arena>, res: &mut Res<'arena>) -> Type {
-        if self.build_expr(ty, res).is_none() {
-            return Type::BuiltIn(BuiltInType::Unknown);
-        }
+    fn resolve<'arena>(
+        &mut self,
+        expr: &ExprAst<'arena>,
+        res: &mut Res<'arena>,
+    ) -> Option<Resolved> {
+        self.build_expr(expr, res)?;
 
         let ctx = TyResolverCtx {
             module: res.module_ref,
             scope: &mut res.module.decls,
             diags: &mut self.diags,
             instrs: &self.instrs,
+            modules: &self.modules,
         };
 
-        let ty = self.resolver.resolve(ctx, res.body.view());
+        let resolved = self.resolver.resolve(ctx, res.body.view(), expr.span());
         res.body.clear();
-        ty
+        resolved
+    }
+
+    fn resolve_ty<'arena>(&mut self, expr: &ExprAst<'arena>, res: &mut Res<'arena>) -> Type {
+        match self.resolve(expr, res) {
+            Some(Resolved::Type(ty)) => ty,
+            Some(..) => {
+                self.diags
+                    .builder(self.modules.files())
+                    .footer(Severty::Error, "expected this to evaluate into type")
+                    .annotation(Severty::Error, expr.span(), "this evalueates into TODO");
+                Type::BuiltIn(BuiltInType::Unknown)
+            }
+            None => Type::BuiltIn(BuiltInType::Unknown),
+        }
     }
 
     fn build_func<'arena>(
@@ -116,7 +133,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         for (arg, ty) in arg.iter().zip(signature.args.iter()) {
             let decl = Decl {
                 name: arg.name.clone(),
-                data: DeclData::Type(ty.clone()),
+                data: Resolved::Type(ty.clone()),
             };
             res.module.decls.push(decl);
         }
@@ -207,7 +224,9 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     fn queue_func<'arena>(&mut self, func: &FuncAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
         let func_ref = res.add_to_compile_queue(func.clone());
         let signature = self.build_signature(func, res);
-        todo!()
+        res.module.funcs[func_ref].signature = signature;
+        res.push_instr(InstrKind::Func(func_ref), func.keyword);
+        Some(())
     }
 
     fn build_decl<'arena>(&mut self, decl: &DeclAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
@@ -232,7 +251,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     ) -> Option<()> {
         self.build_expr(lhs, res)?;
         self.build_expr(rhs, res)?;
-        res.push_instr(InstrKind::Op(op.kind), op.span);
+        res.push_instr(InstrKind::BinOp(op.kind), op.span);
         Some(())
     }
 
@@ -269,25 +288,12 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .terminate()?;
         };
 
-        match value {
-            &ExprAst::Unit(UnitAst::Func(f)) => {
-                let func = res.add_to_compile_queue(f.clone());
-                Some(Decl {
-                    name: name.clone(),
-                    data: super::DeclData::Func(func),
-                })
-            }
-            other => self
-                .diags
-                .builder(self.modules.files())
-                .footer(Severty::Error, "only functions are allowed at top level")
-                .annotation(
-                    Severty::Error,
-                    other.span(),
-                    "this does not directly evaluate to a function",
-                )
-                .terminate()?,
-        }
+        let data = self.resolve(value, res)?;
+
+        Some(Decl {
+            name: name.clone(),
+            data,
+        })
     }
 }
 

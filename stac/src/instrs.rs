@@ -8,22 +8,23 @@ use crate::{
 mod instr_emmiter;
 
 type InstrRepr = u16;
-type InstrRef = Ref<Instr, InstrRepr>;
-type Const = Ref<LitKindAst, InstrRepr>;
-type Sym = Ref<Decl, InstrRepr>;
-type FuncRef = Ref<Func, InstrRepr>;
+pub type InstrRef = Ref<Instr, InstrRepr>;
+pub type Const = Ref<LitKindAst, InstrRepr>;
+pub type Sym = Ref<Decl, InstrRepr>;
+pub type FuncRef = Ref<Func, InstrRepr>;
 type Scope = VecStore<Decl, InstrRepr>;
 type InternedIdent = Ref<IdentStr, InstrRepr>;
 
 pub type SourceOffset = i16;
 
 #[derive(Copy, Clone)]
-enum InstrKind {
+pub enum InstrKind {
     Uninit,
     Const(Const),
     Sym(Sym),
+    Func(FuncRef),
     Module(ModuleRef),
-    Op(OpCode),
+    BinOp(OpCode),
     Field(InternedIdent),
 }
 
@@ -36,13 +37,7 @@ pub struct Instr {
 #[derive(Clone)]
 pub struct Decl {
     name: IdentAst,
-    data: DeclData,
-}
-
-#[derive(Clone)]
-enum DeclData {
-    Func(FuncRef),
-    Type(Type),
+    data: Resolved,
 }
 
 gen_storage_group! {
@@ -95,7 +90,7 @@ impl ModuleDeclBuilder {
                     ident: IdentStr::from_str(nm),
                     span: Span::new(0, 0, Modules::BUILTIN),
                 },
-                data: DeclData::Type(Type::BuiltIn(crate::BuiltInType::Int(ty))),
+                data: Resolved::Type(Type::BuiltIn(crate::BuiltInType::Int(ty))),
             });
         }
     }
@@ -106,6 +101,19 @@ pub struct TyResolverCtx<'ctx> {
     pub instrs: &'ctx Instrs,
     pub scope: &'ctx mut Scope,
     pub diags: &'ctx mut Diagnostics,
+    pub modules: &'ctx Modules,
+}
+
+impl<'ctx> TyResolverCtx<'ctx> {
+    pub fn stack_borrow(&mut self) -> TyResolverCtx {
+        TyResolverCtx {
+            module: self.module,
+            instrs: self.instrs,
+            scope: self.scope,
+            diags: self.diags,
+            modules: self.modules,
+        }
+    }
 }
 
 pub fn lookup_sym(s: &Scope, name: &str) -> Option<Sym> {
@@ -126,15 +134,23 @@ impl ScopeFrame {
     }
 }
 
-pub trait TyResolver {
-    fn resolve(&mut self, ctx: TyResolverCtx, body: InstrBody) -> Type;
+pub trait Resolver {
+    fn resolve(&mut self, ctx: TyResolverCtx, body: InstrBody, span: Span) -> Option<Resolved>;
+}
+
+#[derive(Clone)]
+pub enum Resolved {
+    Type(Type),
+    Func(FuncRef),
+    Module(ModuleRef),
+    Const(LitKindAst),
 }
 
 pub struct InstrBuilder<'ctx> {
     instrs: &'ctx mut Instrs,
     modules: &'ctx Modules,
     diags: &'ctx mut Diagnostics,
-    resolver: &'ctx mut dyn TyResolver,
+    resolver: &'ctx mut dyn Resolver,
 }
 
 impl<'ctx> InstrBuilder<'ctx> {
@@ -142,7 +158,7 @@ impl<'ctx> InstrBuilder<'ctx> {
         instrs: &'ctx mut Instrs,
         modules: &'ctx Modules,
         diags: &'ctx mut Diagnostics,
-        resolver: &'ctx mut dyn TyResolver,
+        resolver: &'ctx mut dyn Resolver,
     ) -> Self {
         Self {
             instrs,
@@ -159,62 +175,50 @@ mod test {
     use pollster::FutureExt;
 
     use crate::{
-        instrs::{DeclData, InstrKind},
-        lookup_sym, print_cases, Instr, InstrBody, Instrs, LitKindAst, ModuleDecl, ModuleRef,
-        Modules, Parser, TyResolver, Type,
+        instrs::InstrKind, print_cases, Instr, InstrBody, Instrs, ModuleRef, Modules, Parser,
+        Resolved, Resolver,
     };
 
     #[derive(Default)]
     struct TyResolverImpl {}
 
-    impl TyResolver for TyResolverImpl {
-        fn resolve(&mut self, ctx: crate::TyResolverCtx, body: crate::InstrBody) -> crate::Type {
-            #[derive(Debug)]
-            enum StackValue {
-                Const(LitKindAst),
-                Type(Type),
-                Mod(ModuleRef),
-            }
-
-            let mut stack = Vec::<StackValue>::new();
+    impl Resolver for TyResolverImpl {
+        fn resolve(
+            &mut self,
+            ctx: crate::TyResolverCtx,
+            body: crate::InstrBody,
+            _span: crate::Span,
+        ) -> Option<super::Resolved> {
+            let mut stack = Vec::<Resolved>::new();
 
             for &instr in body.instrs {
                 let value = match instr.kind {
                     InstrKind::Uninit => todo!(),
-                    InstrKind::Const(c) => StackValue::Const(body.consts[c].clone()),
-                    InstrKind::Sym(sym) => match ctx.scope[sym].data.clone() {
-                        DeclData::Func(_) => todo!(),
-                        DeclData::Type(ty) => StackValue::Type(ty),
-                    },
-                    InstrKind::Module(module) => StackValue::Mod(module),
-                    InstrKind::Op(_) => todo!(),
+                    InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
+                    InstrKind::Sym(sym) => ctx.scope[sym].data.clone(),
+                    InstrKind::Module(module) => Resolved::Module(module),
+                    InstrKind::BinOp(_) => todo!(),
                     InstrKind::Field(i) => match stack.pop().unwrap() {
-                        StackValue::Const(_) => todo!(),
-                        StackValue::Type(_) => todo!(),
-                        StackValue::Mod(m) => {
+                        Resolved::Const(_) => todo!(),
+                        Resolved::Type(_) => todo!(),
+                        Resolved::Func(_) => todo!(),
+                        Resolved::Module(m) => {
                             let view = ctx.instrs.decls.view(ctx.instrs.modules[m]);
-                            let delc = view
-                                .decls
+                            view.decls
                                 .iter()
                                 .find(|d| d.name.ident == body.idents[i])
                                 .unwrap()
                                 .data
-                                .clone();
-                            match delc {
-                                DeclData::Func(_) => todo!(),
-                                DeclData::Type(ty) => StackValue::Type(ty),
-                            }
+                                .clone()
                         }
                     },
+                    InstrKind::Func(i) => Resolved::Func(i),
                 };
 
                 stack.push(value);
             }
 
-            match stack.pop() {
-                Some(StackValue::Type(ty)) => ty,
-                other => panic!("Expected type, got {:?}", other),
-            }
+            Some(stack.pop().unwrap())
         }
     }
 
@@ -232,11 +236,12 @@ mod test {
             }
             InstrKind::Sym(s) => display_id("sym", s.index(), ctx),
             InstrKind::Module(m) => display_id("mod", m.index(), ctx),
-            InstrKind::Op(op) => ctx.push_str(op.name()),
+            InstrKind::BinOp(op) => ctx.push_str(op.name()),
             InstrKind::Field(f) => {
                 ctx.push_str(". ");
                 ctx.push_str(body.idents[f].as_str());
             }
+            InstrKind::Func(f) => display_id("func", f.index(), ctx),
         }
     }
 
@@ -254,9 +259,22 @@ mod test {
             ctx.push_str(" = ");
 
             let func = match decl.data.clone() {
-                DeclData::Func(func) => func,
-                DeclData::Type(_) => {
-                    todo!()
+                Resolved::Func(func) => func,
+                Resolved::Type(ty) => {
+                    ctx.push_str(&ty.to_string());
+                    ctx.push('\n');
+                    continue;
+                }
+                Resolved::Module(m) => {
+                    ctx.push_str(":{");
+                    ctx.push_str(modules.name_of(m).as_str());
+                    ctx.push_str("}\n");
+                    continue;
+                }
+                Resolved::Const(c) => {
+                    ctx.push_str(&c.to_string());
+                    ctx.push('\n');
+                    continue;
                 }
             };
 
