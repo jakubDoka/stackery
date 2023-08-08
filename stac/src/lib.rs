@@ -40,6 +40,6 @@ mod types;
 pub use loader::test_util::{DelayedLoaderMock, LoaderMock};
 
 pub use {
-    diagnostics::*, graphs::*, instrs::*, lexer::*, loader::*, parser::expr::*, parser::fmt::*,
-    parser::*, source::*, storage::refs::*, storage::*, temp_mem::*, types::*,
+    diagnostics::*, graphs::*, instantiate::*, instrs::*, lexer::*, loader::*, parser::expr::*,
+    parser::fmt::*, parser::*, source::*, storage::refs::*, storage::*, temp_mem::*, types::*,
 };

@@ -191,6 +191,17 @@ impl Diagnostics {
         self.output.clear();
         self.counters = [0; 4];
     }
+
+    pub fn error_count(&self) -> u32 {
+        self.counters[Severty::Error as usize]
+    }
+
+    pub fn todo_error(&mut self, files: &Files, span: Span, message: impl Display) -> Option<!> {
+        self.builder(files)
+            .footer(Severty::Error, message)
+            .annotation(Severty::Error, span, "due to this")
+            .terminate()
+    }
 }
 
 impl Diagnostics {

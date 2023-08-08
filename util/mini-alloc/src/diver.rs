@@ -102,6 +102,10 @@ impl<'a, T, A: Allocator> Diver<'a, T, A> {
     pub fn untyped_dive(&mut self) -> Diver<(), A> {
         self.dive()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 impl<'a, T, A: Allocator> Extend<T> for Diver<'a, T, A> {

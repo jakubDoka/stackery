@@ -75,7 +75,9 @@ macro_rules! define_lexer {
             $regex:ident = $regex_repr:literal
         )*}
         operators {$(
-            ($($op_name:ident: $op:literal),*) = $prec:literal,
+            $op_group:ident {$(
+                ($($op_name:ident: $op:literal),*) = $prec:literal,
+            )*}
         )*}
         other {$(
             $(#[$attr:meta])*
@@ -91,7 +93,7 @@ macro_rules! define_lexer {
 
             $(#[regex($regex_repr)] $regex,)*
 
-            $($(#[token($op, |_| OpCode::$op_name)])*)*
+            $($($(#[token($op, |_| OpCode::$op_name)])*)*)*
             Op(OpCode),
 
             $(
@@ -106,7 +108,7 @@ macro_rules! define_lexer {
             pub const ALL: &[Self] = &[
                 $(Self::$token,)*
                 $(Self::$regex,)*
-                $($(Self::Op(OpCode::$op_name),)*)*
+                $($($(Self::Op(OpCode::$op_name),)*)*)*
                 $(Self::$other_name,)*
             ];
 
@@ -122,22 +124,29 @@ macro_rules! define_lexer {
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum OpCode {
-            $($($op_name,)*)*
+            $($($($op_name,)*)*)*
         }
 
         impl OpCode {
             pub fn name(self) -> &'static str {
                 match self {
-                    $($(Self::$op_name => $op,)*)*
+                    $($($(Self::$op_name => $op,)*)*)*
                 }
             }
 
             pub fn prec(self) -> u8 {
                 match self {
-                    $($(Self::$op_name)|* => $prec,)*
+                    $($($(Self::$op_name)|* => $prec,)*)*
                 }
             }
         }
+
+        macro_rules! op_group {$(
+            ($op_group) => {
+                $($(OpCode::$op_name)|*)|*
+            };
+        )*}
+        pub(crate) use op_group;
     };
 
     (@token_repr $token:ident = $token_repr:literal) => {
@@ -200,14 +209,22 @@ define_lexer! {
     }
 
     operators {
-        (Mul: "*", Div: "/", Mod: "%") = 3,
-        (Add: "+", Sub: "-") = 4,
-        (Shl: "<<", Shr: ">>") = 5,
-        (BitAnd: "&", BitOr: "|", BitXor: "^") = 6,
-        (Eq: "==", Ne: "!=", Lt: "<", Le: "<=", Gt: ">", Ge: ">=") = 7,
-        (And: "&&", Or: "||") = 8,
-        (Assign: "=", AddAssign: "+=", SubAssign: "-=", MulAssign: "*=", DivAssign: "/=", ModAssign: "%=",
-         ShlAssign: "<<=", ShrAssign: ">>=", BitAndAssign: "&=", BitOrAssign: "|=", BitXorAssign: "^=") = 9,
+        math {
+            (Mul: "*", Div: "/", Mod: "%") = 3,
+            (Add: "+", Sub: "-") = 4,
+            (Shl: "<<", Shr: ">>") = 5,
+            (BitAnd: "&", BitOr: "|", BitXor: "^") = 6,
+        }
+        cmp {
+            (Eq: "==", Ne: "!=", Lt: "<", Le: "<=", Gt: ">", Ge: ">=") = 7,
+        }
+        logic {
+            (And: "&&", Or: "||") = 8,
+        }
+        assign {
+            (Assign: "=", AddAssign: "+=", SubAssign: "-=", MulAssign: "*=", DivAssign: "/=", ModAssign: "%=",
+                ShlAssign: "<<=", ShrAssign: ">>=", BitAndAssign: "&=", BitOrAssign: "|=", BitXorAssign: "^=") = 9,
+        }
     }
 
     other {

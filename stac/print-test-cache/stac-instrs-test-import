@@ -1,0 +1,4 @@
+module root:
+  bi = :{bi}
+  drop = (): i32:
+    42

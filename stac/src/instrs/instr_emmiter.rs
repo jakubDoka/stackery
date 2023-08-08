@@ -7,8 +7,8 @@ use crate::{
 };
 
 use super::{
-    Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, InternedIdent,
-    ModuleDeclBuilder, ScopeFrame, TyResolverCtx,
+    Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, ModuleDeclBuilder,
+    ScopeFrame, TyResolverCtx,
 };
 
 struct Res<'arena> {
@@ -162,8 +162,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     }
 
     fn build_literal(&mut self, lit: &LitAst, res: &mut Res) -> Option<()> {
-        let kind = res.body.consts.push(lit.kind.clone());
-        res.push_instr(InstrKind::Const(kind), lit.span);
+        res.push_instr(Resolved::Const(lit.kind.clone()), lit.span);
         Some(())
     }
 
@@ -193,7 +192,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .terminate()?;
         };
 
-        res.push_instr(InstrKind::Module(module), import.span);
+        res.push_instr(Resolved::Module(module), import.span);
         Some(())
     }
 
@@ -225,7 +224,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         let func_ref = res.add_to_compile_queue(func.clone());
         let signature = self.build_signature(func, res);
         res.module.funcs[func_ref].signature = signature;
-        res.push_instr(InstrKind::Func(func_ref), func.keyword);
+        res.push_instr(Resolved::Func(func_ref), func.keyword);
         Some(())
     }
 
@@ -304,17 +303,14 @@ impl<'arena> Res<'arena> {
         func
     }
 
-    fn push_instr(&mut self, kind: InstrKind, _span: Span) -> InstrRef {
-        self.body.instrs.push(Instr { kind, offset: 0 })
+    fn push_instr(&mut self, kind: impl Into<InstrKind>, span: Span) -> InstrRef {
+        self.body.instrs.push(Instr {
+            kind: kind.into(),
+            span,
+        })
     }
 
-    fn intern_ident(&mut self, ident: &IdentStr) -> InternedIdent {
-        let existing = self
-            .body
-            .idents
-            .iter()
-            .find_map(|(i, s)| (s == ident).then_some(i));
-
-        existing.unwrap_or_else(|| self.body.idents.push(ident.clone()))
+    fn intern_ident(&mut self, ident: &IdentStr) -> IdentStr {
+        ident.clone()
     }
 }

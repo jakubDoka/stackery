@@ -97,7 +97,7 @@ impl<T, R: RefRepr> PartialOrd for Ref<T, R> {
 }
 
 impl<T, R: RefRepr> Ref<T, R> {
-    pub const fn const_new(repr: R) -> Self {
+    pub const fn from_repr(repr: R) -> Self {
         Self(repr, PhantomData)
     }
 
@@ -114,6 +114,10 @@ impl<T, R: RefRepr> Ref<T, R> {
 
     pub fn invalid() -> Self {
         Self(R::MAX, PhantomData)
+    }
+
+    pub fn repr(&self) -> R {
+        self.0
     }
 }
 

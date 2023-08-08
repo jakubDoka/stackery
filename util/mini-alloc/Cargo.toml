@@ -11,3 +11,4 @@ serde128 = ["serde-base128"]
 [dependencies]
 hashbrown = { version = "0.13.2", features = ["nightly"] }
 serde-base128 = { path = "../serde-base128", optional = true }
+spin = "0.9.8"

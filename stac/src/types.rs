@@ -1,7 +1,5 @@
 use std::fmt;
 
-use crate::instantiate::Layout;
-
 mod unify_impl;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -26,6 +24,12 @@ pub enum Type {
 
 impl Type {
     pub const UNIT: Self = Self::BuiltIn(BuiltInType::Unit);
+
+    pub(crate) fn unify(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (&Self::BuiltIn(lhs), &Self::BuiltIn(rhs)) => lhs.merge(rhs).map(Self::BuiltIn),
+        }
+    }
 }
 
 impl fmt::Display for Type {
@@ -39,8 +43,11 @@ impl fmt::Display for Type {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum BuiltInType {
     Int(IntType),
+    Integer,
     Bool,
     Unit,
+    Type,
+    Module,
     Unknown,
 }
 
@@ -54,15 +61,27 @@ impl BuiltInType {
     gen_builtin_int_types! {
         I8 U8 I16 U16 I32 U32 I64 U64
     }
+
+    fn merge(self, rhs: BuiltInType) -> Option<BuiltInType> {
+        match (self, rhs) {
+            (a, b) if a == b => Some(a),
+            (Self::Unknown, o) | (o, Self::Unknown) => Some(o),
+            (Self::Integer, Self::Int(o)) | (Self::Int(o), Self::Integer) => Some(Self::Int(o)),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for BuiltInType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(i) => i.fmt(f),
-            Self::Bool => write!(f, "bool"),
-            Self::Unit => write!(f, "unit"),
-            Self::Unknown => write!(f, "unknown"),
+            Self::Integer => "{integer}".fmt(f),
+            Self::Bool => "bool".fmt(f),
+            Self::Unit => "()".fmt(f),
+            Self::Type => "type".fmt(f),
+            Self::Module => "module".fmt(f),
+            Self::Unknown => "{unknown}".fmt(f),
         }
     }
 }

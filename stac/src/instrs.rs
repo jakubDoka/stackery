@@ -9,35 +9,40 @@ mod instr_emmiter;
 
 type InstrRepr = u16;
 pub type InstrRef = Ref<Instr, InstrRepr>;
-pub type Const = Ref<LitKindAst, InstrRepr>;
+pub type Const = LitKindAst;
 pub type Sym = Ref<Decl, InstrRepr>;
 pub type FuncRef = Ref<Func, InstrRepr>;
+pub type TypeRef = Type;
 type Scope = VecStore<Decl, InstrRepr>;
-type InternedIdent = Ref<IdentStr, InstrRepr>;
+type CtxSym = IdentStr;
 
-pub type SourceOffset = i16;
+pub type SourceOffset = Span;
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum InstrKind {
-    Uninit,
-    Const(Const),
+    Uninit(TypeRef),
     Sym(Sym),
-    Func(FuncRef),
-    Module(ModuleRef),
+    Res(Resolved),
     BinOp(OpCode),
-    Field(InternedIdent),
+    Field(CtxSym),
 }
 
-#[derive(Copy, Clone)]
+impl From<Resolved> for InstrKind {
+    fn from(res: Resolved) -> Self {
+        Self::Res(res)
+    }
+}
+
+#[derive(Clone)]
 pub struct Instr {
-    kind: InstrKind,
-    offset: SourceOffset,
+    pub kind: InstrKind,
+    pub span: SourceOffset,
 }
 
 #[derive(Clone)]
 pub struct Decl {
-    name: IdentAst,
-    data: Resolved,
+    pub name: IdentAst,
+    pub data: Resolved,
 }
 
 gen_storage_group! {
@@ -45,6 +50,7 @@ gen_storage_group! {
         instrs: Instr,
         consts: LitKindAst,
         idents: IdentStr,
+        types: Type,
     }
 }
 
@@ -79,6 +85,15 @@ impl Instrs {
         self.modules[Modules::BUILTIN] = self.decls.finish(&mut builder);
 
         self
+    }
+
+    pub fn body_of(&self, module: ModuleRef, func: FuncRef) -> InstrBody {
+        let module_view = self.decls.view(self.modules[module]);
+        self.bodies.view(module_view.funcs[func].body)
+    }
+
+    pub fn decls_of(&self, module: ModuleRef) -> ModuleDecl {
+        self.decls.view(self.modules[module])
     }
 }
 
@@ -175,8 +190,8 @@ mod test {
     use pollster::FutureExt;
 
     use crate::{
-        instrs::InstrKind, print_cases, Instr, InstrBody, Instrs, ModuleRef, Modules, Parser,
-        Resolved, Resolver,
+        instrs::InstrKind, print_cases, Instr, Instrs, ModuleRef, Modules, Parser, Resolved,
+        Resolver,
     };
 
     #[derive(Default)]
@@ -191,12 +206,10 @@ mod test {
         ) -> Option<super::Resolved> {
             let mut stack = Vec::<Resolved>::new();
 
-            for &instr in body.instrs {
-                let value = match instr.kind {
-                    InstrKind::Uninit => todo!(),
-                    InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
-                    InstrKind::Sym(sym) => ctx.scope[sym].data.clone(),
-                    InstrKind::Module(module) => Resolved::Module(module),
+            for instr in body.instrs {
+                let value = match &instr.kind {
+                    InstrKind::Uninit(_) => todo!(),
+                    &InstrKind::Sym(sym) => ctx.scope[sym].data.clone(),
                     InstrKind::BinOp(_) => todo!(),
                     InstrKind::Field(i) => match stack.pop().unwrap() {
                         Resolved::Const(_) => todo!(),
@@ -206,13 +219,13 @@ mod test {
                             let view = ctx.instrs.decls.view(ctx.instrs.modules[m]);
                             view.decls
                                 .iter()
-                                .find(|d| d.name.ident == body.idents[i])
+                                .find(|d| d.name.ident == *i)
                                 .unwrap()
                                 .data
                                 .clone()
                         }
                     },
-                    InstrKind::Func(i) => Resolved::Func(i),
+                    InstrKind::Res(r) => r.clone(),
                 };
 
                 stack.push(value);
@@ -227,21 +240,24 @@ mod test {
         ctx.push_str(id.to_string().as_str());
     }
 
-    fn display_instr(instr: Instr, body: &InstrBody, ctx: &mut String) {
-        match instr.kind {
-            InstrKind::Uninit => ctx.push_str("uninit"),
-            InstrKind::Const(c) => {
-                ctx.push_str("const ");
-                ctx.push_str(&body.consts[c].to_string());
+    fn display_instr(instr: &Instr, ctx: &mut String) {
+        match &instr.kind {
+            InstrKind::Uninit(ty) => {
+                ctx.push_str("uninit ");
+                ctx.push_str(&ty.to_string());
             }
             InstrKind::Sym(s) => display_id("sym", s.index(), ctx),
-            InstrKind::Module(m) => display_id("mod", m.index(), ctx),
             InstrKind::BinOp(op) => ctx.push_str(op.name()),
             InstrKind::Field(f) => {
                 ctx.push_str(". ");
-                ctx.push_str(body.idents[f].as_str());
+                ctx.push_str(f.as_str());
             }
-            InstrKind::Func(f) => display_id("func", f.index(), ctx),
+            InstrKind::Res(r) => match r {
+                Resolved::Type(t) => ctx.push_str(&t.to_string()),
+                Resolved::Func(f) => display_id("func", f.index(), ctx),
+                Resolved::Module(m) => display_id("mod", m.index(), ctx),
+                Resolved::Const(c) => ctx.push_str(&c.to_string()),
+            },
         }
     }
 
@@ -295,9 +311,9 @@ mod test {
             ctx.push_str(":\n");
 
             let body_view = instrs.bodies.view(func.body);
-            for &instr in body_view.instrs.iter() {
+            for instr in body_view.instrs.iter() {
                 ctx.push_str("    ");
-                display_instr(instr, &body_view, ctx);
+                display_instr(instr, ctx);
                 ctx.push('\n');
             }
         }

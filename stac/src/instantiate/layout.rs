@@ -72,9 +72,14 @@ impl Layout {
                 Self::compress_align(i.size as LayoutRepr),
                 i.size.bite_width() as LayoutRepr,
             ),
+            BuiltInType::Integer => Self::from_builtin_ty(BuiltInType::U32),
             BuiltInType::Bool => Self::new(0, 1),
             BuiltInType::Unit => Self::new(0, 0),
-            BuiltInType::Unknown => unreachable!(),
+            BuiltInType::Type | BuiltInType::Module | BuiltInType::Unknown => unreachable!(),
         }
+    }
+
+    pub fn expanded_align(&self) -> u32 {
+        Self::expand_align(self.align())
     }
 }

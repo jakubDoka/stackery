@@ -20,13 +20,16 @@ mod arena;
 mod bump;
 mod diver;
 mod ident;
-// mod interner;
+//mod interner;
+mod seg_vec;
 
 pub use {
     arena::{ArenaBase, ArenaProxi, ArenaScope},
     diver::{Diver, DiverBase},
     hashbrown,
     ident::IdentStr,
+    seg_vec::{SegIndexRepr, SegSlice, SegSliceMut, SegVec},
+    //interner::{Internable, Interned, InternedSlice, Interner, InternerObj, InternerSlice},
 };
 
 pub type FnvBuildHasher = core::hash::BuildHasherDefault<FnvHasher>;

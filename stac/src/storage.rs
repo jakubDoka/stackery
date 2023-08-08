@@ -78,7 +78,7 @@ macro_rules! gen_storage_group {
             $field: $crate::VecSlice<$field_ty, u16, u32>,
         )*}
 
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, Default)]
         pub struct $view_name<'a> {$(
             pub $field: &'a $crate::VecSliceView<$field_ty, u16>,
         )*}
@@ -621,6 +621,12 @@ pub struct VecSliceView<T, R> {
     view: [T],
 }
 
+impl<'a, T, R> Default for &'a VecSliceView<T, R> {
+    fn default() -> Self {
+        unsafe { mem::transmute::<&[T], _>(&[][..]) }
+    }
+}
+
 impl<T, R> Deref for VecSliceView<T, R> {
     type Target = [T];
 
@@ -769,6 +775,12 @@ pub struct SubsTable<R: RefRepr> {
     parents: Vec<R>,
 }
 
+impl<R: RefRepr> Default for SubsTable<R> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<R: RefRepr> SubsTable<R> {
     pub fn new() -> Self {
         Self {
@@ -785,34 +797,42 @@ impl<R: RefRepr> SubsTable<R> {
         }
     }
 
-    pub fn join(&mut self, a: R, b: R) {
+    /// returns false if b is the new root, true otherwise
+    pub fn join(&mut self, a: R, b: R) -> R {
         self.ensure_valid_index(a.into_usize().max(b.into_usize()));
 
         let (root_a, root_b) = (self.compacted_root_of(a), self.compacted_root_of(b));
 
         if root_a == root_b {
-            return;
+            return root_a;
         }
 
-        let (sorted_root_a, souted_root_b) = (root_a.min(root_b), root_a.max(root_b));
+        let (sorted_root_a, sorted_root_b) = (root_a.min(root_b), root_a.max(root_b));
         let (sorted_root_a_index, sorted_root_b_index) =
-            (sorted_root_a.into_usize(), souted_root_b.into_usize());
+            (sorted_root_a.into_usize(), sorted_root_b.into_usize());
 
         let (left, right) = self.nodes.split_at_mut(sorted_root_b_index);
         let (node_a, nb) = (&mut left[sorted_root_a_index], &mut right[0]);
 
         match node_a.rank.cmp(&nb.rank) {
             Ordering::Less => {
-                self.parents[sorted_root_a_index] = souted_root_b;
+                self.parents[sorted_root_a_index] = sorted_root_b;
+                root_b
             }
             Ordering::Greater => {
                 self.parents[sorted_root_b_index] = sorted_root_a;
+                root_a
             }
             Ordering::Equal => {
-                self.parents[sorted_root_a_index] = souted_root_b;
+                self.parents[sorted_root_a_index] = sorted_root_b;
                 nb.rank += 1;
+                root_b
             }
         }
+    }
+
+    pub fn join_refs<T>(&mut self, a: Ref<T, R>, b: Ref<T, R>) -> Ref<T, R> {
+        Ref::from_repr(self.join(a.repr(), b.repr()))
     }
 
     pub fn are_joined(&mut self, a: R, b: R) -> bool {

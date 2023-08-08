@@ -54,7 +54,7 @@ pub struct Modules {
 }
 
 impl Modules {
-    pub const BUILTIN: ModuleRef = ModuleRef::const_new(0);
+    pub const BUILTIN: ModuleRef = ModuleRef::from_repr(0);
     pub const BUILTIN_NAME: &'static str = "bi";
 
     pub fn new() -> Self {
