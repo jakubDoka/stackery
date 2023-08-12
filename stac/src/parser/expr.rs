@@ -1,4 +1,4 @@
-use std::{fmt, mem};
+use std::fmt;
 
 use mini_alloc::{Diver, IdentStr};
 
@@ -52,13 +52,22 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         while let Token {
             kind: Op(kind),
             span,
-            ..
+            source
         } = self.peek() && kind.prec() < prev_prec
         {
             self.next();
 
             let mut rhs = ExprAst::Unit(self.unit(diver.untyped_dive())?);
             rhs = self.binary(diver.untyped_dive(), rhs, kind.prec())?;
+
+            if kind == OpCode::Assign && let Some(kind) = OpCode::split_assign(source) {
+                rhs = ExprAst::Binary(self.arena.alloc(BinaryAst {
+                    lhs: lhs.clone(),
+                    rhs,
+                    op: OpAst { span, kind },
+                }));
+            }
+
             lhs = ExprAst::Binary(self.arena.alloc(BinaryAst {
                 lhs,
                 rhs,
@@ -86,6 +95,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
         let expr = match token.kind {
             Fn => self.func(diver.untyped_dive(), token.span),
+            Mut => self.unex_tok(token, "mut can only follow a declaration")?,
             Comma => self.unex_tok(token, "comma can only follow an expression")?,
             Semi => self.unex_tok(
                 token,
@@ -128,6 +138,8 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     }
 
     fn decl(&mut self, mut diver: Diver, keyword: Span) -> Option<DeclAst<'arena>> {
+        let ct = self.try_advance(Ct).map(|t| t.span);
+        let mutable = self.try_advance(Mut).map(|t| t.span);
         let name = self.ident("decl name")?;
         let ty = self
             .try_advance(Colon)
@@ -141,6 +153,8 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
         Some(DeclAst {
             keyword,
+            ct,
+            mutable,
             name,
             ty,
             value,
@@ -350,6 +364,8 @@ pub struct FieldAst<'arena> {
 #[derive(Debug, Clone)]
 pub struct DeclAst<'arena> {
     pub keyword: Span,
+    pub ct: Option<Span>,
+    pub mutable: Option<Span>,
     pub name: IdentAst,
     pub ty: Option<ExprAst<'arena>>,
     pub value: Option<ExprAst<'arena>>,
@@ -416,7 +432,7 @@ pub struct LitAst {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntLit([u8; mem::size_of::<u64>()]);
+pub struct IntLit([u8; 8]);
 
 impl IntLit {
     pub fn new(value: u64) -> Self {
@@ -465,7 +481,7 @@ mod test {
 
         match res {
             Some(ast) => format_ast(ast, ctx, 0),
-            None => ctx.push_str(diags.diagnostic_view()),
+            None => ctx.push_str(diags.view()),
         }
     }
 

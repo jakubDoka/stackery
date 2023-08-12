@@ -1,0 +1,5 @@
+module root:
+  bi = :{bi}
+  main = (): i32:
+    0
+0 : {integer}

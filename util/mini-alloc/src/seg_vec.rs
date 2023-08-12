@@ -1,8 +1,7 @@
 //! A datastructure implemented according to `https://github.com/ziglang/zig/blob/master/lib/std/segmented_list.zig`
 use std::{
     alloc::Allocator,
-    intrinsics::{likely, unlikely},
-    iter::TrustedLen,
+    intrinsics::unlikely,
     ops::{Index, IndexMut, Range},
     ptr::NonNull,
 };

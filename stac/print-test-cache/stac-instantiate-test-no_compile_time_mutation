@@ -1,0 +1,21 @@
+module root:
+  bi = :{bi}
+  main = (): i32:
+    1
+    decl mut
+    sym0
+    sym0
+    1
+    +
+    (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+    sym0
+    drop scope 1 returns
+1 : i32
+decl mut : ()
+sym0 : i32
+sym0 : i32
+1 : i32
++ : i32
+(|\+|-|\*|/|%|<<|>>|&|\||\^)= : ()
+sym0 : i32
+drop scope 1 returns : ()

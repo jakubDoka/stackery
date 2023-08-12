@@ -20,7 +20,8 @@
     slice_from_ptr_range,
     impl_trait_in_assoc_type,
     iter_next_chunk,
-    iter_advance_by
+    iter_advance_by,
+    trait_alias
 )]
 
 mod algorithms;
@@ -37,9 +38,10 @@ mod temp_mem;
 mod types;
 
 #[cfg(test)]
-pub use loader::test_util::{DelayedLoaderMock, LoaderMock};
+pub use {instrs::instr_test_util::*, loader::load_test_util::*};
 
 pub use {
-    diagnostics::*, graphs::*, instantiate::*, instrs::*, lexer::*, loader::*, parser::expr::*,
-    parser::fmt::*, parser::*, source::*, storage::refs::*, storage::*, temp_mem::*, types::*,
+    diagnostics::*, graphs::*, instantiate::*, instrs::*, lexer::*, loader::*, mini_alloc,
+    parser::expr::*, parser::fmt::*, parser::*, source::*, storage::refs::*, storage::*,
+    temp_mem::*, types::*,
 };

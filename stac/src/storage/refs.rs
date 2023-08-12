@@ -56,6 +56,16 @@ impl_ref_repr!(u8 u16 u32 u64 usize);
 #[repr(transparent)]
 pub struct Ref<T, R>(R, PhantomData<T>);
 
+pub trait DefaultRef: Sized {
+    fn default_ref<R: RefRepr>() -> Ref<Self, R>;
+}
+
+impl<T: DefaultRef, R: RefRepr> Default for Ref<T, R> {
+    fn default() -> Self {
+        T::default_ref()
+    }
+}
+
 impl<T, R: Debug> Debug for Ref<T, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Ref").field(&self.0).finish()

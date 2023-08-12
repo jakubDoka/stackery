@@ -1,5 +1,10 @@
 use core::fmt;
-use std::{future::Future, io};
+use std::{
+    future::Future,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::{BitSet, Diagnostics, File, FileRef, Files, ShadowStore, Slice, VecStore};
 use mini_alloc::IdentStr;
@@ -11,9 +16,10 @@ pub type ModuleRef = FileRef;
 pub type ModuleDeps = Slice<ModuleRef, ModuleRefRepr>;
 pub type ModuleShadowStore<T> = ShadowStore<File, ModuleRefRepr, T>;
 
-#[derive(Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Module {
     deps: ModuleDeps,
+    name: IdentStr,
 }
 
 #[allow(dead_code)]
@@ -25,30 +31,30 @@ pub struct ModuleMeta {
 
 #[allow(dead_code)]
 impl ModuleMeta {
-    pub(crate) fn order(&self) -> &[ModuleRef] {
+    pub fn order(&self) -> &[ModuleRef] {
         &self.order
     }
 
-    pub(crate) fn root(&self) -> ModuleRef {
+    pub fn root(&self) -> ModuleRef {
         self.root
     }
 
-    pub(crate) fn is_updated(&self, module: ModuleRef) -> bool {
+    pub fn is_updated(&self, module: ModuleRef) -> bool {
         self.updated_modules.contains(module.index())
     }
 
-    pub(crate) fn no_changes(&self) -> bool {
+    pub fn no_changes(&self) -> bool {
         !self.updated_modules.contains(self.root.index())
     }
 
-    pub(crate) fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
+    pub fn changed(&self) -> impl Iterator<Item = ModuleRef> + '_ {
         self.order().iter().copied().filter(|&m| self.is_updated(m))
     }
 }
 
 #[derive(Default)]
 pub struct Modules {
-    eintities: ModuleShadowStore<Module>,
+    entities: ModuleShadowStore<Module>,
     deps: VecStore<ModuleRef, ModuleRefRepr>,
     files: Files,
 }
@@ -62,30 +68,30 @@ impl Modules {
     }
 
     pub fn init(mut self) -> Self {
-        let builtin = File::new(IdentStr::from_str("bi"), String::new());
+        let builtin = File::new(PathBuf::from("bi"), String::new());
         assert_eq!(self.files.push(builtin), Self::BUILTIN);
         self
     }
 
-    pub(crate) fn name_of(&self, module: ModuleRef) -> &IdentStr {
-        self.files[module].name()
+    pub fn name_of(&self, module: ModuleRef) -> &IdentStr {
+        &self.entities[module].name
     }
 
-    pub(crate) fn files(&self) -> &Files {
+    pub fn files(&self) -> &Files {
         &self.files
     }
 
     #[allow(dead_code)]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.files().len()
     }
 
-    pub(crate) fn module_file(&self, module: ModuleRef) -> FileRef {
-        module // legacy
+    pub fn deps_of(&self, module_ref: ModuleRef) -> impl Iterator<Item = ModuleRef> + '_ {
+        self.deps[self.entities[module_ref].deps].iter().copied()
     }
 
-    pub(crate) fn deps_of(&self, module_ref: ModuleRef) -> impl Iterator<Item = ModuleRef> + '_ {
-        self.deps[self.eintities[module_ref].deps].iter().copied()
+    pub fn find_dep(&self, on: ModuleRef, ident: &IdentStr) -> Option<crate::Ref<File, u16>> {
+        self.deps_of(on).find(|&m| self.name_of(m) == ident)
     }
 }
 
@@ -93,53 +99,129 @@ pub struct LoaderCtx<'a> {
     pub files: &'a mut Files,
 }
 
+impl<'a> LoaderCtx<'a> {
+    pub fn reserve_slot(&mut self) -> FileRef {
+        self.files.reserve()
+    }
+}
+
+pub struct LoaderRes {
+    pub file: File,
+    pub slot: FileRef,
+}
+
+pub trait LoaderFut = Future<Output = io::Result<LoaderRes>> + 'static;
+
 pub trait Loader {
-    fn load(
+    /// its okay to return cached file even before if gets finalized
+    fn create_loader(
         &mut self,
         ctx: LoaderCtx<'_>,
         from: Option<FileRef>,
         id: IdentStr,
-    ) -> impl Future<Output = Result<FileRef, io::Error>> + 'static;
+    ) -> Result<FileRef, impl LoaderFut>;
 }
 
-pub struct ModuleLoader<'a, L: Loader> {
-    loader: &'a mut L,
+pub struct ModuleLoader<'a> {
     modules: &'a mut Modules,
     diagnostics: &'a mut Diagnostics,
 }
 
-impl<'a, L: Loader> ModuleLoader<'a, L> {
-    pub fn new(
-        loader: &'a mut L,
-        modules: &'a mut Modules,
-        diagnostics: &'a mut Diagnostics,
-    ) -> Self {
+impl<'a> ModuleLoader<'a> {
+    pub fn new(modules: &'a mut Modules, diagnostics: &'a mut Diagnostics) -> Self {
         Self {
-            loader,
             modules,
             diagnostics,
         }
     }
 }
 
+pub fn is_visible(
+    files: &Files,
+    vis: Option<Vis>,
+    from: FileRef,
+    origin: FileRef,
+) -> Result<(), VisError> {
+    match vis {
+        Some(Vis::Exported) => Ok(()),
+        Some(Vis::ModulePrivate) if from == origin => Ok(()),
+        None if files[from].package() == files[origin].package() => Ok(()),
+
+        Some(Vis::ModulePrivate) => Err(VisError {
+            reason: VisErrorReason::FilePrivate,
+            from: files[from].name().clone(),
+            origin: files[origin].name().clone(),
+        }),
+        None => Err(VisError {
+            reason: VisErrorReason::NotExported,
+            from: files[from].name().clone(),
+            origin: files[origin].name().clone(),
+        }),
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Vis {
+    Exported,
+    ModulePrivate,
+}
+
+pub struct VisError {
+    reason: VisErrorReason,
+    from: Arc<Path>,
+    origin: Arc<Path>,
+}
+
+impl fmt::Display for VisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            reason,
+            from,
+            origin,
+        } = self;
+
+        match reason {
+            VisErrorReason::NotExported => write!(
+                f,
+                "cannot access item in {origin:?} from {from:?}, because it is not exported",
+            ),
+            VisErrorReason::FilePrivate => write!(
+                f,
+                "cannot access item in {origin:?} from {from:?}, because it is file-private",
+            ),
+        }
+    }
+}
+
+enum VisErrorReason {
+    NotExported,
+    FilePrivate,
+}
+
 #[cfg(test)]
-pub mod test_util {
-    use std::{collections::HashMap, future::Future};
+pub mod load_test_util {
+    use std::{collections::HashMap, future::Future, io};
 
-    use crate::{File, FileRef, Loader, LoaderCtx};
+    use crate::{File, FileRef, Loader, LoaderCtx, LoaderFut, LoaderRes, ModuleMeta, Modules};
     use mini_alloc::IdentStr;
+    use pollster::FutureExt;
 
-    #[macro_export]
-    macro_rules! print_cases {
-        ($test_func:ident: $($name:ident $($arg:expr),*;)*) => {
-            print_test::cases! {
-                $(
-                    fn $name(ctx) {
-                        $test_func($($arg)*, ctx);
-                    }
-                )*
-            }
-        };
+    pub macro print_cases($test_func:ident: $($name:ident $($arg:expr),*;)*) {
+        print_test::cases! {
+            $(
+                fn $name(ctx) {
+                    $test_func($($arg)*, ctx);
+                }
+            )*
+        }
+    }
+
+    pub macro bail($message:literal $diags:ident $ctx:ident $control:ident) {
+        $ctx.push_str($message);
+        $ctx.push('\n');
+        $ctx.push_str($diags.view());
+        $diags.clear();
+        $control;
     }
 
     pub struct DelayedLoaderMock<T> {
@@ -154,57 +236,58 @@ pub mod test_util {
     }
 
     impl<T: Loader> Loader for DelayedLoaderMock<T> {
-        fn load(
+        fn create_loader(
             &mut self,
             ctx: LoaderCtx<'_>,
             from: Option<FileRef>,
             id: IdentStr,
-        ) -> impl Future<Output = Result<FileRef, std::io::Error>> + 'static {
+        ) -> Result<FileRef, impl LoaderFut> {
             let delay_ms = self.delay_ms;
-            let fut = self.inner.load(ctx, from, id);
-            async move {
-                struct Timer {
-                    spawn_time: std::time::Instant,
-                    duration: std::time::Duration,
-                    started: bool,
-                }
-                impl Timer {
-                    fn new(duration: std::time::Duration) -> Self {
-                        Self {
-                            spawn_time: std::time::Instant::now(),
-                            duration,
-                            started: false,
+            self.inner
+                .create_loader(ctx, from, id)
+                .map_err(|fut| async move {
+                    struct Timer {
+                        spawn_time: std::time::Instant,
+                        duration: std::time::Duration,
+                        started: bool,
+                    }
+                    impl Timer {
+                        fn new(duration: std::time::Duration) -> Self {
+                            Self {
+                                spawn_time: std::time::Instant::now(),
+                                duration,
+                                started: false,
+                            }
                         }
                     }
-                }
-                impl Future for Timer {
-                    type Output = ();
+                    impl Future for Timer {
+                        type Output = ();
 
-                    fn poll(
-                        mut self: std::pin::Pin<&mut Self>,
-                        cx: &mut std::task::Context<'_>,
-                    ) -> std::task::Poll<Self::Output> {
-                        if !self.started {
-                            self.started = true;
-                            let waker = cx.waker().clone();
-                            let duration = self.duration;
-                            std::thread::spawn(move || {
-                                std::thread::sleep(duration);
-                                waker.wake_by_ref();
-                            });
-                            return std::task::Poll::Pending;
+                        fn poll(
+                            mut self: std::pin::Pin<&mut Self>,
+                            cx: &mut std::task::Context<'_>,
+                        ) -> std::task::Poll<Self::Output> {
+                            if !self.started {
+                                self.started = true;
+                                let waker = cx.waker().clone();
+                                let duration = self.duration;
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(duration);
+                                    waker.wake_by_ref();
+                                });
+                                return std::task::Poll::Pending;
+                            }
+
+                            if self.spawn_time.elapsed() < self.duration {
+                                return std::task::Poll::Pending;
+                            }
+
+                            std::task::Poll::Ready(())
                         }
-
-                        if self.spawn_time.elapsed() < self.duration {
-                            return std::task::Poll::Pending;
-                        }
-
-                        std::task::Poll::Ready(())
                     }
-                }
-                Timer::new(std::time::Duration::from_millis(delay_ms as u64)).await;
-                fut.await
-            }
+                    Timer::new(std::time::Duration::from_millis(delay_ms as u64)).await;
+                    fut.await
+                })
         }
     }
 
@@ -242,141 +325,102 @@ pub mod test_util {
 
         fn load(
             &mut self,
-            ctx: crate::LoaderCtx<'_>,
+            mut ctx: crate::LoaderCtx<'_>,
             _: Option<crate::FileRef>,
             id: mini_alloc::IdentStr,
-        ) -> Result<crate::FileRef, std::io::Error> {
+        ) -> Result<crate::FileRef, io::Result<LoaderRes>> {
             if let Some(&file) = self.loaded.get(&id) {
                 return Ok(file);
             }
 
             let id_str = id.as_str();
 
-            let &source = self.modules.get(id_str).ok_or_else(|| {
-                std::io::Error::new(
+            let Some(&source) = self.modules.get(id_str) else {
+                return Err(Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     format!("module {} not found", id_str),
-                )
-            })?;
+                )));
+            };
 
-            let file = File::new(id.clone(), source.to_owned());
-            let file = ctx.files.push(file);
+            let file = File::new(id.as_str().into(), source.to_owned());
+            let slot = ctx.reserve_slot();
+            self.loaded.insert(id, slot);
 
-            self.loaded.insert(id, file);
-
-            Ok(file)
+            Err(Ok(LoaderRes { file, slot }))
         }
     }
 
     impl<'a> Loader for LoaderMock<'a> {
-        fn load(
+        fn create_loader(
             &mut self,
-            ctx: crate::LoaderCtx<'_>,
-            f: Option<crate::FileRef>,
-            id: mini_alloc::IdentStr,
-        ) -> impl Future<Output = Result<crate::FileRef, std::io::Error>> {
-            let res = self.load(ctx, f, id);
-            async move { res }
+            ctx: LoaderCtx<'_>,
+            from: Option<FileRef>,
+            id: IdentStr,
+        ) -> Result<FileRef, impl LoaderFut> {
+            self.load(ctx, from, id).map_err(|fut| async move { fut })
         }
     }
-}
 
-pub fn is_visible(
-    files: &Files,
-    vis: Option<Vis>,
-    from: FileRef,
-    origin: FileRef,
-) -> Result<(), VisError> {
-    match vis {
-        Some(Vis::Exported) => Ok(()),
-        Some(Vis::ModulePrivate) if from == origin => Ok(()),
-        None if files[from].package() == files[origin].package() => Ok(()),
+    pub fn load_modules(
+        mods: &mut Modules,
+        mut loader: impl Loader,
+        ctx: &mut String,
+    ) -> Option<ModuleMeta> {
+        let mut diagnostics = crate::Diagnostics::default();
 
-        Some(Vis::ModulePrivate) => Err(VisError {
-            reason: VisErrorReason::FilePrivate,
-            from: files[from].name().clone(),
-            origin: files[origin].name().clone(),
-        }),
-        None => Err(VisError {
-            reason: VisErrorReason::NotExported,
-            from: files[from].name().clone(),
-            origin: files[origin].name().clone(),
-        }),
-    }
-}
+        let root = IdentStr::from_str("root");
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Vis {
-    Exported,
-    ModulePrivate,
-}
+        let loader_ctx = crate::ModuleLoader::new(mods, &mut diagnostics);
 
-pub struct VisError {
-    reason: VisErrorReason,
-    from: IdentStr,
-    origin: IdentStr,
-}
+        let meta = loader_ctx.update(root, &mut loader).block_on();
 
-impl fmt::Display for VisError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            reason,
-            from,
-            origin,
-        } = self;
-
-        match reason {
-            VisErrorReason::NotExported => write!(
-                f,
-                "cannot access item in {origin} from {from}, because it is not exported",
-            ),
-            VisErrorReason::FilePrivate => write!(
-                f,
-                "cannot access item in {origin} from {from}, because it is file-private",
-            ),
+        if !diagnostics.view().is_empty() {
+            ctx.push_str("module loading diagnostics:\n");
+            ctx.push_str(diagnostics.view());
         }
-    }
-}
 
-enum VisErrorReason {
-    NotExported,
-    FilePrivate,
+        if meta.is_none() {
+            ctx.push_str("module loading failed\n");
+        }
+
+        meta
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use mini_alloc::IdentStr;
-    use pollster::FutureExt;
-
-    use crate::{print_cases, DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules};
+    use crate::{
+        load_modules, print_cases, DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules,
+    };
 
     fn perform_test(source: &str, ctx: &mut String) {
         let loader = LoaderMock::new(source);
         perform_test_low(loader, ctx);
     }
 
-    fn pefrom_delayed_test(source: &str, ctx: &mut String, delay_ms: u32) {
+    fn perfrom_delayed_test(source: &str, ctx: &mut String) {
+        let delay_ms = 50;
+        let now = std::time::Instant::now();
         let loader = DelayedLoaderMock::new(delay_ms, LoaderMock::new(source));
         perform_test_low(loader, ctx);
+
+        let delay = if cfg!(miri) { 1500 } else { 250 };
+        ctx.push_str(&format!(
+            "in time bounds (<250): {:?}",
+            now.elapsed().as_millis() < delay
+        ));
+
+        if now.elapsed().as_millis() >= delay {
+            ctx.push_str(&format!("{:?}", now.elapsed()));
+        }
     }
 
-    fn perform_test_low<L: Loader>(mut loader: L, ctx: &mut String) {
-        let mut diagnostics = crate::Diagnostics::default();
+    fn perform_test_low(loader: impl Loader, ctx: &mut String) {
         let mut modules = crate::Modules::new();
 
-        let root = IdentStr::from_str("root");
-
-        let loader_ctx = crate::ModuleLoader::new(&mut loader, &mut modules, &mut diagnostics);
-
-        let meta = loader_ctx.update(root).block_on();
-
-        if !diagnostics.diagnostic_view().is_empty() {
-            ctx.push_str("diagnostics:\n");
-            ctx.push_str(diagnostics.diagnostic_view());
-        }
+        let meta = load_modules(&mut modules, loader, ctx);
 
         let Some(meta) = meta else {
-            ctx.push_str("no meta");
             return;
         };
 
@@ -395,7 +439,7 @@ mod test {
             ctx.push_str(modules.name_of(parent));
             ctx.push('\n');
 
-            let deps = modules.eintities[parent].deps;
+            let deps = modules.entities[parent].deps;
             for &child in &modules.deps[deps] {
                 log_graph(child, modules, depth + 1, ctx);
             }
@@ -403,40 +447,23 @@ mod test {
         log_graph(meta.root, &modules, 0, ctx);
     }
 
-    #[test]
-    fn test() {
-        print_test::case("delayed::loading", |ctx| {
-            let now = std::time::Instant::now();
-            pefrom_delayed_test(
-                "
-                    `root
-                        a: :{a}
-                        b: :{b}
-                        c: :{c}
-                        d: :{d}
-                        e: :{e}
-                    `
-                    `a :{b}`
-                    `b `
-                    `c :{f} :{g}`
-                    `d :{e}`
-                    `e `
-                    `f :{b}`
-                    `g `
-                ",
-                ctx,
-                50,
-            );
-            let delay = if cfg!(miri) { 1500 } else { 250 };
-            ctx.push_str(&format!(
-                "in time bounds (<250): {:?}",
-                now.elapsed().as_millis() < delay
-            ));
-
-            if now.elapsed().as_millis() >= delay {
-                ctx.push_str(&format!("{:?}", now.elapsed()));
-            }
-        })
+    print_cases! { perfrom_delayed_test:
+        delayed_load "
+            `root
+                a: :{a}
+                b: :{b}
+                c: :{c}
+                d: :{d}
+                e: :{e}
+            `
+            `a :{b}`
+            `b `
+            `c :{f} :{g}`
+            `d :{e}`
+            `e `
+            `f :{b}`
+            `g `
+        ";
     }
 
     print_cases! { perform_test:

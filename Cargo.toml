@@ -4,6 +4,7 @@ members = [
 	#"backend",
 	#"bf-shared",
 	"stac",
+	"stac/crane-backend",
 	"util/*",
 ]
 resolver = "2"

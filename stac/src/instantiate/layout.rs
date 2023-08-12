@@ -4,6 +4,7 @@ use crate::{BuiltInType, Type};
 
 type LayoutRepr = u32;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     repr: LayoutRepr,
 }
@@ -13,7 +14,12 @@ impl Layout {
     const SIZE_WIDTH: usize = mem::size_of::<LayoutRepr>() * 8 - Self::ALIGN_WIDTH;
     const SIZE_MASK: LayoutRepr = (1 << Self::SIZE_WIDTH) - 1;
 
-    fn new(align_pow: u8, size: LayoutRepr) -> Self {
+    pub const ARCH_16: Self = Self::new(1, 2);
+    pub const ARCH_32: Self = Self::new(2, 4);
+    pub const ARCH_64: Self = Self::new(3, 8);
+    pub const ZERO: Self = Self { repr: 0 };
+
+    const fn new(align_pow: u8, size: LayoutRepr) -> Self {
         Self {
             repr: Self::encode(align_pow, size),
         }
@@ -28,7 +34,7 @@ impl Layout {
     }
 
     /// extend this layout with another layout, returns the new layout and appended layout offset
-    fn extend(self, other: Self) -> (Self, LayoutRepr) {
+    fn _extend(self, other: Self) -> (Self, LayoutRepr) {
         let (align, size) = Self::decode(self.repr);
         let (other_align, other_size) = Self::decode(other.repr);
 
@@ -48,7 +54,7 @@ impl Layout {
         (align as u8, size)
     }
 
-    fn encode(align: u8, size: LayoutRepr) -> LayoutRepr {
+    const fn encode(align: u8, size: LayoutRepr) -> LayoutRepr {
         ((align as LayoutRepr) << Self::SIZE_WIDTH) | (size & Self::SIZE_MASK)
     }
 
@@ -60,19 +66,20 @@ impl Layout {
         align.trailing_zeros() as u8
     }
 
-    pub fn from_ty(ty: &Type) -> Self {
+    pub fn from_ty(ty: &Type, ptr_layout: Self) -> Self {
         match ty {
-            Type::BuiltIn(b) => Self::from_builtin_ty(*b),
+            Type::BuiltIn(b) => Self::from_builtin_ty(*b, ptr_layout),
+            Type::Func(_) => todo!(),
         }
     }
 
-    fn from_builtin_ty(bty: BuiltInType) -> Self {
+    fn from_builtin_ty(bty: BuiltInType, ptr_layout: Self) -> Self {
         match bty {
             BuiltInType::Int(i) => Self::new(
                 Self::compress_align(i.size as LayoutRepr),
                 i.size.bite_width() as LayoutRepr,
             ),
-            BuiltInType::Integer => Self::from_builtin_ty(BuiltInType::U32),
+            BuiltInType::Integer => ptr_layout,
             BuiltInType::Bool => Self::new(0, 1),
             BuiltInType::Unit => Self::new(0, 0),
             BuiltInType::Type | BuiltInType::Module | BuiltInType::Unknown => unreachable!(),

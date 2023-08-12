@@ -194,6 +194,16 @@ impl<T, R: RefRepr> PoolStore<T, R> {
     }
 
     pub fn push(&mut self, value: T) -> Ref<T, R> {
+        let index = self.reserve();
+        self.fill_reserved(index, value)
+    }
+
+    pub fn fill_reserved(&mut self, reserved: Ref<T, R>, value: T) -> Ref<T, R> {
+        self.data[reserved.index()] = Some(value);
+        reserved
+    }
+
+    pub fn reserve(&mut self) -> Ref<T, R> {
         let index = if let Some(index) = self.free.pop() {
             index
         } else {
@@ -201,7 +211,6 @@ impl<T, R: RefRepr> PoolStore<T, R> {
             self.data.push(None);
             Ref::new(index)
         };
-        self.data[index.index()] = Some(value);
         index
     }
 
@@ -841,12 +850,18 @@ impl<R: RefRepr> SubsTable<R> {
 
     pub fn root_of(&mut self, mut node: R) -> R {
         loop {
-            let parent = self.parents[node.into_usize()];
+            let Some(&parent) = self.parents.get(node.into_usize()) else {
+                break node;
+            };
             if parent == node {
                 break node;
             }
             node = parent;
         }
+    }
+
+    pub fn root_of_ref<T>(&mut self, node: Ref<T, R>) -> Ref<T, R> {
+        Ref::from_repr(self.root_of(node.repr()))
     }
 
     pub fn compacted_root_of(&mut self, mut node: R) -> R {

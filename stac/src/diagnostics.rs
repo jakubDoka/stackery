@@ -1,5 +1,5 @@
 use std::{
-    fmt::{Display, Write},
+    fmt::{self, Display, Write},
     iter,
     ops::Range,
 };
@@ -16,6 +16,14 @@ pub struct Diagnostics {
     config: DiagnosticConfig,
 }
 
+impl fmt::Display for Diagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.output)?;
+        let [err, warn, note, help] = self.counters;
+        writeln!(f, "err: {err}, warn: {warn}, note: {note}, help: {help}")
+    }
+}
+
 impl Diagnostics {
     pub fn with_config(config: DiagnosticConfig) -> Self {
         Self {
@@ -24,7 +32,7 @@ impl Diagnostics {
         }
     }
 
-    pub fn diagnostic_view(&self) -> &str {
+    pub fn view(&self) -> &str {
         &self.output
     }
 
@@ -104,7 +112,14 @@ impl Diagnostics {
             let file = first.span.file();
             let file = &files[file];
             let lines = file.source().lines().enumerate();
-            writeln!(self.output, "-> {}:", file.name()).unwrap();
+            writeln!(
+                self.output,
+                "-> {:?}:{}:{}",
+                file.name(),
+                first.span.row(),
+                first.span.col()
+            )
+            .unwrap();
 
             let line_number_pad = group
                 .last()
@@ -355,7 +370,7 @@ mod test {
 
         drop(builder);
 
-        ctx.push_str(diags.diagnostic_view());
+        ctx.push_str(diags.view());
     }
 
     print_test::cases! {

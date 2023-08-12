@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, future::Future, io, pin::Pin};
 
 use crate::{
-    BitSet, CycleDetector, FileRef, Graph, ImportLexer, Loader, LoaderCtx, Module, ModuleLoader,
-    ModuleMeta, ModuleRef, Modules, PoolStore, Severty,
+    BitSet, CycleDetector, FileRef, Graph, ImportLexer, Loader, LoaderCtx, LoaderRes, Module,
+    ModuleLoader, ModuleMeta, ModuleRef, Modules, PoolStore, Severty,
 };
 use mini_alloc::IdentStr;
 
@@ -13,11 +13,11 @@ struct CacheLoaderRes {
     reached_modules: BitSet,
 }
 
-impl<'a, L: Loader> ModuleLoader<'a, L> {
-    pub async fn update(mut self, root: IdentStr) -> Option<ModuleMeta> {
+impl<'a> ModuleLoader<'a> {
+    pub async fn update(mut self, root: IdentStr, loader: &mut impl Loader) -> Option<ModuleMeta> {
         let mut res = CacheLoaderRes::default();
 
-        let root = self.load_modules(&mut res, root).await?;
+        let root = self.load_modules(&mut res, root, loader).await?;
         let mut order = self.detect_cycles(root)?;
         self.remove_ignored(&mut order);
         self.remove_unreachable(&res);
@@ -36,12 +36,12 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
     fn remove_unreachable(&mut self, res: &CacheLoaderRes) {
         self.modules
-            .eintities
+            .entities
             .retain(|id, _| res.reached_modules.contains(id.index()));
 
         let mut module_ranges = self
             .modules
-            .eintities
+            .entities
             .values_mut()
             .map(|m| &mut m.deps)
             .collect::<Vec<_>>();
@@ -55,10 +55,9 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         let mut updated_set = BitSet::with_capacity(self.modules.files().len());
 
         for &module in order {
-            let module_ent = &self.modules.eintities[module];
-            let file = self.modules.module_file(module);
+            let module_ent = &self.modules.entities[module];
 
-            let updated = self.modules.files[file].is_dirty();
+            let updated = self.modules.files[module].is_dirty();
             let indirectly_updated = self.modules.deps[module_ent.deps]
                 .iter()
                 .any(|&dep| updated_set.contains(dep.index()));
@@ -74,65 +73,81 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
     async fn load_modules(
         &mut self,
         res: &mut CacheLoaderRes,
-        root: IdentStr,
+        root_name: IdentStr,
+        loader: &mut impl Loader,
     ) -> Option<ModuleRef> {
-        let loaded = self.load_file(None, root).await;
-        let root = self.handle_file_load_result(loaded)?;
+        let root = match self.load_file(ImportOrigin::Root, root_name.clone(), loader) {
+            Ok(root) => root,
+            Err(fut) => self.handle_file_load_result(LoadRes::Loaded(fut.await))?.0,
+        };
 
-        let mut queue = ParallelFileLoader::new();
-        let root_module = self.add_module(res, root, &mut queue);
-        let mut last_from = root_module;
+        let mut queue = Queue::new();
+        self.add_module(res, root, root_name, &mut queue, loader);
+        let mut last_from = root;
 
-        while let Some(lf) = Pin::new(&mut queue).await && let Some((from, _)) = lf.from {
-            let Some(file) = self.handle_file_load_result(lf) else {
+        while let Some(lf) = Pin::new(&mut queue).await {
+            let Some((file, ImportOrigin::File { file: from, .. }, name)) =
+                self.handle_file_load_result(lf)
+            else {
                 continue;
             };
 
-            let module = self.add_module(res, file, &mut queue);
+            self.add_module(res, file, name, &mut queue, loader);
 
             if last_from != from {
                 let elems = res.module_stack.drain(..);
-                self.modules.eintities[last_from].deps = self.modules.deps.extend(elems);
+                self.modules.entities[last_from].deps = self.modules.deps.extend(elems);
                 last_from = from;
             }
 
-            res.module_stack.push(module);
+            res.module_stack.push(file);
         }
 
         let elems = res.module_stack.drain(..);
-        self.modules.eintities[last_from].deps = self.modules.deps.extend(elems);
+        self.modules.entities[last_from].deps = self.modules.deps.extend(elems);
 
-        Some(root_module)
+        Some(root)
     }
 
     fn load_file(
         &mut self,
-        file_info: Option<(ModuleRef, usize)>,
-        import: IdentStr,
-    ) -> impl Future<Output = LoadedFile> + 'static {
+        from: ImportOrigin,
+        name: IdentStr,
+        loader: &mut impl Loader,
+    ) -> Result<FileRef, impl Future<Output = LoadedFile> + 'static> {
         let ctx = LoaderCtx {
             files: &mut self.modules.files,
         };
-        let from_file = file_info.map(|(f, ..)| f);
-        let fut = self.loader.load(ctx, from_file, import.clone());
-        async move {
-            LoadedFile {
-                id: fut.await,
-                from: file_info,
-                name: import,
-            }
+        let from_file = from.file();
+        match loader.create_loader(ctx, from_file, name.clone()) {
+            Ok(id) => Ok(id),
+            Err(fut) => Err(async move {
+                let file = fut.await;
+                LoadedFile { file, from, name }
+            }),
         }
     }
 
     fn handle_file_load_result(
         &mut self,
-        LoadedFile { id, from, name }: LoadedFile,
-    ) -> Option<FileRef> {
-        match id {
-            Ok(id) => Some(id),
-            Err(err) if let Some((from_module, pos)) = from => {
-                let from_file = self.modules.module_file(from_module);
-                let span = self.modules.files()[from_file].span_for_offset(pos, from_file);
+        res: LoadRes,
+    ) -> Option<(FileRef, ImportOrigin, IdentStr)> {
+        let (fref, from, name) = match res {
+            LoadRes::Cached(cached) => {
+                let CachedFile { id, from, name } = cached;
+                (Ok(id), from, name)
+            }
+            LoadRes::Loaded(loaded) => {
+                let LoadedFile { file, from, name } = loaded;
+                let fref = file.map(|res| self.modules.files.fill_reserved(res.slot, res.file));
+                (fref, from, name)
+            }
+        };
+
+        match fref {
+            Ok(loaded_file) => Some((loaded_file, from, name)),
+            Err(err) if let ImportOrigin::File { file, pos } = from => {
+                let span = self.modules.files()[file].span_for_offset(pos, file);
                 self.diagnostics
                     .builder(&self.modules.files)
                     .footer(Severty::Error, "unable to load a module")
@@ -153,7 +168,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
     fn detect_cycles(&mut self, root_module: ModuleRef) -> Option<Vec<ModuleRef>> {
         let mut graph = Graph::new();
-        for module in self.modules.eintities.values() {
+        for module in self.modules.entities.values() {
             let deps = self.modules.deps[module.deps]
                 .iter()
                 .map(|&dep| dep.index());
@@ -174,8 +189,7 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
 
             for &module in cycle.iter().rev() {
                 let name = PoolStore::by_index(self.modules.files(), module).name();
-                let name_str = name.as_str();
-                builder = builder.footer(Severty::Error, format_args!(" -> {}", name_str));
+                builder = builder.footer(Severty::Error, format_args!(" -> {name:?}"));
             }
 
             builder.terminate()?;
@@ -194,25 +208,26 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         &mut self,
         res: &mut CacheLoaderRes,
         file: FileRef,
-        queue: &mut ParallelFileLoader,
-    ) -> ModuleRef {
-        let module = file;
-
-        if res.reached_modules.insert(module.index()) {
-            self.modules.eintities[module] = Module::default();
-            self.collect_imports(module, res, queue);
+        name: IdentStr,
+        queue: &mut Queue<LoadRes>,
+        loader: &mut impl Loader,
+    ) {
+        if res.reached_modules.insert(file.index()) {
+            self.modules.entities[file] = Module {
+                name,
+                ..Default::default()
+            };
+            self.collect_imports(file, res, queue, loader);
         }
-
-        module
     }
 
     fn collect_imports<'b>(
         &mut self,
-        from: ModuleRef,
+        file: ModuleRef,
         res: &mut CacheLoaderRes,
-        queue: &mut ParallelFileLoader,
+        queue: &mut Queue<LoadRes>,
+        loader: &mut impl Loader,
     ) {
-        let file = self.modules.module_file(from);
         let source = self.modules.files[file].source();
         ImportLexer::new(&source)
             .map(|(import, start)| (IdentStr::from_str(import), start))
@@ -222,54 +237,83 @@ impl<'a, L: Loader> ModuleLoader<'a, L> {
         res.import_stack.dedup_by(|a, b| a.0 == b.0);
 
         for (name, pos) in res.import_stack.drain(..) {
+            let from = ImportOrigin::File { file, pos };
+
             if name.as_str() == Modules::BUILTIN_NAME {
-                queue.push(async move {
-                    LoadedFile {
-                        id: Ok(Modules::BUILTIN),
-                        from: Some((from, pos)),
-                        name,
-                    }
-                });
+                let id = Modules::BUILTIN;
+                queue.push_ready(LoadRes::Cached(CachedFile { id, from, name }));
                 continue;
             }
 
-            let fut = self.load_file(Some((from, pos)), name);
-            queue.push(fut);
+            match self.load_file(from, name.clone(), loader) {
+                Ok(id) => queue.push_ready(LoadRes::Cached(CachedFile { id, from, name })),
+                Err(fut) => queue.push(async move { LoadRes::Loaded(fut.await) }),
+            }
         }
     }
 }
 
-struct LoadedFile {
-    id: Result<FileRef, io::Error>,
-    from: Option<(ModuleRef, usize)>,
+struct CachedFile {
+    id: FileRef,
+    from: ImportOrigin,
     name: IdentStr,
 }
 
-type QueueFut = Pin<Box<dyn Future<Output = LoadedFile>>>;
-
-enum QueueItem {
-    Pending(QueueFut),
-    Ready(LoadedFile),
+struct LoadedFile {
+    file: io::Result<LoaderRes>,
+    from: ImportOrigin,
+    name: IdentStr,
 }
 
-struct ParallelFileLoader {
-    queue: VecDeque<QueueItem>,
+enum LoadRes {
+    Loaded(LoadedFile),
+    Cached(CachedFile),
 }
 
-impl ParallelFileLoader {
+#[derive(Clone, Copy)]
+enum ImportOrigin {
+    File { file: FileRef, pos: usize },
+    Root,
+}
+
+impl ImportOrigin {
+    fn file(&self) -> Option<FileRef> {
+        match self {
+            ImportOrigin::File { file, .. } => Some(*file),
+            ImportOrigin::Root => None,
+        }
+    }
+}
+
+type QueueFut<T> = Pin<Box<dyn Future<Output = T>>>;
+
+enum QueueItem<T> {
+    Pending(QueueFut<T>),
+    Ready(T),
+}
+
+struct Queue<T> {
+    queue: VecDeque<QueueItem<T>>,
+}
+
+impl<T> Queue<T> {
     fn new() -> Self {
         Self {
             queue: VecDeque::new(),
         }
     }
 
-    fn push<F: Future<Output = LoadedFile> + 'static>(&mut self, fut: F) {
+    fn push<F: Future<Output = T> + 'static>(&mut self, fut: F) {
         self.queue.push_back(QueueItem::Pending(Box::pin(fut)));
+    }
+
+    fn push_ready(&mut self, builtin: T) {
+        self.queue.push_back(QueueItem::Ready(builtin));
     }
 }
 
-impl Future for ParallelFileLoader {
-    type Output = Option<LoadedFile>;
+impl<T: Unpin> Future for Queue<T> {
+    type Output = Option<T>;
 
     fn poll(
         mut self: Pin<&mut Self>,

@@ -75,7 +75,7 @@ macro_rules! define_lexer {
             $regex:ident = $regex_repr:literal
         )*}
         operators {$(
-            $op_group:ident {$(
+            $op_group:ident $op_type:ident {$(
                 ($($op_name:ident: $op:literal),*) = $prec:literal,
             )*}
         )*}
@@ -93,7 +93,7 @@ macro_rules! define_lexer {
 
             $(#[regex($regex_repr)] $regex,)*
 
-            $($($(#[token($op, |_| OpCode::$op_name)])*)*)*
+            $($($(#[$op_type($op, |_| OpCode::$op_name)])*)*)*
             Op(OpCode),
 
             $(
@@ -141,12 +141,11 @@ macro_rules! define_lexer {
             }
         }
 
-        macro_rules! op_group {$(
+        pub macro op_group {$(
             ($op_group) => {
                 $($(OpCode::$op_name)|*)|*
-            };
+            },
         )*}
-        pub(crate) use op_group;
     };
 
     (@token_repr $token:ident = $token_repr:literal) => {
@@ -182,7 +181,7 @@ define_lexer! {
         Fn = "fn"
         Ct = "ct"
         Let = "let"
-        //Mut = "mut"
+        Mut = "mut"
 
         //True = "true"
         //False = "false"
@@ -209,21 +208,20 @@ define_lexer! {
     }
 
     operators {
-        math {
+        math token {
             (Mul: "*", Div: "/", Mod: "%") = 3,
             (Add: "+", Sub: "-") = 4,
             (Shl: "<<", Shr: ">>") = 5,
             (BitAnd: "&", BitOr: "|", BitXor: "^") = 6,
         }
-        cmp {
+        cmp token {
             (Eq: "==", Ne: "!=", Lt: "<", Le: "<=", Gt: ">", Ge: ">=") = 7,
         }
-        logic {
+        logic token {
             (And: "&&", Or: "||") = 8,
         }
-        assign {
-            (Assign: "=", AddAssign: "+=", SubAssign: "-=", MulAssign: "*=", DivAssign: "/=", ModAssign: "%=",
-                ShlAssign: "<<=", ShrAssign: ">>=", BitAndAssign: "&=", BitOrAssign: "|=", BitXorAssign: "^=") = 9,
+        assign regex {
+            (Assign: r"(|\+|-|\*|/|%|<<|>>|&|\||\^)=") = 9,
         }
     }
 
@@ -232,6 +230,25 @@ define_lexer! {
             #[token("\n", handle_newline)]
             Eof = "EOF"
             Err = "Error"
+    }
+}
+
+impl OpCode {
+    pub fn split_assign(op_str: &str) -> Option<Self> {
+        Some(match op_str.chars().next()? {
+            '+' => Self::Add,
+            '-' => Self::Sub,
+            '*' => Self::Mul,
+            '/' => Self::Div,
+            '%' => Self::Mod,
+            '<' => Self::Shl,
+            '>' => Self::Shr,
+            '&' => Self::BitAnd,
+            '|' => Self::BitOr,
+            '^' => Self::BitXor,
+            '=' => return None,
+            _ => unreachable!(),
+        })
     }
 }
 

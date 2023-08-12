@@ -1,5 +1,5 @@
 module root:
-  main = (sim1: i32): i32:
-    sym1
+  main = (sim0: i32): i32:
+    sym0
     2
     *

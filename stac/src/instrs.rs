@@ -2,29 +2,41 @@ use mini_alloc::IdentStr;
 
 use crate::{
     gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, Diagnostics, IntType,
-    LitKindAst, ModuleRef, Modules, OpCode, Ref, Signature, Span, Type, VecStore,
+    Layout, LitKindAst, ModuleRef, Modules, OpCode, Ref, Signature, Span, Type,
 };
 
 mod instr_emmiter;
 
 type InstrRepr = u16;
+pub type Returns = bool;
+pub type FrameSize = u16;
+pub type Sym = InstrRepr;
 pub type InstrRef = Ref<Instr, InstrRepr>;
 pub type Const = LitKindAst;
-pub type Sym = Ref<Decl, InstrRepr>;
 pub type FuncRef = Ref<Func, InstrRepr>;
 pub type TypeRef = Type;
-type Scope = VecStore<Decl, InstrRepr>;
 type CtxSym = IdentStr;
 
 pub type SourceOffset = Span;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mutable {
+    False,
+    True,
+    CtTrue,
+}
+
+#[derive(Clone, Debug)]
 pub enum InstrKind {
     Uninit(TypeRef),
     Sym(Sym),
     Res(Resolved),
     BinOp(OpCode),
     Field(CtxSym),
+    Decl(Mutable),
+    Drop,
+    DropScope(FrameSize, Returns),
+    PaddingDecl,
 }
 
 impl From<Resolved> for InstrKind {
@@ -63,8 +75,8 @@ gen_storage_group! {
 
 #[derive(Clone, Default)]
 pub struct Func {
-    signature: Signature,
-    body: InstrBodyRef,
+    pub signature: Signature,
+    pub body: InstrBodyRef,
 }
 
 #[derive(Default)]
@@ -75,6 +87,8 @@ pub struct Instrs {
 }
 
 impl Instrs {
+    const ENTRY_NAME: &'static str = "main";
+
     pub fn new() -> Self {
         Self::default().init()
     }
@@ -95,6 +109,20 @@ impl Instrs {
     pub fn decls_of(&self, module: ModuleRef) -> ModuleDecl {
         self.decls.view(self.modules[module])
     }
+
+    pub fn entry_of(&self, root: ModuleRef) -> Option<FuncRef> {
+        self.decls_of(root)
+            .decls
+            .iter()
+            .find_map(|decl| match decl.data {
+                Resolved::Func(id) if decl.name.ident.as_str() == Self::ENTRY_NAME => Some(id.func),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn sig_of(&self, f: FuncId) -> &Signature {
+        &self.decls.view(self.modules[f.module]).funcs[f.func].signature
+    }
 }
 
 impl ModuleDeclBuilder {
@@ -113,8 +141,8 @@ impl ModuleDeclBuilder {
 
 pub struct TyResolverCtx<'ctx> {
     pub module: ModuleRef,
+    pub arch: Layout,
     pub instrs: &'ctx Instrs,
-    pub scope: &'ctx mut Scope,
     pub diags: &'ctx mut Diagnostics,
     pub modules: &'ctx Modules,
 }
@@ -123,45 +151,57 @@ impl<'ctx> TyResolverCtx<'ctx> {
     pub fn stack_borrow(&mut self) -> TyResolverCtx {
         TyResolverCtx {
             module: self.module,
+            arch: self.arch,
             instrs: self.instrs,
-            scope: self.scope,
             diags: self.diags,
             modules: self.modules,
         }
     }
 }
 
-pub fn lookup_sym(s: &Scope, name: &str) -> Option<Sym> {
-    s.iter()
-        .find_map(|(id, decl)| (decl.name.ident.as_str() == name).then_some(id))
-}
-
 #[must_use]
 pub struct ScopeFrame(usize);
 
 impl ScopeFrame {
-    pub fn new(s: &mut Scope) -> Self {
+    pub fn new<T>(s: &mut Vec<T>) -> Self {
         Self(s.len())
     }
 
-    pub fn end(self, s: &mut Scope) {
+    pub fn size<T>(&self, s: &Vec<T>) -> FrameSize {
+        (s.len() - self.0) as FrameSize
+    }
+
+    pub fn end<T>(self, s: &mut Vec<T>) {
         s.truncate(self.0);
     }
 }
 
 pub trait Resolver {
-    fn resolve(&mut self, ctx: TyResolverCtx, body: InstrBody, span: Span) -> Option<Resolved>;
+    fn resolve(
+        &mut self,
+        ctx: TyResolverCtx,
+        decls: ModuleDecl,
+        body: InstrBody,
+        span: Span,
+    ) -> Option<Resolved>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Resolved {
     Type(Type),
-    Func(FuncRef),
+    Func(FuncId),
     Module(ModuleRef),
     Const(LitKindAst),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FuncId {
+    pub module: ModuleRef,
+    pub func: FuncRef,
+}
+
 pub struct InstrBuilder<'ctx> {
+    arch: Layout,
     instrs: &'ctx mut Instrs,
     modules: &'ctx Modules,
     diags: &'ctx mut Diagnostics,
@@ -170,12 +210,14 @@ pub struct InstrBuilder<'ctx> {
 
 impl<'ctx> InstrBuilder<'ctx> {
     pub fn new(
+        arch: Layout,
         instrs: &'ctx mut Instrs,
         modules: &'ctx Modules,
         diags: &'ctx mut Diagnostics,
         resolver: &'ctx mut dyn Resolver,
     ) -> Self {
         Self {
+            arch,
             instrs,
             modules,
             diags,
@@ -185,22 +227,22 @@ impl<'ctx> InstrBuilder<'ctx> {
 }
 
 #[cfg(test)]
-mod test {
-    use mini_alloc::{ArenaBase, DiverBase, IdentStr};
-    use pollster::FutureExt;
+pub mod instr_test_util {
+    use mini_alloc::{ArenaBase, DiverBase};
 
     use crate::{
-        instrs::InstrKind, print_cases, Instr, Instrs, ModuleRef, Modules, Parser, Resolved,
-        Resolver,
+        bail, instrs::InstrKind, Instrs, Layout, ModuleMeta, ModuleRef, Modules, Mutable, Parser,
+        Resolved, Resolver,
     };
 
     #[derive(Default)]
-    struct TyResolverImpl {}
+    pub struct TyResolverMock {}
 
-    impl Resolver for TyResolverImpl {
+    impl Resolver for TyResolverMock {
         fn resolve(
             &mut self,
             ctx: crate::TyResolverCtx,
+            _: crate::ModuleDecl,
             body: crate::InstrBody,
             _span: crate::Span,
         ) -> Option<super::Resolved> {
@@ -208,13 +250,7 @@ mod test {
 
             for instr in body.instrs {
                 let value = match &instr.kind {
-                    InstrKind::Uninit(_) => todo!(),
-                    &InstrKind::Sym(sym) => ctx.scope[sym].data.clone(),
-                    InstrKind::BinOp(_) => todo!(),
                     InstrKind::Field(i) => match stack.pop().unwrap() {
-                        Resolved::Const(_) => todo!(),
-                        Resolved::Type(_) => todo!(),
-                        Resolved::Func(_) => todo!(),
                         Resolved::Module(m) => {
                             let view = ctx.instrs.decls.view(ctx.instrs.modules[m]);
                             view.decls
@@ -224,8 +260,10 @@ mod test {
                                 .data
                                 .clone()
                         }
+                        _ => todo!(),
                     },
                     InstrKind::Res(r) => r.clone(),
+                    _ => todo!(),
                 };
 
                 stack.push(value);
@@ -235,18 +273,18 @@ mod test {
         }
     }
 
-    fn display_id(prefix: &str, id: usize, ctx: &mut String) {
+    pub fn display_id(prefix: &str, id: usize, ctx: &mut String) {
         ctx.push_str(prefix);
         ctx.push_str(id.to_string().as_str());
     }
 
-    fn display_instr(instr: &Instr, ctx: &mut String) {
-        match &instr.kind {
+    pub fn display_instr(instr: &InstrKind, ctx: &mut String) {
+        match instr {
             InstrKind::Uninit(ty) => {
                 ctx.push_str("uninit ");
                 ctx.push_str(&ty.to_string());
             }
-            InstrKind::Sym(s) => display_id("sym", s.index(), ctx),
+            &InstrKind::Sym(s) => display_id("sym", s as usize, ctx),
             InstrKind::BinOp(op) => ctx.push_str(op.name()),
             InstrKind::Field(f) => {
                 ctx.push_str(". ");
@@ -254,14 +292,24 @@ mod test {
             }
             InstrKind::Res(r) => match r {
                 Resolved::Type(t) => ctx.push_str(&t.to_string()),
-                Resolved::Func(f) => display_id("func", f.index(), ctx),
+                Resolved::Func(f) => display_id("func", f.func.index(), ctx),
                 Resolved::Module(m) => display_id("mod", m.index(), ctx),
                 Resolved::Const(c) => ctx.push_str(&c.to_string()),
             },
+            InstrKind::Decl(Mutable::False) => ctx.push_str("decl"),
+            InstrKind::Decl(Mutable::True) => ctx.push_str("decl mut"),
+            InstrKind::Decl(Mutable::CtTrue) => ctx.push_str("decl ct mut"),
+            InstrKind::Drop => ctx.push_str("drop"),
+            InstrKind::DropScope(s, r) => {
+                ctx.push_str("drop scope ");
+                ctx.push_str(s.to_string().as_str());
+                ctx.push_str(if *r { " returns" } else { "" });
+            }
+            InstrKind::PaddingDecl => ctx.push_str("padding decl"),
         }
     }
 
-    fn display_module(module: ModuleRef, modules: &Modules, instrs: &Instrs, ctx: &mut String) {
+    pub fn display_module(module: ModuleRef, modules: &Modules, instrs: &Instrs, ctx: &mut String) {
         let name = modules.name_of(module);
         let view = instrs.decls.view(instrs.modules[module]);
 
@@ -294,15 +342,14 @@ mod test {
                 }
             };
 
-            let func = &view.funcs[func];
-            let scope_offset = view.decls.len();
+            let func = &view.funcs[func.func];
 
             ctx.push('(');
             for (i, arg) in func.signature.args.iter().enumerate() {
                 if i != 0 {
                     ctx.push_str(", ");
                 }
-                display_id("sim", scope_offset + i, ctx);
+                display_id("sim", i, ctx);
                 ctx.push_str(": ");
                 ctx.push_str(&arg.to_string());
             }
@@ -313,53 +360,58 @@ mod test {
             let body_view = instrs.bodies.view(func.body);
             for instr in body_view.instrs.iter() {
                 ctx.push_str("    ");
-                display_instr(instr, ctx);
+                display_instr(&instr.kind, ctx);
                 ctx.push('\n');
             }
         }
     }
 
-    fn prefrom_test(source: &str, ctx: &mut String) {
+    pub fn parse_modules(
+        mods: &Modules,
+        meta: &ModuleMeta,
+        instrs: &mut Instrs,
+        mut resolver: impl Resolver,
+        ctx: &mut String,
+    ) {
         let mut diags = crate::Diagnostics::default();
-        let mut modules = crate::Modules::new();
-        let mut loader = crate::LoaderMock::new(source);
-
-        macro bail($message:literal $control:ident) {
-            ctx.push_str($message);
-            ctx.push('\n');
-            ctx.push_str(diags.diagnostic_view());
-            diags.clear();
-            $control;
-        }
 
         let mut arena = ArenaBase::new(1000);
         let scope = arena.scope();
         let mut diver = DiverBase::new(1000);
 
-        let root = IdentStr::from_str("root");
-        let loader_ctx = crate::ModuleLoader::new(&mut loader, &mut modules, &mut diags);
-        let Some(meta) = loader_ctx.update(root).block_on() else {
-            bail!("failed to load modules" return);
-        };
-
-        let mut instrs = crate::Instrs::new();
-        let mut resolver = TyResolverImpl::default();
-
         for &module in meta.order() {
-            let parser = Parser::new(modules.files(), module, &mut diags, &scope);
+            let parser = Parser::new(mods.files(), module, &mut diags, &scope);
             let Some(items) = parser.parse(diver.dive()) else {
-                bail!("failed to parse module" continue);
+                bail!("failed to parse module" diags ctx continue);
             };
 
             let builder =
-                crate::InstrBuilder::new(&mut instrs, &modules, &mut diags, &mut resolver);
+                crate::InstrBuilder::new(Layout::ARCH_64, instrs, mods, &mut diags, &mut resolver);
 
-            if builder.build(module, items).is_none() || !diags.diagnostic_view().is_empty() {
-                bail!("failed to build module" continue);
+            if builder.build(module, items).is_none() || !diags.view().is_empty() {
+                bail!("failed to build module" diags ctx continue);
             }
 
-            display_module(module, &modules, &instrs, ctx);
+            display_module(module, &mods, &instrs, ctx);
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use crate::{load_modules, parse_modules, print_cases, TyResolverMock};
+
+    fn prefrom_test(source: &str, ctx: &mut String) {
+        let mut mods = crate::Modules::new();
+        let loader = crate::LoaderMock::new(source);
+        let Some(meta) = load_modules(&mut mods, loader, ctx) else {
+            return;
+        };
+
+        let mut instrs = crate::Instrs::new();
+        let resolver = TyResolverMock::default();
+        parse_modules(&mods, &meta, &mut instrs, resolver, ctx);
     }
 
     print_cases! { prefrom_test:

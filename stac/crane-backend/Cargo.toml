@@ -1,0 +1,25 @@
+[package]
+name = "crane-backend"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "scc"
+path = "src/main.rs"
+
+[dependencies]
+cc = "1.0.82"
+clap = { version = "4.3.21", features = ["derive"] }
+cranelift-codegen = "0.98.1"
+cranelift-frontend = "0.98.1"
+cranelift-module = "0.98.1"
+cranelift-native = "0.98.1"
+cranelift-object = "0.98.1"
+pollster = "0.3.0"
+stac = { path = ".." }
+target-lexicon = { version = "0.12.11", features = ["std"] }

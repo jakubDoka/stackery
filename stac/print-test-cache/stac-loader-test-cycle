@@ -1,6 +1,6 @@
-diagnostics:
+module loading diagnostics:
 error: cyclic dependency detected
 note: the following modules are involved in the cycle:
-error:  -> root
-error:  -> a
-no meta
+error:  -> "root"
+error:  -> "a"
+module loading failed

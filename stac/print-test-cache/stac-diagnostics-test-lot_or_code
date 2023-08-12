@@ -1,5 +1,5 @@
 error: test
--> main:
+-> "main":1:0
 1 | 
 2 | main: || {
     ^ Ident

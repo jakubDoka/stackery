@@ -1,15 +1,18 @@
-use std::iter;
+use std::{
+    iter,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use mini_alloc::IdentStr;
-
-use crate::{PoolStore, Ref};
+use crate::{DefaultRef, PoolStore, Ref, RefRepr};
 
 type FileRefRepr = u16;
 pub type FileRef = Ref<File, FileRefRepr>;
 pub type Files = PoolStore<File, FileRefRepr>;
 
+#[derive(Debug)]
 pub struct File {
-    name: IdentStr,
+    name: Arc<Path>,
     nline_offsets: Vec<u32>,
     source: String,
     modification_id: u64,
@@ -17,21 +20,28 @@ pub struct File {
     is_dirty: bool,
 }
 
+impl DefaultRef for File {
+    fn default_ref<R: RefRepr>() -> Ref<Self, R> {
+        Ref::from_repr(R::MIN)
+    }
+}
+
 impl File {
-    pub fn new(name: IdentStr, source: String) -> Self {
+    pub fn new(name: PathBuf, source: String) -> Self {
         Self::with_modification_id(name, source, 0)
     }
 
-    pub fn with_modification_id(name: IdentStr, source: String, modification_id: u64) -> Self {
+    pub fn with_modification_id(name: PathBuf, source: String, modification_id: u64) -> Self {
         let nline_offsets = Self::compute_nline_offsets(&source);
 
         assert!(
             nline_offsets.len() <= u16::MAX as usize,
-            "amount of lines in file cannot exceed 65535"
+            "amount of lines in file cannot exceed {}",
+            u16::MAX
         );
 
         Self {
-            name,
+            name: Arc::from(name),
             nline_offsets,
             source,
             modification_id,
@@ -50,7 +60,7 @@ impl File {
         self.is_dirty = false;
     }
 
-    pub fn name(&self) -> &IdentStr {
+    pub fn name(&self) -> &Arc<Path> {
         &self.name
     }
 

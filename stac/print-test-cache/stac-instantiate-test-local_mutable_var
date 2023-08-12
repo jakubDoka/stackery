@@ -1,0 +1,15 @@
+module root:
+  bi = :{bi}
+  main = (): i32:
+    1
+    decl ct mut
+    sym0
+    sym0
+    1
+    +
+    (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+    sym0
+    drop scope 1 returns
+padding decl : {integer}
+2 : {integer}
+drop scope 1 returns : ()

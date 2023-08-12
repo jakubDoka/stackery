@@ -2,10 +2,41 @@ use std::fmt;
 
 mod unify_impl;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Signature {
     pub args: Vec<Type>,
     pub ret: Type,
+}
+
+impl Signature {
+    fn unify(&self, other: &Self) -> Option<Self> {
+        if self.args.len() != other.args.len() {
+            return None;
+        }
+
+        let args = self
+            .args
+            .iter()
+            .zip(other.args.iter())
+            .map(|(lhs, rhs)| lhs.unify(rhs))
+            .collect::<Option<Vec<_>>>()?;
+
+        let ret = self.ret.unify(&other.ret)?;
+
+        Some(Self { args, ret })
+    }
+}
+
+impl fmt::Display for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let args = self
+            .args
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "({}) -> {}", args, self.ret)
+    }
 }
 
 impl Default for Signature {
@@ -20,6 +51,7 @@ impl Default for Signature {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
     BuiltIn(BuiltInType),
+    Func(Box<Signature>),
 }
 
 impl Type {
@@ -28,7 +60,16 @@ impl Type {
     pub(crate) fn unify(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (&Self::BuiltIn(lhs), &Self::BuiltIn(rhs)) => lhs.merge(rhs).map(Self::BuiltIn),
+            (Self::Func(lhs), Self::Func(rgs)) => lhs.unify(rgs).map(Box::new).map(Self::Func),
+            _ => None,
         }
+    }
+
+    pub fn is_signed(&self) -> bool {
+        matches!(
+            self,
+            Self::BuiltIn(BuiltInType::Int(IntType { signed: true, .. }))
+        )
     }
 }
 
@@ -36,6 +77,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BuiltIn(b) => b.fmt(f),
+            Self::Func(sig) => sig.fmt(f),
         }
     }
 }

@@ -1,0 +1,9 @@
+module root:
+  bi = :{bi}
+  main = (): i32:
+    mod0
+    . i64
+    . size
+    1
+    +
+9 : {integer}
