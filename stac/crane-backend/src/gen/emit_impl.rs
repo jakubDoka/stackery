@@ -6,7 +6,7 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::Module;
-use stac::{BuiltInType, InstrKind, IntType, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type};
+use stac::{BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type};
 
 use super::*;
 
@@ -65,26 +65,20 @@ impl<'ctx> Emmiter<'ctx> {
         let entry = builder.fb.create_block();
         builder.fb.switch_to_block(entry);
 
-        for &(ref instr, ty) in ir.instrs.iter() {
-            match instr {
-                InstrKind::Uninit(_) => todo!(),
-                &InstrKind::Sym(sym) => {
+        for &Finst { ref kind, ty, .. } in ir.instrs.iter() {
+            match kind {
+                &FinstKind::Sym(sym) => {
                     let slot = builder.stack[sym as usize];
                     builder.stack.push(slot);
                 }
-                InstrKind::Res(res) => match res {
-                    stac::Resolved::Type(_) => unreachable!(),
-                    stac::Resolved::Func(_) => unreachable!(),
-                    stac::Resolved::Module(_) => unreachable!(),
-                    stac::Resolved::Const(c) => match c {
-                        stac::LitKindAst::Int(i) => {
-                            let spec = builder.spec(ty);
-                            let value = builder.fb.ins().iconst(spec.repr, i.value() as i64);
-                            builder.stack.push((Slot::Value(value), spec));
-                        }
-                    },
+                FinstKind::Const(c) => match c {
+                    stac::LitKindAst::Int(i) => {
+                        let spec = builder.spec(ty);
+                        let value = builder.fb.ins().iconst(spec.repr, i.value() as i64);
+                        builder.stack.push((Slot::Value(value), spec));
+                    }
                 },
-                InstrKind::BinOp(op) => {
+                FinstKind::BinOp(op) => {
                     let [(lhs, lty), (rhs, _)] = pop_array(&mut builder.stack);
 
                     use ir::types::*;
@@ -121,11 +115,11 @@ impl<'ctx> Emmiter<'ctx> {
                         _ => todo!(),
                     }
                 }
-                InstrKind::Call(_) => {
+                FinstKind::Call(_) => {
                     todo!()
                 }
-                InstrKind::Field(_) => todo!(),
-                InstrKind::Decl(Mutable::True) => {
+                FinstKind::Field(_) => todo!(),
+                FinstKind::Decl(Mutable::True) => {
                     let (slot, spec) = builder.stack.pop().unwrap();
                     let value = builder.slot_as_value(slot);
                     let var = Variable::from_u32(builder.stack.len() as u32);
@@ -133,11 +127,11 @@ impl<'ctx> Emmiter<'ctx> {
                     builder.fb.def_var(var, value);
                     builder.stack.push((Slot::Var(var), spec));
                 }
-                InstrKind::Decl(_) => (),
-                InstrKind::Drop => {
+                FinstKind::Decl(_) => (),
+                FinstKind::Drop => {
                     builder.stack.pop().unwrap();
                 }
-                &InstrKind::DropScope(size, returns) => {
+                &FinstKind::DropScope(size, returns) => {
                     let return_slot = returns.then(|| builder.stack.pop().unwrap());
                     builder.stack.drain(builder.stack.len() - size as usize..);
                     if let Some((slot, spec)) = return_slot {
@@ -223,20 +217,19 @@ impl TypeSpec {
     }
 
     fn built_in_type_repr(b: &BuiltInType, arch: ir::Type) -> ir::Type {
+        use BuiltInType::*;
         match b {
-            BuiltInType::Int(IntType { size, .. }) => match size {
-                stac::IntSize::W8 => ir::types::I8,
-                stac::IntSize::W16 => ir::types::I16,
-                stac::IntSize::W32 => ir::types::I32,
-                stac::IntSize::W64 => ir::types::I64,
-                stac::IntSize::W128 => ir::types::I128,
-            },
-            BuiltInType::Integer => arch,
-            BuiltInType::Bool => ir::types::I8,
-            BuiltInType::Unit => ir::types::INVALID,
-            BuiltInType::Type => unreachable!(),
-            BuiltInType::Module => unreachable!(),
-            BuiltInType::Unknown => unreachable!(),
+            U8 | I8 => ir::types::I8,
+            U16 | I16 => ir::types::I16,
+            U32 | I32 => ir::types::I32,
+            U64 | I64 => ir::types::I64,
+            Int | Uint => arch,
+            Bool => ir::types::I8,
+            Unit => ir::types::INVALID,
+            Type => unreachable!(),
+            Module => unreachable!(),
+            Unknown => unreachable!(),
+            Integer => unreachable!(),
         }
     }
 

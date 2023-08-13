@@ -1,75 +1,188 @@
-use std::array;
-
-use mini_alloc::IdentStr;
-
 use crate::{
-    lexer, ArgCount, BuiltInType, FrameSize, FuncType, InstrBody, InstrKind, IntLit, LitKindAst,
-    ModuleDecl, ModuleRef, Mutable, OpCode, Resolved, Returns, Severty, Span, SubsRef, SubsTable,
-    Sym, Type, VecStore,
+    lexer, ArgCount, BuiltInType, CtxSym, Finst, FinstKind, FrameSize, FuncId, FuncType, InstrBody,
+    InstrKind, IntLit, IrTypes, LitKindAst, ModuleDecl, ModuleRef, Mutable, OpCode, Resolved,
+    Returns, Severty, ShadowStore, Span, SubsRef, SubsTable, Sym, Type, TypeRef, UnificationError,
 };
 
 use super::{Entry, Interpreter, Ir, Layout, Local, SubsRepr};
 
-struct Decl {
-    _offset: usize,
-    _span: Span,
+#[derive(Clone, Debug)]
+enum DeclValue {
+    Const(Resolved),
+    Runtime(usize),
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Operand {
-    start: usize,
-    runtime: bool,
+struct Decl {
+    value: DeclValue,
     mutable: bool,
+    span: Span,
+    ty: SubsRef,
+}
+
+#[derive(Clone, Debug)]
+enum OperandValue {
+    AsInstr,
+    Decl(usize),
+    Module(ModuleRef),
+    Type(TypeRef),
+    Func(FuncId),
+}
+
+#[derive(Clone, Debug)]
+struct Operand {
+    value: OperandValue,
     ty: SubsRef,
 }
 
 #[derive(Default)]
 struct Res<'a> {
     _module: ModuleRef,
-    ir: Ir,
-    stack: Vec<Operand>,
-    types: VecStore<Type, SubsRepr>,
+    enfoce_const: bool,
     params: Vec<Local>,
-    ip: usize,
     body: InstrBody<'a>,
     _decls: ModuleDecl<'a>,
+
+    decls: Vec<Decl>,
+    stack: Vec<Operand>,
     subs_table: SubsTable<SubsRepr>,
-    enfoce_const: bool,
-    scope: Vec<Decl>,
+    type_mapping: ShadowStore<Type, SubsRepr, TypeRef>,
+    ip: usize,
+    type_group_seq: SubsRepr,
+
+    ir: Ir,
     call_frontier: Vec<Entry>,
 }
 
 impl<'a> Res<'a> {
-    fn push_type(&mut self, ty: Type) -> SubsRef {
-        self.types.push(ty)
+    fn new(
+        module: ModuleRef,
+        enforce_const: bool,
+        body: InstrBody<'a>,
+        decls: ModuleDecl<'a>,
+    ) -> Self {
+        Self {
+            _module: module,
+            enfoce_const: enforce_const,
+            params: Vec::new(),
+            body,
+            _decls: decls,
+
+            ir: Ir {
+                instrs: Vec::new(),
+                types: {
+                    let mut store = IrTypes::new();
+                    store.extend(body.types.iter().cloned());
+                    store
+                },
+            },
+
+            ..Default::default()
+        }
     }
 
-    fn push_instr(&mut self, ty: SubsRef, runtime: bool, mutable: bool, kind: InstrKind) {
-        self.stack.push(Operand {
-            start: self.ir.instrs.len(),
-            runtime,
-            mutable,
-            ty,
-        });
-        self.ir.instrs.push((kind, ty));
+    fn create_group(&mut self, ty: TypeRef) -> SubsRef {
+        let id = self.type_group_seq;
+        self.type_group_seq += 1;
+        let id = SubsRef::from_repr(id);
+        if ty != TypeRef::default() {
+            self.type_mapping[id] = ty;
+        }
+        id
+    }
+
+    fn intern_type(&mut self, ty: &Type) -> TypeRef {
+        match ty {
+            &Type::BuiltIn(b) => TypeRef::from_repr(b as _),
+            other => self.ir.types.find_or_push(other),
+        }
+    }
+
+    fn intern_and_create_group(&mut self, ty: &Type) -> SubsRef {
+        let ty = self.intern_type(ty);
+        self.create_group(ty)
     }
 
     fn remap_types(mut self) -> Ir {
-        self.ir.instrs.iter_mut().for_each(|(_, ty)| {
-            *ty = self.subs_table.root_of_ref(*ty);
-        });
-
-        self.ir.instrs.iter_mut().for_each(|(_, ty)| {
-            let tyv = &self.types[*ty];
-            let id = self
-                .ir
-                .types
-                .iter()
-                .find_map(|(id, ty)| if ty == tyv { Some(id) } else { None });
-            *ty = id.unwrap_or_else(|| self.ir.types.push(tyv.clone()));
-        });
+        for instr in self.ir.instrs.iter_mut() {
+            instr.ty = self.subs_table.root_of_ref(instr.ty);
+            instr.ty = self.type_mapping[instr.ty];
+        }
 
         self.ir
+    }
+
+    fn get_subs(&mut self, ty: SubsRef) -> Type {
+        let ty = self.subs_table.root_of_ref(ty);
+        let ty = self.type_mapping[ty];
+        self.ir.types[ty].clone()
+    }
+
+    fn set_subs(&mut self, ty: SubsRef, new: Type) {
+        let ty = self.subs_table.root_of_ref(ty);
+        let ty = self.type_mapping[ty];
+        self.type_mapping[ty] = self.ir.types.find_or_push(&new);
+    }
+
+    fn pop_operand(&mut self) -> (SubsRef, Option<Result<Resolved, usize>>) {
+        let operand = self.stack.pop().unwrap();
+        let res = match operand.value {
+            OperandValue::Func(f) => Resolved::Func(f),
+            OperandValue::Module(m) => Resolved::Module(m),
+            OperandValue::Decl(u) => return (operand.ty, Some(Err(u))),
+            OperandValue::Type(t) => Resolved::Type(self.ir.types[t].clone()),
+            OperandValue::AsInstr => match self.ir.instrs.pop().unwrap() {
+                Finst {
+                    kind: FinstKind::Const(c),
+                    ..
+                } => Resolved::Const(c),
+                instr => {
+                    self.ir.instrs.push(instr);
+                    return (operand.ty, None);
+                }
+            },
+        };
+
+        (operand.ty, Some(Ok(res)))
+    }
+
+    fn pop_operand_as_value(&mut self) -> (SubsRef, Option<Resolved>) {
+        let (ty, res) = self.pop_operand();
+        let res = res.and_then(|r| match r {
+            Ok(r) => Some(r),
+            Err(u) => match self.decls[u as usize].value.clone() {
+                DeclValue::Const(c) => Some(c),
+                DeclValue::Runtime(_) => None,
+            },
+        });
+        (ty, res)
+    }
+
+    fn push_res(&mut self, ty: SubsRef, r: Resolved, span: Span) {
+        match r {
+            Resolved::Type(t) => self.stack.push(Operand {
+                value: OperandValue::Type(self.ir.types.find_or_push(&t)),
+                ty,
+            }),
+            Resolved::Func(f) => self.stack.push(Operand {
+                value: OperandValue::Func(f),
+                ty,
+            }),
+            Resolved::Module(m) => self.stack.push(Operand {
+                value: OperandValue::Module(m),
+                ty,
+            }),
+            Resolved::Const(c) => {
+                self.stack.push(Operand {
+                    value: OperandValue::AsInstr,
+                    ty,
+                });
+                self.ir.instrs.push(Finst {
+                    kind: FinstKind::Const(c),
+                    ty,
+                    span,
+                });
+            }
+        }
     }
 }
 
@@ -83,24 +196,18 @@ impl<'ctx> Interpreter<'ctx> {
     ) -> Option<Resolved> {
         let prev_count = self.diags.error_count();
 
-        let mut res = Res {
-            body,
-            _decls: decls,
-            enfoce_const: true,
-            _module: module,
-            ..Default::default()
-        };
+        let mut res = Res::new(module, true, body, decls);
 
         while let Some(instr) = res.body.instrs.get(res.ip) {
             res.ip += 1;
-            self.eval_instr(&instr.kind, instr.span, &mut res);
+            self.eval_instr(&instr.kind, instr.span.to_span(module), &mut res);
         }
 
         if self.diags.error_count() > prev_count {
             return None;
         }
 
-        let Some((InstrKind::Res(r), _)) = res.ir.instrs.pop() else {
+        let (_, Some(r)) = res.pop_operand_as_value() else {
             self.diags
                 .builder(self.modules.files())
                 .footer(Severty::Error, "expected result from expression")
@@ -112,28 +219,33 @@ impl<'ctx> Interpreter<'ctx> {
     }
 
     pub fn eval(&mut self, entry: &Entry, call_frontier: &mut Vec<Entry>) -> Ir {
-        let mut res = Res {
-            _module: entry.id.module,
-            params: entry.inputs.clone(),
-            body: self.instrs.body_of(entry.id),
-            _decls: self.instrs.decls_of(entry.id.module),
-            ..Default::default()
-        };
+        let mut res = Res::new(
+            entry.id.module,
+            false,
+            self.instrs.body_of(entry.id),
+            self.instrs.decls_of(entry.id.module),
+        );
+
+        res.params = entry.inputs.clone();
 
         while let Some(instr) = res.body.instrs.get(res.ip) {
             res.ip += 1;
-            self.eval_instr(&instr.kind, instr.span, &mut res);
+            self.eval_instr(&instr.kind, instr.span.to_span(entry.id.module), &mut res);
         }
 
         if let Some(operand) = res.stack.pop() {
-            let ret_ty = res.subs_table.root_of_ref(operand.ty);
-            if let Some(ty) = self.unify_types(
-                &res.types[ret_ty],
-                &entry.ret,
-                res.body.instrs.last().unwrap().span,
-            ) {
-                res.types[ret_ty] = ty;
-            }
+            let ret = res.intern_and_create_group(&entry.ret);
+            self.unify_subs(
+                operand.ty,
+                ret,
+                res.body
+                    .instrs
+                    .last()
+                    .unwrap()
+                    .span
+                    .to_span(entry.id.module),
+                &mut res,
+            );
         }
 
         call_frontier.append(&mut res.call_frontier);
@@ -142,28 +254,23 @@ impl<'ctx> Interpreter<'ctx> {
     }
 
     fn eval_instr(&mut self, instr: &InstrKind, span: Span, res: &mut Res) {
-        match instr {
+        match instr.clone() {
             InstrKind::Uninit(ty) => self.eval_uninit(ty, res),
-            InstrKind::Res(r) => self.eval_res(r.clone(), res),
-            &InstrKind::Sym(s) => self.eval_sym(s, span, res),
-            &InstrKind::BinOp(op) => self.eval_binop(op, span, res),
-            &InstrKind::Call(ac) => self.eval_call(ac, span, res),
+            InstrKind::Sym(s) => self.eval_sym(s, span, res),
+            InstrKind::BinOp(op) => self.eval_binop(op, span, res),
+            InstrKind::Call(ac) => self.eval_call(ac, span, res),
             InstrKind::Field(field) => self.eval_field(field, span, res),
-            &InstrKind::Decl(mutable) => self.eval_decl(span, mutable, res),
+            InstrKind::Decl(mutable) => self.eval_decl(span, mutable, res),
             InstrKind::Drop => self.eval_drop(span, res),
-            &InstrKind::DropScope(s, r) => self.eval_drop_scope(s, r, span, res),
+            InstrKind::DropScope(s, r) => self.eval_drop_scope(s, r, span, res),
+            InstrKind::Module(_) => todo!(),
+            InstrKind::Const(_) => todo!(),
+            InstrKind::Type(_) => todo!(),
         }
     }
 
-    fn eval_uninit(&mut self, typ: &Type, res: &mut Res) {
-        let ty = res.push_type(typ.clone());
-        res.stack.push(Operand {
-            start: res.ir.instrs.len(),
-            runtime: false,
-            mutable: false,
-            ty,
-        });
-        res.ir.instrs.push((InstrKind::Uninit(typ.clone()), ty));
+    fn eval_uninit(&mut self, _typ: TypeRef, _res: &mut Res) {
+        todo!("not a priority");
     }
 
     fn res_ty(&mut self, c: &Resolved, _res: &mut Res) -> Type {
@@ -177,24 +284,17 @@ impl<'ctx> Interpreter<'ctx> {
         }
     }
 
-    fn eval_res(&mut self, c: Resolved, res: &mut Res) {
-        let typ = self.res_ty(&c, res);
-
-        let ty = res.push_type(typ);
-        res.stack.push(Operand {
-            start: res.ir.instrs.len(),
-            runtime: false,
-            mutable: false,
-            ty,
-        });
-        res.ir.instrs.push((InstrKind::Res(c), ty));
+    fn eval_res(&mut self, r: Resolved, span: Span, res: &mut Res) {
+        let typ = self.res_ty(&r, res);
+        let ty = res.intern_and_create_group(&typ);
+        res.push_res(ty, r, span);
     }
 
     fn eval_sym(&mut self, sym: Sym, span: Span, res: &mut Res) {
         if res.params.len() > sym as usize {
             let local = res.params[sym as usize].clone();
             match local {
-                Local::Ct(c) => self.eval_res(c, res),
+                Local::Ct(c) => self.eval_res(c, span, res),
                 Local::Rt(_) if res.enfoce_const => {
                     self.diags
                         .builder(self.modules.files())
@@ -203,16 +303,20 @@ impl<'ctx> Interpreter<'ctx> {
                     return;
                 }
                 Local::Rt(ty) => {
-                    let ty = res.push_type(ty);
+                    let ty = res.intern_and_create_group(&ty);
                     res.stack.push(Operand {
-                        start: res.ir.instrs.len(),
-                        runtime: true,
-                        mutable: false,
+                        value: OperandValue::AsInstr,
                         ty,
                     });
-                    res.ir.instrs.push((InstrKind::Sym(sym), ty));
-
-                    res.push_instr(ty, true, false, InstrKind::Sym(sym));
+                    let final_sym = res.params[..sym as usize]
+                        .iter()
+                        .filter(|l| matches!(l, Local::Rt(_)))
+                        .count();
+                    res.ir.instrs.push(Finst {
+                        kind: FinstKind::Sym(final_sym as Sym),
+                        ty,
+                        span,
+                    });
                 }
             };
             return;
@@ -220,124 +324,75 @@ impl<'ctx> Interpreter<'ctx> {
 
         let operand_index = sym as usize - res.params.len();
 
-        let Some(Operand {
-            start,
-            runtime,
+        let Decl {
+            ref value,
             mutable,
             ty,
-        }) = res.stack.get(operand_index).copied()
-        else {
-            println!("{}", self.diags.view());
-            unreachable!();
-        };
+            ..
+        } = res.decls[operand_index];
 
-        if !runtime && !mutable {
-            let (instr, ty) = res.ir.instrs[start].clone();
-            res.push_instr(ty, false, false, instr);
-        } else {
-            res.push_instr(ty, runtime, mutable, InstrKind::Sym(sym));
+        match value {
+            DeclValue::Const(r) => {
+                if mutable {
+                    res.stack.push(Operand {
+                        value: OperandValue::Decl(operand_index),
+                        ty,
+                    });
+                } else {
+                    self.eval_res(r.clone(), span, res)
+                }
+            }
+            &DeclValue::Runtime(index) => {
+                res.stack.push(Operand {
+                    value: OperandValue::AsInstr,
+                    ty,
+                });
+                res.ir.instrs.push(Finst {
+                    kind: FinstKind::Sym(index as Sym),
+                    ty,
+                    span,
+                });
+            }
         }
     }
 
     fn eval_binop(&mut self, op: OpCode, span: Span, res: &mut Res) {
-        let [lhs, rhs] = pop_array(&mut res.stack);
-        if lhs.runtime || rhs.runtime {
-            res.stack.push(lhs);
+        let [(rty, rhs), (lty, lhs)] = [res.pop_operand(), res.pop_operand()];
 
-            let ty = self.infer_binop_type(op, span, lhs.ty, rhs.ty, res);
-            res.push_instr(ty, true, false, InstrKind::BinOp(op));
-
-            return;
-        }
-
-        self.fold_binop(op, span, lhs, rhs, res);
-    }
-
-    fn eval_call(&mut self, ac: ArgCount, span: Span, res: &mut Res) {
-        let func = res.stack.pop().unwrap();
-        let args_range = res.stack.len() - ac as usize..;
-
-        let Type::Func(func_ty) = &res.types[func.ty] else {
-            self.diags
-                .builder(self.modules.files())
-                .footer(Severty::Error, "cannot call this expression")
-                .annotation(Severty::Error, span, "this expression is not callable");
-            return;
-        };
-
-        let sig = match func_ty {
-            &FuncType::Static(func) => self.instrs.sig_of(func),
-            FuncType::Dynamic(func) => &func,
-        };
-
-        if let &FuncType::Static(func) = func_ty {
-            let inputs = res.stack[args_range.clone()]
-                .iter()
-                .map(|op| {
-                    if op.runtime {
-                        Local::Rt(res.types[op.ty].clone())
-                    } else {
-                        Local::Ct(self.root_value(res.ir.instrs[op.start].0.clone(), res))
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            let entry = Entry {
-                id: func,
-                inputs: inputs.clone(),
-                ret: sig.ret.clone(),
-            };
-
-            res.call_frontier.push(entry);
-        }
-
-        if sig.args.len() != ac as usize {
-            self.diags
-                .builder(self.modules.files())
-                .footer(Severty::Error, "wrong number of arguments")
-                .annotation(
-                    Severty::Error,
-                    span,
-                    format_args!(
-                        "expected {} arguments, found {}",
-                        sig.args.len(),
-                        ac as usize
-                    ),
-                );
-            return;
-        }
-
-        let has_side_effects = true; // TODO: use value from the type
-        if func.runtime
-            || has_side_effects
-            || res.stack[args_range.clone()].iter().any(|a| a.runtime)
-        {
-            let base_operand = res.stack.drain(args_range).next().unwrap_or(func);
-
-            let ty = res.push_type(sig.ret.clone());
+        let (Some(rhs), Some(lhs)) = (rhs, lhs) else {
+            let ty = self.infer_binop_type(op, span, rty, lty, res);
             res.stack.push(Operand {
-                start: base_operand.start,
-                runtime: true,
-                mutable: false,
+                value: OperandValue::AsInstr,
                 ty,
             });
-
-            res.ir.instrs.push((InstrKind::Call(ac), ty));
-
+            res.ir.instrs.push(Finst {
+                kind: FinstKind::BinOp(op),
+                ty,
+                span,
+            });
             return;
-        }
+        };
 
-        todo!()
+        self.fold_binop(op, span, [lhs, rhs], res);
     }
 
-    fn fold_binop(&mut self, op: OpCode, span: Span, _lhs: Operand, _rhs: Operand, res: &mut Res) {
-        let [lhs_i, rhs_i] = pop_array(&mut res.ir.instrs).map(|(i, _)| i);
+    fn fold_binop(
+        &mut self,
+        op: OpCode,
+        span: Span,
+        [lhs, rhs]: [Result<Resolved, usize>; 2],
+        res: &mut Res,
+    ) {
+        let result = match (op, lhs, rhs) {
+            (OpCode::Assign, Err(sym), Ok(new)) => 'b: {
+                let &mut Decl {
+                    ref mut value,
+                    mutable,
+                    span,
+                    ..
+                } = &mut res.decls[sym as usize];
 
-        let result = match (op, lhs_i, rhs_i) {
-            (OpCode::Assign, InstrKind::Sym(s), InstrKind::Res(rhs_r)) => 'b: {
-                let base_operand = &res.stack[s as usize];
-
-                if !base_operand.mutable {
+                if !mutable {
                     self.diags
                         .builder(self.modules.files())
                         .footer(Severty::Error, "cannot assign to immutable symbol")
@@ -345,13 +400,12 @@ impl<'ctx> Interpreter<'ctx> {
                     break 'b None;
                 }
 
-                // TODO: check type
-                res.ir.instrs[base_operand.start].0 = InstrKind::Res(rhs_r);
+                *value = DeclValue::Const(new);
 
                 None
             }
-            (_, lhs_i, rhs_i) => {
-                let [lhs_r, rhs_r] = [self.root_value(lhs_i, res), self.root_value(rhs_i, res)];
+            (_, lhs, rhs) => {
+                let [lhs_r, rhs_r] = [self.root_value(lhs, res), self.root_value(rhs, res)];
                 self.fold_resolved_binop(op, span, lhs_r, rhs_r)
             }
         };
@@ -360,7 +414,7 @@ impl<'ctx> Interpreter<'ctx> {
             return;
         };
 
-        self.eval_res(result, res);
+        self.eval_res(result, span, res);
     }
 
     fn fold_resolved_binop(
@@ -412,71 +466,126 @@ impl<'ctx> Interpreter<'ctx> {
         rhs: SubsRef,
         res: &mut Res,
     ) -> SubsRef {
-        let lhs_ty = &res.types[lhs];
-        let rhs_ty = &res.types[rhs];
-
+        let root = self.unify_subs(lhs, rhs, span, res);
         match op {
-            lexer::op_group!(math) => {
-                let merged_type = self.unify_types(lhs_ty, rhs_ty, span);
-                let root = res.subs_table.join_refs(lhs, rhs);
-                if let Some(merged_type) = merged_type {
-                    res.types[root] = merged_type;
-                }
+            lexer::op_group!(math) => root,
+            lexer::op_group!(cmp) => res.intern_and_create_group(&BuiltInType::Bool.into()),
+            crate::op_group!(logic) => todo!(),
+            lexer::op_group!(assign) => res.intern_and_create_group(&BuiltInType::Unit.into()),
+        }
+    }
+
+    fn eval_call(&mut self, _ac: ArgCount, _span: Span, _res: &mut Res) {
+        //let func = res.stack.pop().unwrap();
+        //let args_range = res.stack.len() - ac as usize..;
+
+        //let Type::Func(func_ty) = &res.types[func.ty] else {
+        //    self.diags
+        //        .builder(self.modules.files())
+        //        .footer(Severty::Error, "cannot call this expression")
+        //        .annotation(Severty::Error, span, "this expression is not callable");
+        //    return;
+        //};
+
+        //let sig = match func_ty {
+        //    &FuncType::Static(func) => self.instrs.sig_of(func),
+        //    FuncType::Dynamic(func) => &func,
+        //};
+
+        //if let &FuncType::Static(func) = func_ty {
+        //    let inputs = res.stack[args_range.clone()]
+        //        .iter()
+        //        .map(|op| {
+        //            if op.runtime {
+        //                Local::Rt(res.types[op.ty].clone())
+        //            } else {
+        //                Local::Ct(self.root_value(res.ir.instrs[op.start].0.clone(), res))
+        //            }
+        //        })
+        //        .collect::<Vec<_>>();
+
+        //    let entry = Entry {
+        //        id: func,
+        //        inputs: inputs.clone(),
+        //        ret: sig.ret.clone(),
+        //    };
+
+        //    res.call_frontier.push(entry);
+        //}
+
+        //if sig.args.len() != ac as usize {
+        //    self.diags
+        //        .builder(self.modules.files())
+        //        .footer(Severty::Error, "wrong number of arguments")
+        //        .annotation(
+        //            Severty::Error,
+        //            span,
+        //            format_args!(
+        //                "expected {} arguments, found {}",
+        //                sig.args.len(),
+        //                ac as usize
+        //            ),
+        //        );
+        //    return;
+        //}
+
+        //let has_side_effects = true; // TODO: use value from the type
+        //if func.runtime
+        //    || has_side_effects
+        //    || res.stack[args_range.clone()].iter().any(|a| a.runtime)
+        //{
+        //    let base_operand = res.stack.drain(args_range).next().unwrap_or(func);
+
+        //    let ty = res.create_group(sig.ret.clone());
+        //    res.stack.push(Operand {
+        //        start: base_operand.start,
+        //        runtime: true,
+        //        mutable: false,
+        //        ty,
+        //    });
+
+        //    res.ir.instrs.push((InstrKind::Call(ac), ty));
+
+        //    return;
+        //}
+
+        todo!()
+    }
+
+    fn unify_subs(&mut self, a: SubsRef, b: SubsRef, span: Span, res: &mut Res) -> SubsRef {
+        let [ra, rb] = [res.get_subs(a), res.get_subs(b)];
+        match ra.unify(&rb) {
+            Ok(ty) => {
+                let root = res.subs_table.join_refs(a, b);
+                res.set_subs(root, ty);
                 root
             }
-            lexer::op_group!(cmp) => {
-                let merged_type = self.unify_types(lhs_ty, rhs_ty, span);
-                let root = res.subs_table.join_refs(lhs, rhs);
-                if let Some(merged_type) = merged_type {
-                    res.types[root] = merged_type;
-                }
-                res.push_type(Type::BuiltIn(BuiltInType::Bool))
-            }
-            crate::op_group!(logic) => todo!(),
-            lexer::op_group!(assign) => {
-                let merged_type = self.unify_types(lhs_ty, rhs_ty, span);
-                let root = res.subs_table.join_refs(lhs, rhs);
-                if let Some(merged_type) = merged_type {
-                    res.types[root] = merged_type;
-                }
-                res.push_type(Type::BuiltIn(BuiltInType::Unit))
+            Err(UnificationError::Equal) => res.subs_table.join_refs(a, b),
+            Err(UnificationError::Incompatible) => {
+                self.diags
+                    .builder(self.modules.files())
+                    .footer(Severty::Error, "cannot unify types")
+                    .annotation(Severty::Error, span, "of this binary operation")
+                    .terminate();
+                res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit))
             }
         }
     }
 
-    fn unify_types(&mut self, a: &Type, b: &Type, span: Span) -> Option<Type> {
-        if let Some(merged_type) = a.unify(b) {
-            return Some(merged_type);
-        }
-
-        self.diags
-            .builder(self.modules.files())
-            .footer(Severty::Error, "cannot unify types")
-            .annotation(Severty::Error, span, "of this binary operation")
-            .terminate()?;
-    }
-
-    fn eval_field(&mut self, field: &IdentStr, span: Span, res: &mut Res) {
-        let [operand] = pop_array(&mut res.stack);
-        if operand.runtime {
+    fn eval_field(&mut self, field: CtxSym, span: Span, res: &mut Res) {
+        let (_, operand) = res.pop_operand();
+        let Some(Ok(resolved)) = operand else {
             self.diags.todo_error(
                 self.modules.files(),
                 span,
                 "runtime field access not supported yet",
             );
             return;
-        }
-
-        let [(InstrKind::Res(resoved), ..)] = pop_array(&mut res.ir.instrs) else {
-            self.diags.todo_error(
-                self.modules.files(),
-                span,
-                "non resolved operands are not handeled yet",
-            );
-            return;
         };
 
-        match resoved {
+        let field = &res.body.idents[field];
+
+        match resolved {
             Resolved::Type(t) => {
                 let result = match field.as_str() {
                     "size" => Layout::from_ty(&t, self.arch).size(),
@@ -491,6 +600,7 @@ impl<'ctx> Interpreter<'ctx> {
                 };
                 self.eval_res(
                     Resolved::Const(LitKindAst::Int(IntLit::new(result as u64))),
+                    span,
                     res,
                 );
             }
@@ -509,7 +619,7 @@ impl<'ctx> Interpreter<'ctx> {
                         .annotation(Severty::Error, span, "accessed here");
                     return;
                 };
-                self.eval_res(item.data.clone(), res);
+                self.eval_res(item.data.clone(), span, res);
             }
             Resolved::Const(_) => {
                 self.diags
@@ -521,11 +631,9 @@ impl<'ctx> Interpreter<'ctx> {
     }
 
     fn eval_decl(&mut self, span: Span, mutable: Mutable, res: &mut Res) {
-        let operand = res.stack.last_mut().unwrap();
-        operand.mutable = mutable != Mutable::False;
-        operand.runtime |= mutable == Mutable::True;
+        let (ty, resolved) = res.pop_operand_as_value();
 
-        if operand.runtime && mutable == Mutable::CtTrue {
+        if resolved.is_none() && mutable == Mutable::CtTrue {
             self.diags
                 .builder(self.modules.files())
                 .footer(
@@ -536,61 +644,67 @@ impl<'ctx> Interpreter<'ctx> {
             return;
         }
 
-        if operand.runtime {
-            let ty = res.push_type(Type::BuiltIn(BuiltInType::Unit));
-            res.ir.instrs.push((InstrKind::Decl(mutable), ty));
+        let decl_value = if let Some(resolved) = resolved {
+            DeclValue::Const(resolved)
         } else {
-            let (instr, ty) = res.ir.instrs.pop().unwrap();
-            let value = self.root_value(instr, res);
-            res.ir.instrs.push((InstrKind::Res(value), ty));
-        }
+            let next_index = res
+                .decls
+                .iter()
+                .rev()
+                .find_map(|d| match d.value {
+                    DeclValue::Runtime(index) => Some(index + 1),
+                    _ => None,
+                })
+                .unwrap_or(0);
 
-        res.scope.push(Decl {
-            _offset: res.stack.len(),
-            _span: span,
+            DeclValue::Runtime(next_index)
+        };
+
+        res.decls.push(Decl {
+            value: decl_value,
+            mutable: mutable != Mutable::False,
+            ty,
+            span,
         });
     }
 
-    fn eval_drop(&mut self, _span: Span, res: &mut Res) {
-        if res.stack.pop().unwrap().runtime {
-            let ty = res.push_type(Type::BuiltIn(BuiltInType::Unit));
-            res.ir.instrs.push((InstrKind::Drop, ty));
+    fn eval_drop(&mut self, span: Span, res: &mut Res) {
+        if res.pop_operand().1.is_some() {
+            let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+            res.ir.instrs.push(Finst {
+                kind: FinstKind::Drop,
+                ty,
+                span,
+            });
         }
     }
 
-    fn eval_drop_scope(&mut self, size: FrameSize, ret: Returns, _span: Span, res: &mut Res) {
-        if ret {
-            let last = res.stack.last().unwrap();
-            if !last.runtime {
-                let (instr, ty) = res.ir.instrs.pop().unwrap();
-                let value = self.root_value(instr, res);
-                res.ir.instrs.push((InstrKind::Res(value), ty));
-            }
+    fn eval_drop_scope(&mut self, size: FrameSize, ret: Returns, span: Span, res: &mut Res) {
+        if ret && let (ty, Some(val)) = res.pop_operand_as_value() {
+            res.push_res(ty, val, span);
         }
 
-        res.stack
-            .drain(res.stack.len() - size as usize - ret as usize..res.stack.len() - ret as usize);
+        let final_drop_size = res
+            .decls
+            .drain(res.decls.len() - size as usize..)
+            .filter(|d| matches!(d.value, DeclValue::Runtime(_)))
+            .count();
 
-        let ty = res.push_type(Type::BuiltIn(BuiltInType::Unit));
-        res.ir
-            .instrs
-            .push((InstrKind::DropScope(size as FrameSize, ret), ty));
+        let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+        res.ir.instrs.push(Finst {
+            kind: FinstKind::DropScope(final_drop_size as FrameSize, ret),
+            ty,
+            span,
+        });
     }
 
-    fn root_value(&mut self, instr: InstrKind, res: &Res) -> Resolved {
+    fn root_value(&mut self, instr: Result<Resolved, usize>, res: &Res) -> Resolved {
         match instr {
-            InstrKind::Sym(s) => {
-                let operand = res.stack[s as usize];
-                assert!(!operand.runtime);
-                self.root_value(res.ir.instrs[operand.start].0.clone(), res)
-            }
-            InstrKind::Res(r) => r,
-            _ => unreachable!(),
+            Err(s) => match res.decls[s].value.clone() {
+                DeclValue::Runtime(_) => unreachable!(),
+                DeclValue::Const(v) => v,
+            },
+            Ok(r) => r,
         }
     }
-}
-
-fn pop_array<T, const N: usize>(vec: &mut Vec<T>) -> [T; N] {
-    let mut iter = vec.drain(vec.len() - N..);
-    array::from_fn(|_| iter.next().unwrap())
 }

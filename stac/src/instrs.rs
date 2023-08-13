@@ -1,26 +1,30 @@
+use std::ops::Deref;
+
 use mini_alloc::IdentStr;
 
 use crate::{
-    gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, Diagnostics, IntType,
-    Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Signature, Span, Type,
+    gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, BuiltInType, Diagnostics,
+    Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Span, Type, VecStore,
 };
 
 mod instr_emmiter;
 
 type InstrRepr = u16;
-pub type ArgCount = u16;
+
+pub type ArgCount = InstrRepr;
 pub type Returns = bool;
 pub type Scoped = bool;
-pub type FrameSize = u16;
+pub type FrameSize = InstrRepr;
 pub type Sym = InstrRepr;
+
 pub type InstrRef = Ref<Instr, InstrRepr>;
 pub type Const = LitKindAst;
 pub type ConstRef = Ref<Const, InstrRepr>;
 pub type FuncRef = Ref<Func, InstrRepr>;
 pub type TypeRef = Ref<Type, InstrRepr>;
-type CtxSym = Ref<IdentStr, InstrRepr>;
-
+pub type CtxSym = Ref<IdentStr, InstrRepr>;
 pub type SourceOffset = Pos;
+pub type IrTypes = VecStore<Type, InstrRepr>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mutable {
@@ -33,7 +37,6 @@ pub enum Mutable {
 pub enum InstrKind {
     Uninit(TypeRef),
     Sym(Sym),
-    Func(FuncRef, Scoped),
     Module(ModuleRef),
     Const(ConstRef),
     Type(TypeRef),
@@ -66,6 +69,27 @@ gen_storage_group! {
     }
 }
 
+impl InstrBodyBuilder {
+    pub fn intern_ty(&mut self, ty: &Type) -> TypeRef {
+        match ty {
+            &Type::BuiltIn(b) => TypeRef::from_repr(b as InstrRepr),
+            other => {
+                let r = self.types.find_or_push(other).index();
+                TypeRef::from_repr((r + BuiltInType::COUNT) as InstrRepr)
+            }
+        }
+    }
+}
+
+impl<'a> InstrBody<'a> {
+    pub fn get_ty(&self, ty: TypeRef) -> Type {
+        match BuiltInType::from_index(ty.index()) {
+            Ok(b) => Type::BuiltIn(b),
+            Err(index) => self.types.deref()[index].clone(),
+        }
+    }
+}
+
 gen_storage_group! {
     ModuleDecls ModuleDeclRef ModuleDecl ModuleDeclBuilder 'a {
         decls: Decl,
@@ -75,7 +99,9 @@ gen_storage_group! {
 
 #[derive(Clone, Default)]
 pub struct Func {
-    pub signature: Signature,
+    pub param_count: ArgCount,
+    /// Measured in instructions,
+    pub signature_len: InstrRepr,
     pub body: InstrBodyRef,
 }
 
@@ -119,21 +145,17 @@ impl Instrs {
                 _ => None,
             })
     }
-
-    pub(crate) fn sig_of(&self, f: FuncId) -> &Signature {
-        &self.decls.view(self.modules[f.module]).funcs[f.func].signature
-    }
 }
 
 impl ModuleDeclBuilder {
     fn mount_integers(&mut self) {
-        for (&ty, &nm) in IntType::INT_TYPES.iter().zip(IntType::INT_TYPE_NAMES) {
+        for ty in BuiltInType::ALL {
             self.decls.push(Decl {
                 name: IdentAst {
-                    ident: IdentStr::from_str(nm),
+                    ident: IdentStr::from_str(ty.name()),
                     span: Span::new(0, 0, Modules::BUILTIN),
                 },
-                data: Resolved::Type(Type::BuiltIn(crate::BuiltInType::Int(ty))),
+                data: Resolved::Type(Type::BuiltIn(ty)),
             });
         }
     }
@@ -228,10 +250,11 @@ impl<'ctx> InstrBuilder<'ctx> {
 
 #[cfg(test)]
 pub mod instr_test_util {
+
     use mini_alloc::{ArenaBase, DiverBase};
 
     use crate::{
-        bail, instrs::InstrKind, FuncId, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef, Modules,
+        bail, instrs::InstrKind, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef, Modules,
         Mutable, Parser, Resolved, Resolver,
     };
 
@@ -262,10 +285,6 @@ pub mod instr_test_util {
                         }
                         _ => todo!(),
                     },
-                    &InstrKind::Func(func, false) => Resolved::Func(FuncId {
-                        module: ctx.module,
-                        func,
-                    }),
                     &InstrKind::Module(module) => Resolved::Module(module),
                     &InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
                     &InstrKind::Type(ty) => Resolved::Type(body.types[ty].clone()),
@@ -297,11 +316,6 @@ pub mod instr_test_util {
                 ctx.push_str(&body.idents[f].to_string());
             }
             InstrKind::Type(t) => ctx.push_str(&body.types[t].to_string()),
-            InstrKind::Func(f, false) => display_id("func", f.index(), ctx),
-            InstrKind::Func(f, true) => {
-                ctx.push_str("scoped ");
-                display_id("func", f.index(), ctx);
-            }
             InstrKind::Module(m) => display_id("mod", m.index(), ctx),
             InstrKind::Const(c) => ctx.push_str(&body.consts[c].to_string()),
             InstrKind::Decl(Mutable::False) => ctx.push_str("decl"),
@@ -354,19 +368,6 @@ pub mod instr_test_util {
             };
 
             let func = &view.funcs[func];
-
-            ctx.push('(');
-            for (i, arg) in func.signature.args.iter().enumerate() {
-                if i != 0 {
-                    ctx.push_str(", ");
-                }
-                display_id("sim", i, ctx);
-                ctx.push_str(": ");
-                ctx.push_str(&arg.to_string());
-            }
-            ctx.push_str("): ");
-            ctx.push_str(&func.signature.ret.to_string());
-            ctx.push_str(":\n");
 
             let body_view = instrs.bodies.view(func.body);
             for instr in body_view.instrs.iter() {

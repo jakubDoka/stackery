@@ -1,16 +1,12 @@
 mod interp_impl;
-mod layout;
 
 use crate::{
-    Diagnostics, FrameSize, FuncId, InstrKind, Instrs, LitKindAst, Modules, Mutable, OpCode, Ref,
-    Resolved, Resolver, Returns, Sym, Type, VecStore,
+    Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules, Mutable, OpCode,
+    Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef,
 };
-
-pub use self::layout::Layout;
 
 type SubsRepr = u16;
 pub type SubsRef = Ref<Type, SubsRepr>;
-pub type IrTypes = VecStore<Type, SubsRepr>;
 pub type FuncInst = u32;
 pub type FieldIndex = u16;
 
@@ -30,13 +26,19 @@ pub enum FinstKind {
     Field(FieldIndex),
 
     Drop,
-    Uninit,
     DropScope(FrameSize, Returns),
+}
+
+#[derive(Clone)]
+pub struct Finst {
+    pub kind: FinstKind,
+    pub ty: TypeRef,
+    pub span: Span,
 }
 
 #[derive(Default)]
 pub struct Ir {
-    pub instrs: Vec<(InstrKind, SubsRef)>,
+    pub instrs: Vec<Finst>,
     pub types: IrTypes,
 }
 
@@ -91,8 +93,8 @@ pub fn resolver() -> impl Resolver {
 #[cfg(test)]
 mod test {
     use crate::{
-        print_cases, BuiltInType, Diagnostics, FuncId, Instrs, Interpreter, Layout, LoaderMock,
-        Modules, Type,
+        print_cases, BuiltInType, Diagnostics, Finst, FuncId, Instrs, Interpreter, Layout,
+        LoaderMock, Modules, Mutable, Type,
     };
 
     fn perform_test(source: &str, ctx: &mut String) -> Option<()> {
@@ -128,8 +130,41 @@ mod test {
             ctx.push_str(diags.view());
         }
 
-        for (instr, ty) in ir.instrs.iter() {
-            crate::display_instr(instr, ctx);
+        for Finst { kind, ty, .. } in ir.instrs.iter() {
+            match kind {
+                crate::FinstKind::Const(lit) => {
+                    ctx.push_str("const ");
+                    ctx.push_str(lit.to_string().as_str());
+                }
+                crate::FinstKind::Sym(sym) => {
+                    ctx.push_str("sym");
+                    ctx.push_str(sym.to_string().as_str());
+                }
+                crate::FinstKind::Call(ac) => {
+                    ctx.push_str("call ");
+                    ctx.push_str(ac.to_string().as_str());
+                }
+                crate::FinstKind::BinOp(op) => {
+                    ctx.push_str("binop ");
+                    ctx.push_str(op.name());
+                }
+                crate::FinstKind::Decl(m) => match m {
+                    Mutable::False => ctx.push_str("decl"),
+                    Mutable::True => ctx.push_str("decl mut"),
+                    Mutable::CtTrue => ctx.push_str("decl ct mut"),
+                },
+                crate::FinstKind::Field(f) => {
+                    ctx.push_str(". ");
+                    ctx.push_str(f.to_string().as_str());
+                }
+                crate::FinstKind::Drop => ctx.push_str("drop"),
+                crate::FinstKind::DropScope(fs, r) => {
+                    ctx.push_str("drop scope ");
+                    ctx.push_str(fs.to_string().as_str());
+                    ctx.push_str(" ");
+                    ctx.push_str(r.to_string().as_str());
+                }
+            }
             ctx.push_str(" : ");
             ctx.push_str(ir.types[*ty].to_string().as_str());
             ctx.push('\n');

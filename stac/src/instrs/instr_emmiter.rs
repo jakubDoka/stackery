@@ -2,14 +2,14 @@ use mini_alloc::IdentStr;
 
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
-    ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst,
-    InstrBodyRef, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Signature,
-    Span, Sym, Type, UnaryAst, UnitAst,
+    ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, FuncId,
+    FuncType, InstrBodyRef, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span,
+    Sym, Type, TypeRef, UnaryAst, UnitAst,
 };
 
 use super::{
-    CtxSym, Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, ModuleDeclBuilder,
-    ScopeFrame, TyResolverCtx,
+    CtxSym, Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, InstrRepr,
+    ModuleDeclBuilder, ScopeFrame, TyResolverCtx,
 };
 
 struct Res<'arena> {
@@ -56,20 +56,35 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     fn build_signature<'arena>(
         &mut self,
         FuncAst {
-            args, return_ty, ..
+            args,
+            return_ty,
+            keyword,
+            ..
         }: &FuncAst<'arena>,
         res: &mut Res<'arena>,
-    ) -> Signature {
-        let args = args
-            .iter()
-            .map(|arg| self.resolve_ty(&arg.ty, res))
-            .collect::<Vec<_>>();
+    ) -> Option<InstrRepr> {
+        let frame = ScopeFrame::new(&mut res.scope);
+        for FuncArgAst { ct, name, ty, .. } in *args {
+            self.build_expr(ty, res);
+            let Some(mutable) = self.resolve_mutability(*ct, None) else {
+                continue;
+            };
+            res.push_instr(InstrKind::Decl(mutable), name.span);
+            res.scope.push(name.clone());
+        }
 
-        let ret = return_ty
-            .as_ref()
-            .map_or(Type::UNIT, |ty| self.resolve_ty(ty, res));
+        if let Some(return_ty) = return_ty {
+            self.build_expr(return_ty, res);
+        } else {
+            res.push_instr(
+                InstrKind::Type(TypeRef::from_repr(BuiltInType::Unit as InstrRepr)),
+                *keyword,
+            );
+        }
 
-        Signature { args, ret }
+        frame.end(&mut res.scope);
+
+        Some(args.len() as InstrRepr)
     }
 
     fn resolve<'arena>(
@@ -283,9 +298,14 @@ impl<'ctx> super::InstrBuilder<'ctx> {
 
     fn queue_func<'arena>(&mut self, func: &FuncAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
         let func_ref = res.add_to_compile_queue(func.clone());
-        let signature = self.build_signature(func, res);
-        res.module.funcs[func_ref].signature = signature;
-        res.push_instr(InstrKind::Func(func_ref, false), func.keyword);
+        res.module.funcs[func_ref].param_count = self.build_signature(func, res)?;
+        res.module.funcs[func_ref].signature_len = res.body.instrs.len() as InstrRepr;
+        let func_ty = Type::Func(FuncType::Static(FuncId {
+            module: res.module_ref,
+            func: func_ref,
+        }));
+        let ty = res.body.intern_ty(&func_ty);
+        res.push_instr(InstrKind::Type(ty), func.keyword);
         Some(())
     }
 
@@ -309,14 +329,23 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .map_or(Type::BuiltIn(BuiltInType::Unknown), |ty| {
                     self.resolve_ty(ty, res)
                 });
-            let ty = res.body.types.find_or_push(&ty);
+            let ty = res.body.intern_ty(&ty);
             res.push_instr(InstrKind::Uninit(ty), *keyword);
         }
 
-        let mutable = match (ct, mutable) {
+        let mutable = self.resolve_mutability(*ct, *mutable)?;
+
+        res.scope.push(name.clone());
+        res.push_instr(InstrKind::Decl(mutable), *keyword);
+
+        Some(())
+    }
+
+    fn resolve_mutability(&mut self, ct: Option<Span>, mutable: Option<Span>) -> Option<Mutable> {
+        Some(match (ct, mutable) {
             (None, None) => Mutable::False,
             (None, Some(_)) => Mutable::True,
-            (&Some(span), None) => {
+            (Some(span), None) => {
                 self.diags
                     .builder(self.modules.files())
                     .footer(
@@ -327,12 +356,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                     .terminate()?;
             }
             (Some(_), Some(_)) => Mutable::CtTrue,
-        };
-
-        res.scope.push(name.clone());
-        res.push_instr(InstrKind::Decl(mutable), *keyword);
-
-        Some(())
+        })
     }
 
     fn build_field<'arena>(
@@ -456,27 +480,14 @@ impl<'arena> Res<'arena> {
     }
 
     fn push_res_as_instr(&mut self, global_sym: &Resolved, span: Span) {
-        let instrs = match global_sym {
-            Resolved::Type(t) => [
-                InstrKind::Type(self.body.types.find_or_push(t)),
-                InstrKind::Drop,
-            ],
-            &Resolved::Func(f) => [InstrKind::Module(f.module), InstrKind::Func(f.func, true)],
-            &Resolved::Module(m) => [InstrKind::Module(m), InstrKind::Drop],
-            Resolved::Const(c) => [
-                InstrKind::Const(self.body.consts.find_or_push(c)),
-                InstrKind::Drop,
-            ],
-        }
-        .map(|kind| Instr {
-            kind,
-            span: span.to_pos(),
-        });
-
-        self.body.instrs.extend(
-            instrs
-                .into_iter()
-                .filter(|i| !matches!(i.kind, InstrKind::Drop)),
-        );
+        let instr = match global_sym {
+            Resolved::Type(t) => InstrKind::Type(self.body.intern_ty(t)),
+            &Resolved::Func(f) => {
+                InstrKind::Type(self.body.intern_ty(&Type::Func(FuncType::Static(f))))
+            }
+            &Resolved::Module(m) => InstrKind::Module(m),
+            Resolved::Const(c) => InstrKind::Const(self.body.consts.find_or_push(c)),
+        };
+        self.push_instr(instr, span);
     }
 }

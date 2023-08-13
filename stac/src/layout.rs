@@ -62,7 +62,7 @@ impl Layout {
         1 << align
     }
 
-    fn compress_align(align: LayoutRepr) -> u8 {
+    fn _compress_align(align: LayoutRepr) -> u8 {
         align.trailing_zeros() as u8
     }
 
@@ -74,15 +74,16 @@ impl Layout {
     }
 
     fn from_builtin_ty(bty: BuiltInType, ptr_layout: Self) -> Self {
+        use BuiltInType::*;
         match bty {
-            BuiltInType::Int(i) => Self::new(
-                Self::compress_align(i.size as LayoutRepr),
-                i.size.bite_width() as LayoutRepr,
-            ),
-            BuiltInType::Integer => ptr_layout,
-            BuiltInType::Bool => Self::new(0, 1),
-            BuiltInType::Unit => Self::new(0, 0),
-            BuiltInType::Type | BuiltInType::Module | BuiltInType::Unknown => unreachable!(),
+            U8 | I8 => Self::new(0, 1),
+            U16 | I16 => Self::new(1, 2),
+            U32 | I32 => Self::new(2, 4),
+            U64 | I64 => Self::new(3, 8),
+            Int | Uint => ptr_layout,
+            Bool => Self::new(0, 1),
+            Unit => Self::new(0, 0),
+            Type | Integer | Module | Unknown => unreachable!(),
         }
     }
 
