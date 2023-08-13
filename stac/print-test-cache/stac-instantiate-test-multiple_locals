@@ -35,5 +35,5 @@ padding decl : {integer}
 padding decl : {integer}
 padding decl : {integer}
 drop scope 1 : ()
-24 : {integer}
+24 : i32
 drop scope 2 returns : ()

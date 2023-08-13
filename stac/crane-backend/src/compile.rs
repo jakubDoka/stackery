@@ -65,47 +65,62 @@ impl Command {
             ));
         };
 
-        let mut gen = Generator::new(target);
-        let mut interp = Interpreter::new(arch, &mut diags, &modules, &instrs);
-
-        let ir = interp.eval(stac::Entry {
+        let entry = FuncId {
             module: meta.root(),
             func: entry,
+        };
+        let mut call_frontier = vec![stac::Entry {
+            id: entry,
             inputs: Vec::new(),
             ret: Type::BuiltIn(BuiltInType::I32),
-        });
-        if diags.error_count() > 0 {
-            terminate(diags);
+        }];
+
+        let mut gen = Generator::new(target.clone());
+
+        while let Some(entry) = call_frontier.pop() {
+            let mut interp = Interpreter::new(arch, &mut diags, &modules, &instrs);
+            let ir = interp.eval(&entry, &mut call_frontier);
+            if diags.error_count() > 0 {
+                terminate(diags);
+            }
+
+            let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch);
+            emmiter.emit(&entry, ir);
+
+            if diags.error_count() > 0 {
+                terminate(diags);
+            }
         }
 
-        let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch);
-        let entry = emmiter.emit(
-            FuncId {
-                module: meta.root(),
-                func: entry,
-            },
-            ir,
-        );
-
-        if diags.error_count() > 0 {
-            terminate(diags);
-        }
-
-        let object = gen.finish(entry);
+        let object = gen.finish();
         let object_name = format!("{}.o", self.output);
         let object_path = Path::new(&object_name);
         std::fs::write(object_path, object).unwrap();
 
         if self.object_only {
-            return;
+            diags
+                .builder(modules.files())
+                .footer(stac::Severty::Note, "finished compiling")
+                .footer(
+                    stac::Severty::Note,
+                    format_args!("output: {}", object_path.display()),
+                );
+        } else {
+            std::process::Command::new("cc")
+                .arg(object_path)
+                .arg("-o")
+                .arg(&self.output)
+                .status()
+                .unwrap();
+            std::fs::remove_file(object_path).unwrap();
+
+            diags
+                .builder(modules.files())
+                .footer(stac::Severty::Note, "finished compiling")
+                .footer(stac::Severty::Note, format_args!("output: {}", self.output));
         }
 
-        cc::Build::new()
-            .object(object_path)
-            .get_compiler()
-            .to_command()
-            .status()
-            .unwrap();
+        println!("{}", diags);
     }
 
     fn build_instrs(

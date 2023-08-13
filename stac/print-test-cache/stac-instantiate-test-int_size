@@ -6,4 +6,4 @@ module root:
     . size
     1
     +
-9 : {integer}
+9 : i32

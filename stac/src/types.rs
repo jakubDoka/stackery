@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::FuncId;
+
 mod unify_impl;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -51,7 +53,7 @@ impl Default for Signature {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
     BuiltIn(BuiltInType),
-    Func(Box<Signature>),
+    Func(FuncType),
 }
 
 impl Type {
@@ -60,7 +62,7 @@ impl Type {
     pub(crate) fn unify(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (&Self::BuiltIn(lhs), &Self::BuiltIn(rhs)) => lhs.merge(rhs).map(Self::BuiltIn),
-            (Self::Func(lhs), Self::Func(rgs)) => lhs.unify(rgs).map(Box::new).map(Self::Func),
+            (Self::Func(lhs), Self::Func(rgs)) => lhs.unify(rgs).map(Self::Func),
             _ => None,
         }
     }
@@ -78,6 +80,33 @@ impl fmt::Display for Type {
         match self {
             Self::BuiltIn(b) => b.fmt(f),
             Self::Func(sig) => sig.fmt(f),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum FuncType {
+    Dynamic(Box<Signature>),
+    Static(FuncId),
+}
+
+impl FuncType {
+    pub fn unify(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => {
+                lhs.unify(rhs).map(Box::new).map(Self::Dynamic)
+            }
+            (Self::Static(lhs), Self::Static(rhs)) if lhs == rhs => Some(Self::Static(*lhs)),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for FuncType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dynamic(sig) => sig.fmt(f),
+            Self::Static(id) => write!(f, "func#{}:{}", id.module.index(), id.module.index()),
         }
     }
 }

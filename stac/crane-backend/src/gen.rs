@@ -33,8 +33,8 @@ impl Generator {
         }
     }
 
-    pub fn finish(self, _entry: CodeRef) -> Vec<u8> {
-        todo!();
+    pub fn finish(self) -> Vec<u8> {
+        self.module.finish().emit().unwrap()
     }
 }
 

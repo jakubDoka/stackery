@@ -2,9 +2,9 @@ use mini_alloc::IdentStr;
 
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
-    BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, InstrBodyRef,
-    ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Signature, Span, Sym, Type,
-    UnaryAst, UnitAst,
+    ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst,
+    InstrBodyRef, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Signature,
+    Span, Sym, Type, UnaryAst, UnitAst,
 };
 
 use super::{
@@ -266,10 +266,18 @@ impl<'ctx> super::InstrBuilder<'ctx> {
 
     fn build_call<'arena>(
         &mut self,
-        _call: &'arena CallAst<'arena>,
-        _res: &mut Res<'arena>,
+        CallAst { caller, args }: &'arena CallAst<'arena>,
+        res: &mut Res<'arena>,
     ) -> Option<()> {
-        todo!()
+        for arg in args.iter() {
+            self.build_expr(arg, res)?;
+        }
+
+        self.build_unit(caller, res)?;
+
+        res.push_instr(InstrKind::Call(args.len() as ArgCount), caller.span());
+
+        Some(())
     }
 
     fn queue_func<'arena>(&mut self, func: &FuncAst<'arena>, res: &mut Res<'arena>) -> Option<()> {

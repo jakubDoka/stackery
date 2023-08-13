@@ -6,4 +6,4 @@ error: no such field on the type
                                        ^ accessed here
 4|         
 
-2 : {integer}
+2 : i32

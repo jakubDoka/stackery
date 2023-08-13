@@ -8,6 +8,7 @@ use crate::{
 mod instr_emmiter;
 
 type InstrRepr = u16;
+pub type ArgCount = u16;
 pub type Returns = bool;
 pub type FrameSize = u16;
 pub type Sym = InstrRepr;
@@ -32,11 +33,11 @@ pub enum InstrKind {
     Sym(Sym),
     Res(Resolved),
     BinOp(OpCode),
+    Call(ArgCount),
     Field(CtxSym),
     Decl(Mutable),
     Drop,
     DropScope(FrameSize, Returns),
-    PaddingDecl,
 }
 
 impl From<Resolved> for InstrKind {
@@ -101,9 +102,9 @@ impl Instrs {
         self
     }
 
-    pub fn body_of(&self, module: ModuleRef, func: FuncRef) -> InstrBody {
-        let module_view = self.decls.view(self.modules[module]);
-        self.bodies.view(module_view.funcs[func].body)
+    pub fn body_of(&self, id: FuncId) -> InstrBody {
+        let module_view = self.decls.view(self.modules[id.module]);
+        self.bodies.view(module_view.funcs[id.func].body)
     }
 
     pub fn decls_of(&self, module: ModuleRef) -> ModuleDecl {
@@ -194,7 +195,7 @@ pub enum Resolved {
     Const(LitKindAst),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FuncId {
     pub module: ModuleRef,
     pub func: FuncRef,
@@ -305,7 +306,10 @@ pub mod instr_test_util {
                 ctx.push_str(s.to_string().as_str());
                 ctx.push_str(if *r { " returns" } else { "" });
             }
-            InstrKind::PaddingDecl => ctx.push_str("padding decl"),
+            InstrKind::Call(ac) => {
+                ctx.push_str("call ");
+                ctx.push_str(ac.to_string().as_str());
+            }
         }
     }
 

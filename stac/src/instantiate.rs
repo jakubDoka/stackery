@@ -2,8 +2,8 @@ mod interp_impl;
 mod layout;
 
 use crate::{
-    Diagnostics, FuncRef, InstrKind, Instrs, ModuleRef, Modules, Ref, Resolved, Resolver, Type,
-    VecStore,
+    Diagnostics, FrameSize, FuncId, InstrKind, Instrs, LitKindAst, Modules, Mutable, OpCode, Ref,
+    Resolved, Resolver, Returns, Sym, Type, VecStore,
 };
 
 pub use self::layout::Layout;
@@ -11,11 +11,27 @@ pub use self::layout::Layout;
 type SubsRepr = u16;
 pub type SubsRef = Ref<Type, SubsRepr>;
 pub type IrTypes = VecStore<Type, SubsRepr>;
+pub type FuncInst = u32;
+pub type FieldIndex = u16;
 
 #[derive(Clone)]
 pub enum Local {
     Ct(Resolved),
     Rt(Type),
+}
+
+#[derive(Clone)]
+pub enum FinstKind {
+    Const(LitKindAst),
+    Sym(Sym),
+    Call(FuncInst),
+    BinOp(OpCode),
+    Decl(Mutable),
+    Field(FieldIndex),
+
+    Drop,
+    Uninit,
+    DropScope(FrameSize, Returns),
 }
 
 #[derive(Default)]
@@ -32,8 +48,7 @@ pub struct Interpreter<'ctx> {
 }
 
 pub struct Entry {
-    pub module: ModuleRef,
-    pub func: FuncRef,
+    pub id: FuncId,
     pub inputs: Vec<Local>,
     pub ret: Type,
 }
@@ -76,8 +91,8 @@ pub fn resolver() -> impl Resolver {
 #[cfg(test)]
 mod test {
     use crate::{
-        print_cases, BuiltInType, Diagnostics, Instrs, Interpreter, Layout, LoaderMock, Modules,
-        Type,
+        print_cases, BuiltInType, Diagnostics, FuncId, Instrs, Interpreter, Layout, LoaderMock,
+        Modules, Type,
     };
 
     fn perform_test(source: &str, ctx: &mut String) -> Option<()> {
@@ -96,12 +111,17 @@ mod test {
 
         let mut diags = Diagnostics::default();
         let mut interp = Interpreter::new(Layout::ARCH_64, &mut diags, &mods, &instrs);
-        let ir = interp.eval(crate::Entry {
-            module: meta.root(),
-            func: entry,
-            inputs: vec![],
-            ret: Type::BuiltIn(BuiltInType::I32),
-        });
+        let ir = interp.eval(
+            &crate::Entry {
+                id: FuncId {
+                    module: meta.root(),
+                    func: entry,
+                },
+                inputs: vec![],
+                ret: Type::BuiltIn(BuiltInType::I32),
+            },
+            &mut Vec::new(),
+        );
 
         if !diags.view().is_empty() {
             ctx.push_str("diagnostics:\n");
@@ -164,6 +184,11 @@ mod test {
                 x += 1
                 x
             }
+        ";
+        function_call "
+            let bi = :{bi}
+            let fun = fn(): bi.i32 1
+            let main = fn(): bi.i32 fun()
         ";
     }
 }

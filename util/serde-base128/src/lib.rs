@@ -18,6 +18,7 @@ pub unsafe trait CheckType: Copy + 'static + Serde128 + Eq {}
 
 unsafe impl CheckType for u64 {}
 
+#[derive(Default)]
 pub struct Encoder {
     data: Vec<u8>,
 }
@@ -71,11 +72,7 @@ impl Encoder {
     }
 }
 
-impl Default for Encoder {
-    fn default() -> Self {
-        Self { data: Vec::new() }
-    }
-}
+
 
 pub struct Decoder<'a> {
     data: &'a [u8],
@@ -96,7 +93,7 @@ impl<'a> Decoder<'a> {
     }
 
     pub unsafe fn read_byte(&mut self) -> u8 {
-        debug_assert!(self.data.len() >= 1);
+        debug_assert!(!self.data.is_empty());
         let value = *self.data.get_unchecked(0);
         self.data = self.data.get_unchecked(1..);
         value

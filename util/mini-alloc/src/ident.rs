@@ -173,7 +173,7 @@ impl IdentStr {
 
     #[inline(always)]
     const fn small_str_from_bytes(slice: &[u8]) -> Self {
-        assert!(slice.len() <= Self::SIZE - 1);
+        assert!(slice.len() < Self::SIZE);
 
         let len = slice.len();
         let mut bytes = [0; mem::size_of::<Self>()];

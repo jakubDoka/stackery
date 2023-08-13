@@ -10,6 +10,6 @@ module root:
     (|\+|-|\*|/|%|<<|>>|&|\||\^)=
     sym0
     drop scope 1 returns
-padding decl : {integer}
-2 : {integer}
+padding decl : i32
+2 : i32
 drop scope 1 returns : ()

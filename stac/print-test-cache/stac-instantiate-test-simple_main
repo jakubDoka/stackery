@@ -2,4 +2,4 @@ module root:
   bi = :{bi}
   main = (): i32:
     0
-0 : {integer}
+0 : i32

@@ -31,7 +31,7 @@ impl Config {
 
 fn get_config() -> &'static Config {
     static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
-    CONFIG.get_or_init(|| Config::new())
+    CONFIG.get_or_init(Config::new)
 }
 
 pub fn case(name: &str, body: impl FnOnce(&mut String)) {
@@ -82,7 +82,7 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
                 log!(dump, "failed to create directory: {}", e);
                 return false;
             }
-            if let Err(e) = std::fs::write(&path, source) {
+            if let Err(e) = std::fs::write(path, source) {
                 log!(dump, "failed to write to file: {}", e);
                 return false;
             }
@@ -116,7 +116,7 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
             }
         };
 
-        let diff = diff::lines(&prev, &source);
+        let diff = diff::lines(&prev, source);
 
         if diff.iter().all(|d| matches!(d, diff::Result::Both(..))) {
             return;

@@ -3,8 +3,9 @@ use std::array;
 use mini_alloc::IdentStr;
 
 use crate::{
-    lexer, BuiltInType, FrameSize, InstrBody, InstrKind, IntLit, LitKindAst, ModuleDecl, ModuleRef,
-    Mutable, OpCode, Resolved, Returns, Severty, Span, SubsRef, SubsTable, Sym, Type, VecStore,
+    lexer, ArgCount, BuiltInType, FrameSize, FuncType, InstrBody, InstrKind, IntLit, LitKindAst,
+    ModuleDecl, ModuleRef, Mutable, OpCode, Resolved, Returns, Severty, Span, SubsRef, SubsTable,
+    Sym, Type, VecStore,
 };
 
 use super::{Entry, Interpreter, Ir, Layout, Local, SubsRepr};
@@ -24,17 +25,18 @@ struct Operand {
 
 #[derive(Default)]
 struct Res<'a> {
-    module: ModuleRef,
+    _module: ModuleRef,
     ir: Ir,
     stack: Vec<Operand>,
     types: VecStore<Type, SubsRepr>,
     params: Vec<Local>,
     ip: usize,
     body: InstrBody<'a>,
-    decls: ModuleDecl<'a>,
+    _decls: ModuleDecl<'a>,
     subs_table: SubsTable<SubsRepr>,
     enfoce_const: bool,
     scope: Vec<Decl>,
+    call_frontier: Vec<Entry>,
 }
 
 impl<'a> Res<'a> {
@@ -83,9 +85,9 @@ impl<'ctx> Interpreter<'ctx> {
 
         let mut res = Res {
             body,
-            decls,
+            _decls: decls,
             enfoce_const: true,
-            module,
+            _module: module,
             ..Default::default()
         };
 
@@ -109,12 +111,12 @@ impl<'ctx> Interpreter<'ctx> {
         Some(r)
     }
 
-    pub fn eval(&mut self, entry: Entry) -> Ir {
+    pub fn eval(&mut self, entry: &Entry, call_frontier: &mut Vec<Entry>) -> Ir {
         let mut res = Res {
-            module: entry.module,
-            params: entry.inputs,
-            body: self.instrs.body_of(entry.module, entry.func),
-            decls: self.instrs.decls_of(entry.module),
+            _module: entry.id.module,
+            params: entry.inputs.clone(),
+            body: self.instrs.body_of(entry.id),
+            _decls: self.instrs.decls_of(entry.id.module),
             ..Default::default()
         };
 
@@ -134,6 +136,8 @@ impl<'ctx> Interpreter<'ctx> {
             }
         }
 
+        call_frontier.append(&mut res.call_frontier);
+
         res.remap_types()
     }
 
@@ -143,11 +147,11 @@ impl<'ctx> Interpreter<'ctx> {
             InstrKind::Res(r) => self.eval_res(r.clone(), res),
             &InstrKind::Sym(s) => self.eval_sym(s, span, res),
             &InstrKind::BinOp(op) => self.eval_binop(op, span, res),
+            &InstrKind::Call(ac) => self.eval_call(ac, span, res),
             InstrKind::Field(field) => self.eval_field(field, span, res),
             &InstrKind::Decl(mutable) => self.eval_decl(span, mutable, res),
             InstrKind::Drop => self.eval_drop(span, res),
             &InstrKind::DropScope(s, r) => self.eval_drop_scope(s, r, span, res),
-            InstrKind::PaddingDecl => unreachable!("we dont insert these during emmit time"),
         }
     }
 
@@ -162,17 +166,10 @@ impl<'ctx> Interpreter<'ctx> {
         res.ir.instrs.push((InstrKind::Uninit(typ.clone()), ty));
     }
 
-    fn res_ty(&mut self, c: &Resolved, res: &mut Res) -> Type {
+    fn res_ty(&mut self, c: &Resolved, _res: &mut Res) -> Type {
         match c {
             Resolved::Type(_) => Type::BuiltIn(BuiltInType::Type),
-            &Resolved::Func(f) => {
-                let sig = if f.module == res.module {
-                    &res.decls.funcs[f.func].signature
-                } else {
-                    self.instrs.sig_of(f)
-                };
-                Type::Func(Box::new(sig.clone()))
-            }
+            &Resolved::Func(f) => Type::Func(FuncType::Static(f)),
             Resolved::Module(_) => Type::BuiltIn(BuiltInType::Module),
             Resolved::Const(c) => match c {
                 LitKindAst::Int(_) => Type::BuiltIn(BuiltInType::Integer),
@@ -254,6 +251,83 @@ impl<'ctx> Interpreter<'ctx> {
         }
 
         self.fold_binop(op, span, lhs, rhs, res);
+    }
+
+    fn eval_call(&mut self, ac: ArgCount, span: Span, res: &mut Res) {
+        let func = res.stack.pop().unwrap();
+        let args_range = res.stack.len() - ac as usize..;
+
+        let Type::Func(func_ty) = &res.types[func.ty] else {
+            self.diags
+                .builder(self.modules.files())
+                .footer(Severty::Error, "cannot call this expression")
+                .annotation(Severty::Error, span, "this expression is not callable");
+            return;
+        };
+
+        let sig = match func_ty {
+            &FuncType::Static(func) => self.instrs.sig_of(func),
+            FuncType::Dynamic(func) => &func,
+        };
+
+        if let &FuncType::Static(func) = func_ty {
+            let inputs = res.stack[args_range.clone()]
+                .iter()
+                .map(|op| {
+                    if op.runtime {
+                        Local::Rt(res.types[op.ty].clone())
+                    } else {
+                        Local::Ct(self.root_value(res.ir.instrs[op.start].0.clone(), res))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let entry = Entry {
+                id: func,
+                inputs: inputs.clone(),
+                ret: sig.ret.clone(),
+            };
+
+            res.call_frontier.push(entry);
+        }
+
+        if sig.args.len() != ac as usize {
+            self.diags
+                .builder(self.modules.files())
+                .footer(Severty::Error, "wrong number of arguments")
+                .annotation(
+                    Severty::Error,
+                    span,
+                    format_args!(
+                        "expected {} arguments, found {}",
+                        sig.args.len(),
+                        ac as usize
+                    ),
+                );
+            return;
+        }
+
+        let has_side_effects = true; // TODO: use value from the type
+        if func.runtime
+            || has_side_effects
+            || res.stack[args_range.clone()].iter().any(|a| a.runtime)
+        {
+            let base_operand = res.stack.drain(args_range).next().unwrap_or(func);
+
+            let ty = res.push_type(sig.ret.clone());
+            res.stack.push(Operand {
+                start: base_operand.start,
+                runtime: true,
+                mutable: false,
+                ty,
+            });
+
+            res.ir.instrs.push((InstrKind::Call(ac), ty));
+
+            return;
+        }
+
+        todo!()
     }
 
     fn fold_binop(&mut self, op: OpCode, span: Span, _lhs: Operand, _rhs: Operand, res: &mut Res) {
@@ -495,12 +569,7 @@ impl<'ctx> Interpreter<'ctx> {
         }
 
         res.stack
-            .drain(res.stack.len() - size as usize - ret as usize..res.stack.len() - ret as usize)
-            .rev()
-            .filter(|r| !r.runtime)
-            .for_each(|r| {
-                res.ir.instrs[r.start].0 = InstrKind::PaddingDecl;
-            });
+            .drain(res.stack.len() - size as usize - ret as usize..res.stack.len() - ret as usize);
 
         let ty = res.push_type(Type::BuiltIn(BuiltInType::Unit));
         res.ir
@@ -508,7 +577,7 @@ impl<'ctx> Interpreter<'ctx> {
             .push((InstrKind::DropScope(size as FrameSize, ret), ty));
     }
 
-    fn root_value(&mut self, instr: InstrKind, res: &mut Res) -> Resolved {
+    fn root_value(&mut self, instr: InstrKind, res: &Res) -> Resolved {
         match instr {
             InstrKind::Sym(s) => {
                 let operand = res.stack[s as usize];

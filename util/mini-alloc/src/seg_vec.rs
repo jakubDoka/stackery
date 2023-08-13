@@ -14,7 +14,7 @@ const INDEX_BASE: SegIndexRepr = 1 << SKIPPED_SEGMENTS;
 
 fn to_segment_and_index(index: SegIndexRepr) -> (u8, usize) {
     let segment = (index + INDEX_BASE).ilog2() - SKIPPED_SEGMENTS;
-    let index = index + INDEX_BASE - (1 << segment + SKIPPED_SEGMENTS);
+    let index = index + INDEX_BASE - (1 << (segment + SKIPPED_SEGMENTS));
     (segment as u8, index as usize)
 }
 
@@ -109,7 +109,7 @@ impl<T, A: Allocator> SegVec<T, A> {
         let (segment_index, index) = to_segment_and_index(self.len);
         let segment = &mut self.segments[segment_index as usize];
 
-        Some(unsafe { segment.index(index as usize).as_ptr().read() })
+        Some(unsafe { segment.index(index).as_ptr().read() })
     }
 
     pub fn clear(&mut self) {

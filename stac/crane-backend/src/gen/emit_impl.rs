@@ -6,7 +6,7 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::Module;
-use stac::{BuiltInType, FuncId, IntType, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type};
+use stac::{BuiltInType, InstrKind, IntType, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type};
 
 use super::*;
 
@@ -19,7 +19,6 @@ struct Res {
 enum Slot {
     Value(ir::Value),
     Var(Variable),
-    Folded,
 }
 
 struct Builder<'ctx> {
@@ -48,19 +47,18 @@ impl<'ctx> Builder<'ctx> {
         match slot {
             Slot::Value(v) => v,
             Slot::Var(v) => self.fb.use_var(v),
-            Slot::Folded => unreachable!(),
         }
     }
 }
 
 impl<'ctx> Emmiter<'ctx> {
-    pub fn emit(self, func: FuncId, ir: Ir) -> CodeRef {
+    pub fn emit(self, entry: &stac::Entry, ir: Ir) -> CodeRef {
         let mut res = Res {
             ctx: Context::new(),
             bctx: FunctionBuilderContext::new(),
         };
 
-        res.ctx.func.signature = self.load_signature(func);
+        res.ctx.func.signature = self.load_signature(&entry);
         // TODO: push params
 
         let mut builder = Builder::new(&mut res, &ir.types, self.arch);
@@ -69,12 +67,12 @@ impl<'ctx> Emmiter<'ctx> {
 
         for &(ref instr, ty) in ir.instrs.iter() {
             match instr {
-                stac::InstrKind::Uninit(_) => todo!(),
-                &stac::InstrKind::Sym(sym) => {
+                InstrKind::Uninit(_) => todo!(),
+                &InstrKind::Sym(sym) => {
                     let slot = builder.stack[sym as usize];
                     builder.stack.push(slot);
                 }
-                stac::InstrKind::Res(res) => match res {
+                InstrKind::Res(res) => match res {
                     stac::Resolved::Type(_) => unreachable!(),
                     stac::Resolved::Func(_) => unreachable!(),
                     stac::Resolved::Module(_) => unreachable!(),
@@ -86,7 +84,7 @@ impl<'ctx> Emmiter<'ctx> {
                         }
                     },
                 },
-                stac::InstrKind::BinOp(op) => {
+                InstrKind::BinOp(op) => {
                     let [(lhs, lty), (rhs, _)] = pop_array(&mut builder.stack);
 
                     use ir::types::*;
@@ -123,8 +121,11 @@ impl<'ctx> Emmiter<'ctx> {
                         _ => todo!(),
                     }
                 }
-                stac::InstrKind::Field(_) => todo!(),
-                stac::InstrKind::Decl(Mutable::True) => {
+                InstrKind::Call(_) => {
+                    todo!()
+                }
+                InstrKind::Field(_) => todo!(),
+                InstrKind::Decl(Mutable::True) => {
                     let (slot, spec) = builder.stack.pop().unwrap();
                     let value = builder.slot_as_value(slot);
                     let var = Variable::from_u32(builder.stack.len() as u32);
@@ -132,20 +133,17 @@ impl<'ctx> Emmiter<'ctx> {
                     builder.fb.def_var(var, value);
                     builder.stack.push((Slot::Var(var), spec));
                 }
-                stac::InstrKind::Decl(_) => (),
-                stac::InstrKind::Drop => {
+                InstrKind::Decl(_) => (),
+                InstrKind::Drop => {
                     builder.stack.pop().unwrap();
                 }
-                &stac::InstrKind::DropScope(size, returns) => {
+                &InstrKind::DropScope(size, returns) => {
                     let return_slot = returns.then(|| builder.stack.pop().unwrap());
                     builder.stack.drain(builder.stack.len() - size as usize..);
                     if let Some((slot, spec)) = return_slot {
                         let value = builder.slot_as_value(slot);
                         builder.stack.push((Slot::Value(value), spec));
                     }
-                }
-                stac::InstrKind::PaddingDecl => {
-                    builder.stack.push((Slot::Folded, TypeSpec::invalid()));
                 }
             }
         }
@@ -176,11 +174,23 @@ impl<'ctx> Emmiter<'ctx> {
         CodeRef::from_repr(0)
     }
 
-    fn load_signature(&self, _func: stac::FuncId) -> ir::Signature {
+    pub fn load_signature(&self, entry: &stac::Entry) -> ir::Signature {
         ir::Signature {
-            params: vec![],
+            params: entry
+                .inputs
+                .iter()
+                .filter_map(|ty| self.load_local(ty))
+                .map(ir::AbiParam::new)
+                .collect(),
             returns: vec![ir::AbiParam::new(ir::types::I32)],
             call_conv: isa::CallConv::SystemV,
+        }
+    }
+
+    fn load_local(&self, local: &stac::Local) -> Option<ir::Type> {
+        match local {
+            stac::Local::Ct(_) => None,
+            stac::Local::Rt(ty) => Some(TypeSpec::from_ty(ty, self.arch).repr),
         }
     }
 }
@@ -239,7 +249,7 @@ impl TypeSpec {
         }
     }
 
-    fn invalid() -> TypeSpec {
+    fn _invalid() -> TypeSpec {
         TypeSpec {
             repr: ir::types::INVALID,
             _layout: Layout::ZERO,

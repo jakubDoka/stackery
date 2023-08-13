@@ -19,8 +19,8 @@ pub struct Diagnostics {
 impl fmt::Display for Diagnostics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.output)?;
-        let [err, warn, note, help] = self.counters;
-        writeln!(f, "err: {err}, warn: {warn}, note: {note}, help: {help}")
+        let [err, warn, ..] = self.counters;
+        writeln!(f, "err: {err}, warn: {warn}")
     }
 }
 
