@@ -27,7 +27,8 @@
 mod algorithms;
 mod diagnostics;
 mod graphs;
-mod instantiate;
+mod layout;
+//mod instantiate;
 mod instrs;
 mod lexer;
 mod loader;
@@ -41,7 +42,19 @@ mod types;
 pub use {instrs::instr_test_util::*, loader::load_test_util::*};
 
 pub use {
-    diagnostics::*, graphs::*, instantiate::*, instrs::*, lexer::*, loader::*, mini_alloc,
-    parser::expr::*, parser::fmt::*, parser::*, source::*, storage::refs::*, storage::*,
-    temp_mem::*, types::*,
+    diagnostics::*,
+    graphs::*, //instantiate::*,
+    instrs::*,
+    layout::*,
+    lexer::*,
+    loader::*,
+    mini_alloc,
+    parser::expr::*,
+    parser::fmt::*,
+    parser::*,
+    source::*,
+    storage::refs::*,
+    storage::*,
+    temp_mem::*,
+    types::*,
 };

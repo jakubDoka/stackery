@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{
-    Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, ModuleDeclBuilder,
+    CtxSym, Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, ModuleDeclBuilder,
     ScopeFrame, TyResolverCtx,
 };
 
@@ -151,14 +151,15 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     }
 
     fn build_literal(&mut self, lit: &LitAst, res: &mut Res) -> Option<()> {
-        res.push_instr(Resolved::Const(lit.kind.clone()), lit.span);
+        let kind = res.body.consts.find_or_push(&lit.kind);
+        res.push_instr(InstrKind::Const(kind), lit.span);
         Some(())
     }
 
     fn build_ident(&mut self, ident: &IdentAst, res: &mut Res) -> Option<()> {
         let Some(sym) = res.lookup_sym(&ident.ident) else {
-            if let Some(global_sym) = res.lookup_global_sym(&ident.ident) {
-                res.push_instr(InstrKind::Res(global_sym), ident.span);
+            if let Some(global_sym) = res.lookup_global_sym(&ident.ident).cloned() {
+                res.push_res_as_instr(&global_sym, ident.span);
                 return Some(());
             }
 
@@ -192,7 +193,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .terminate()?;
         };
 
-        res.push_instr(Resolved::Module(module), import.span);
+        res.push_instr(InstrKind::Module(module), import.span);
         Some(())
     }
 
@@ -284,13 +285,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         let func_ref = res.add_to_compile_queue(func.clone());
         let signature = self.build_signature(func, res);
         res.module.funcs[func_ref].signature = signature;
-        res.push_instr(
-            Resolved::Func(crate::FuncId {
-                module: res.module_ref,
-                func: func_ref,
-            }),
-            func.keyword,
-        );
+        res.push_instr(InstrKind::Func(func_ref, false), func.keyword);
         Some(())
     }
 
@@ -314,6 +309,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .map_or(Type::BuiltIn(BuiltInType::Unknown), |ty| {
                     self.resolve_ty(ty, res)
                 });
+            let ty = res.body.types.find_or_push(&ty);
             res.push_instr(InstrKind::Uninit(ty), *keyword);
         }
 
@@ -434,15 +430,15 @@ impl<'arena> Res<'arena> {
         func
     }
 
-    fn push_instr(&mut self, kind: impl Into<InstrKind>, span: Span) -> InstrRef {
+    fn push_instr(&mut self, kind: InstrKind, span: Span) -> InstrRef {
         self.body.instrs.push(Instr {
             kind: kind.into(),
-            span,
+            span: span.to_pos(),
         })
     }
 
-    fn intern_ident(&mut self, ident: &IdentStr) -> IdentStr {
-        ident.clone()
+    fn intern_ident(&mut self, ident: &IdentStr) -> CtxSym {
+        self.body.idents.find_or_push(ident)
     }
 
     fn lookup_sym(&self, ident: &IdentStr) -> Option<Sym> {
@@ -452,10 +448,35 @@ impl<'arena> Res<'arena> {
             .map(|s| s as Sym)
     }
 
-    fn lookup_global_sym(&self, ident: &IdentStr) -> Option<Resolved> {
+    fn lookup_global_sym(&self, ident: &IdentStr) -> Option<&Resolved> {
         self.module
             .decls
             .values()
-            .find_map(|decl| (decl.name.ident == *ident).then(|| decl.data.clone()))
+            .find_map(|decl| (decl.name.ident == *ident).then_some(&decl.data))
+    }
+
+    fn push_res_as_instr(&mut self, global_sym: &Resolved, span: Span) {
+        let instrs = match global_sym {
+            Resolved::Type(t) => [
+                InstrKind::Type(self.body.types.find_or_push(t)),
+                InstrKind::Drop,
+            ],
+            &Resolved::Func(f) => [InstrKind::Module(f.module), InstrKind::Func(f.func, true)],
+            &Resolved::Module(m) => [InstrKind::Module(m), InstrKind::Drop],
+            Resolved::Const(c) => [
+                InstrKind::Const(self.body.consts.find_or_push(c)),
+                InstrKind::Drop,
+            ],
+        }
+        .map(|kind| Instr {
+            kind,
+            span: span.to_pos(),
+        });
+
+        self.body.instrs.extend(
+            instrs
+                .into_iter()
+                .filter(|i| !matches!(i.kind, InstrKind::Drop)),
+        );
     }
 }

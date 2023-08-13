@@ -134,4 +134,42 @@ impl Span {
     pub fn col(&self) -> usize {
         self.col as usize
     }
+
+    pub fn to_pos(&self) -> Pos {
+        Pos {
+            row: self.row,
+            col: self.col,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Pos {
+    row: u16,
+    col: u16,
+}
+
+impl Pos {
+    pub fn new(row: usize, col: usize) -> Self {
+        Self {
+            row: row as u16,
+            col: col as u16,
+        }
+    }
+
+    pub fn row(&self) -> usize {
+        self.row as usize
+    }
+
+    pub fn col(&self) -> usize {
+        self.col as usize
+    }
+
+    pub fn to_span(&self, file_ref: FileRef) -> Span {
+        Span {
+            row: self.row,
+            col: self.col,
+            file: file_ref,
+        }
+    }
 }

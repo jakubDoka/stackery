@@ -441,6 +441,14 @@ impl<T, R: RefRepr> VecStore<T, R> {
             _marker: PhantomData,
         }
     }
+
+    pub fn find_or_push(&mut self, value: &T) -> Ref<T, R>
+    where
+        T: Eq + Clone,
+    {
+        let id = self.iter().find_map(|(id, v)| (v == value).then_some(id));
+        id.unwrap_or_else(|| self.push(value.clone()))
+    }
 }
 
 impl<T, R: RefRepr> Index<Slice<T, R>> for VecStore<T, R> {

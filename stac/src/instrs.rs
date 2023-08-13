@@ -2,7 +2,7 @@ use mini_alloc::IdentStr;
 
 use crate::{
     gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, Diagnostics, IntType,
-    Layout, LitKindAst, ModuleRef, Modules, OpCode, Ref, Signature, Span, Type,
+    Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Signature, Span, Type,
 };
 
 mod instr_emmiter;
@@ -10,15 +10,17 @@ mod instr_emmiter;
 type InstrRepr = u16;
 pub type ArgCount = u16;
 pub type Returns = bool;
+pub type Scoped = bool;
 pub type FrameSize = u16;
 pub type Sym = InstrRepr;
 pub type InstrRef = Ref<Instr, InstrRepr>;
 pub type Const = LitKindAst;
+pub type ConstRef = Ref<Const, InstrRepr>;
 pub type FuncRef = Ref<Func, InstrRepr>;
-pub type TypeRef = Type;
-type CtxSym = IdentStr;
+pub type TypeRef = Ref<Type, InstrRepr>;
+type CtxSym = Ref<IdentStr, InstrRepr>;
 
-pub type SourceOffset = Span;
+pub type SourceOffset = Pos;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mutable {
@@ -31,19 +33,16 @@ pub enum Mutable {
 pub enum InstrKind {
     Uninit(TypeRef),
     Sym(Sym),
-    Res(Resolved),
+    Func(FuncRef, Scoped),
+    Module(ModuleRef),
+    Const(ConstRef),
+    Type(TypeRef),
     BinOp(OpCode),
     Call(ArgCount),
     Field(CtxSym),
     Decl(Mutable),
     Drop,
     DropScope(FrameSize, Returns),
-}
-
-impl From<Resolved> for InstrKind {
-    fn from(res: Resolved) -> Self {
-        Self::Res(res)
-    }
 }
 
 #[derive(Clone)]
@@ -232,8 +231,8 @@ pub mod instr_test_util {
     use mini_alloc::{ArenaBase, DiverBase};
 
     use crate::{
-        bail, instrs::InstrKind, Instrs, Layout, ModuleMeta, ModuleRef, Modules, Mutable, Parser,
-        Resolved, Resolver,
+        bail, instrs::InstrKind, FuncId, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef, Modules,
+        Mutable, Parser, Resolved, Resolver,
     };
 
     #[derive(Default)]
@@ -256,14 +255,20 @@ pub mod instr_test_util {
                             let view = ctx.instrs.decls.view(ctx.instrs.modules[m]);
                             view.decls
                                 .iter()
-                                .find(|d| d.name.ident == *i)
+                                .find(|d| d.name.ident == body.idents[*i])
                                 .unwrap()
                                 .data
                                 .clone()
                         }
                         _ => todo!(),
                     },
-                    InstrKind::Res(r) => r.clone(),
+                    &InstrKind::Func(func, false) => Resolved::Func(FuncId {
+                        module: ctx.module,
+                        func,
+                    }),
+                    &InstrKind::Module(module) => Resolved::Module(module),
+                    &InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
+                    &InstrKind::Type(ty) => Resolved::Type(body.types[ty].clone()),
                     _ => todo!(),
                 };
 
@@ -279,24 +284,26 @@ pub mod instr_test_util {
         ctx.push_str(id.to_string().as_str());
     }
 
-    pub fn display_instr(instr: &InstrKind, ctx: &mut String) {
-        match instr {
+    pub fn display_instr(instr: &InstrKind, body: &InstrBody, ctx: &mut String) {
+        match instr.clone() {
             InstrKind::Uninit(ty) => {
                 ctx.push_str("uninit ");
-                ctx.push_str(&ty.to_string());
+                ctx.push_str(&body.types[ty].to_string());
             }
-            &InstrKind::Sym(s) => display_id("sym", s as usize, ctx),
+            InstrKind::Sym(s) => display_id("sym", s as usize, ctx),
             InstrKind::BinOp(op) => ctx.push_str(op.name()),
             InstrKind::Field(f) => {
                 ctx.push_str(". ");
-                ctx.push_str(f.as_str());
+                ctx.push_str(&body.idents[f].to_string());
             }
-            InstrKind::Res(r) => match r {
-                Resolved::Type(t) => ctx.push_str(&t.to_string()),
-                Resolved::Func(f) => display_id("func", f.func.index(), ctx),
-                Resolved::Module(m) => display_id("mod", m.index(), ctx),
-                Resolved::Const(c) => ctx.push_str(&c.to_string()),
-            },
+            InstrKind::Type(t) => ctx.push_str(&body.types[t].to_string()),
+            InstrKind::Func(f, false) => display_id("func", f.index(), ctx),
+            InstrKind::Func(f, true) => {
+                ctx.push_str("scoped ");
+                display_id("func", f.index(), ctx);
+            }
+            InstrKind::Module(m) => display_id("mod", m.index(), ctx),
+            InstrKind::Const(c) => ctx.push_str(&body.consts[c].to_string()),
             InstrKind::Decl(Mutable::False) => ctx.push_str("decl"),
             InstrKind::Decl(Mutable::True) => ctx.push_str("decl mut"),
             InstrKind::Decl(Mutable::CtTrue) => ctx.push_str("decl ct mut"),
@@ -304,7 +311,7 @@ pub mod instr_test_util {
             InstrKind::DropScope(s, r) => {
                 ctx.push_str("drop scope ");
                 ctx.push_str(s.to_string().as_str());
-                ctx.push_str(if *r { " returns" } else { "" });
+                ctx.push_str(if r { " returns" } else { "" });
             }
             InstrKind::Call(ac) => {
                 ctx.push_str("call ");
@@ -327,7 +334,7 @@ pub mod instr_test_util {
             ctx.push_str(" = ");
 
             let func = match decl.data.clone() {
-                Resolved::Func(func) => func,
+                Resolved::Func(func) => func.func,
                 Resolved::Type(ty) => {
                     ctx.push_str(&ty.to_string());
                     ctx.push('\n');
@@ -346,7 +353,7 @@ pub mod instr_test_util {
                 }
             };
 
-            let func = &view.funcs[func.func];
+            let func = &view.funcs[func];
 
             ctx.push('(');
             for (i, arg) in func.signature.args.iter().enumerate() {
@@ -364,7 +371,7 @@ pub mod instr_test_util {
             let body_view = instrs.bodies.view(func.body);
             for instr in body_view.instrs.iter() {
                 ctx.push_str("    ");
-                display_instr(&instr.kind, ctx);
+                display_instr(&instr.kind, &body_view, ctx);
                 ctx.push('\n');
             }
         }

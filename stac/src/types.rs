@@ -86,16 +86,12 @@ impl fmt::Display for Type {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum FuncType {
-    Dynamic(Box<Signature>),
     Static(FuncId),
 }
 
 impl FuncType {
     pub fn unify(&self, other: &Self) -> Option<Self> {
         match (self, other) {
-            (Self::Dynamic(lhs), Self::Dynamic(rhs)) => {
-                lhs.unify(rhs).map(Box::new).map(Self::Dynamic)
-            }
             (Self::Static(lhs), Self::Static(rhs)) if lhs == rhs => Some(Self::Static(*lhs)),
             _ => None,
         }
@@ -105,7 +101,6 @@ impl FuncType {
 impl fmt::Display for FuncType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Dynamic(sig) => sig.fmt(f),
             Self::Static(id) => write!(f, "func#{}:{}", id.module.index(), id.module.index()),
         }
     }
