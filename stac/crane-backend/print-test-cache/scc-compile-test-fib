@@ -1,0 +1,43 @@
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(0) }, ip: 1, inputs: [], ret: BuiltIn(I32) }
+note: function u0:0() -> i32 system_v {
+    sig0 = (i32) -> i32 system_v
+    fn0 = colocated u0:1 sig0
+
+block0:
+    v0 = iconst.i32 10
+    v1 = call fn0(v0)  ; v0 = 10
+    return v1
+}
+
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(1) }, ip: 3, inputs: [Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
+note: function u0:0(i32) -> i32 system_v {
+    sig0 = (i32) -> i32 system_v
+    fn0 = colocated u0:1 sig0
+
+block0(v0: i32):
+    v1 = iconst.i32 2
+    v2 = icmp slt v0, v1  ; v1 = 2
+    brif v2, block1, block2
+
+block1:
+    jump block3(v0)
+
+block2:
+    v3 = iconst.i32 1
+    v4 = isub.i32 v0, v3  ; v3 = 1
+    v5 = call fn0(v4)
+    v6 = iconst.i32 2
+    v7 = isub.i32 v0, v6  ; v6 = 2
+    v8 = call fn0(v7)
+    v9 = iadd v5, v8
+    jump block3(v9)
+
+block3(v10: i32):
+    return v10
+}
+
+note: finished compiling
+note: output: scc-compile-test-fib
+error: program exited with status code 55
+err: 0, warn: 0
+

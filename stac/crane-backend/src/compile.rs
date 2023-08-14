@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     future::Future,
+    io,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -22,7 +23,7 @@ mod test;
 #[derive(clap::Args)]
 pub struct Command {
     #[clap(long, short, default_value = "main.stac")]
-    root: PathBuf,
+    input: PathBuf,
     #[clap(long, short)]
     target: Option<String>,
     #[clap(long, short, default_value = "a")]
@@ -31,21 +32,25 @@ pub struct Command {
     object_only: bool,
     #[clap(long, short, default_value = "false")]
     dump_ir: bool,
+    #[clap(long, short, default_value = "false")]
+    run: bool,
 }
 
 impl Command {
     pub fn run(self, lp: impl LoaderProvider, stdout: &mut impl std::io::Write) -> Option<()> {
         let target = resolve_target(stdout, self.target)?;
         let arch = resolve_arch(stdout, &target)?;
+        let root_name = IdentStr::from_str(self.input.to_str().unwrap());
 
-        let mut loader = lp.provide(self.root.clone());
         let mut diags = Diagnostics::default();
+        let mut loader = match lp.provide(self.input) {
+            Ok(loader) => loader,
+            Err(err) => terminate(stdout, err)?,
+        };
         let mut modules = Modules::new();
 
-        let root = IdentStr::from_str(self.root.to_str().unwrap());
-
         let Some(meta) = ModuleLoader::new(&mut modules, &mut diags)
-            .update(root, &mut loader)
+            .update(root_name, &mut loader)
             .block_on()
         else {
             terminate(stdout, diags)?;
@@ -53,7 +58,7 @@ impl Command {
 
         let mut instrs = Instrs::new();
 
-        Self::build_instrs(stdout, &meta, &modules, arch, &mut diags, &mut instrs);
+        Self::build_instrs(stdout, &meta, &modules, arch, &mut diags, &mut instrs)?;
 
         let Some(entry) = instrs.entry_of(meta.root()) else {
             terminate(
@@ -91,6 +96,7 @@ impl Command {
                 let sig = emmiter.load_signature(recent);
                 gen.declare_func(id, sig);
             }
+            instances.clear_recent();
 
             let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, self.dump_ir);
             emmiter.emit(&entry, id, ir);
@@ -126,6 +132,23 @@ impl Command {
                 .builder(modules.files())
                 .footer(stac::Severty::Note, "finished compiling")
                 .footer(stac::Severty::Note, format_args!("output: {}", self.output));
+        }
+
+        if self.run {
+            let status = std::process::Command::new(format!("./{}", self.output))
+                .status()
+                .unwrap();
+
+            let severty = if status.success() {
+                stac::Severty::Note
+            } else {
+                stac::Severty::Error
+            };
+
+            diags.builder(modules.files()).footer(
+                severty,
+                format_args!("program exited with status code {}", status.code().unwrap()),
+            );
         }
 
         writeln!(stdout, "{diags}").unwrap();
@@ -196,7 +219,7 @@ fn terminate(stdout: &mut impl std::io::Write, diags: impl Display) -> Option<!>
 
 pub trait LoaderProvider {
     type Loader: stac::Loader;
-    fn provide(self, root: PathBuf) -> Self::Loader;
+    fn provide(self, root: PathBuf) -> io::Result<Self::Loader>;
 }
 
 pub struct Loader {
@@ -205,11 +228,15 @@ pub struct Loader {
 }
 
 impl Loader {
-    fn new(root: PathBuf) -> Self {
-        Self {
-            root,
+    fn new(root: PathBuf) -> io::Result<Self> {
+        Ok(Self {
+            root: root
+                .canonicalize()?
+                .parent()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "root file has no parent"))?
+                .to_owned(),
             cache: HashMap::new(),
-        }
+        })
     }
 
     fn resolve_path(&self, files: &Files, from: Option<FileRef>, id: &IdentStr) -> PathBuf {
@@ -233,7 +260,7 @@ pub struct DefaultLoaderProvider;
 impl LoaderProvider for DefaultLoaderProvider {
     type Loader = Loader;
 
-    fn provide(self, root: PathBuf) -> Self::Loader {
+    fn provide(self, root: PathBuf) -> io::Result<Self::Loader> {
         Loader::new(root)
     }
 }

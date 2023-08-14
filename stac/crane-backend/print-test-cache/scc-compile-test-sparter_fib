@@ -1,0 +1,52 @@
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(0) }, ip: 1, inputs: [], ret: BuiltIn(I32) }
+note: function u0:0() -> i32 system_v {
+    sig0 = (i32) -> i32 system_v
+    fn0 = colocated u0:1 sig0
+
+block0:
+    v0 = iconst.i32 10
+    v1 = call fn0(v0)  ; v0 = 10
+    return v1
+}
+
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(1) }, ip: 3, inputs: [Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
+note: function u0:0(i32) -> i32 system_v {
+    sig0 = (i32, i32, i32) -> i32 system_v
+    fn0 = colocated u0:2 sig0
+
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = iconst.i32 1
+    v3 = call fn0(v0, v1, v2)  ; v1 = 0, v2 = 1
+    return v3
+}
+
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(2) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Rt(BuiltIn(I32)), Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
+note: function u0:0(i32, i32, i32) -> i32 system_v {
+    sig0 = (i32, i32, i32) -> i32 system_v
+    fn0 = colocated u0:2 sig0
+
+block0(v0: i32, v1: i32, v2: i32):
+    v3 = iconst.i32 0
+    v4 = icmp eq v0, v3  ; v3 = 0
+    brif v4, block1, block2
+
+block1:
+    jump block3(v1)
+
+block2:
+    v5 = iconst.i32 1
+    v6 = isub.i32 v0, v5  ; v5 = 1
+    v7 = iadd.i32 v1, v2
+    v8 = call fn0(v6, v2, v7)
+    jump block3(v8)
+
+block3(v9: i32):
+    return v9
+}
+
+note: finished compiling
+note: output: scc-compile-test-sparter_fib
+error: program exited with status code 55
+err: 0, warn: 0
+

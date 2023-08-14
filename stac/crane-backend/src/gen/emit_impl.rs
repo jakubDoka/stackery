@@ -43,6 +43,7 @@ struct Builder<'ctx> {
     stack: Vec<(Slot, TypeSpec)>,
     ifs: Vec<If>,
     blocks: SecondaryMap<ir::Block, Block>,
+    used_fns: Vec<(FuncInst, ir::FuncRef)>,
 }
 
 impl<'ctx> Builder<'ctx> {
@@ -70,7 +71,18 @@ impl<'ctx> Builder<'ctx> {
             stack,
             ifs: vec![],
             blocks: SecondaryMap::new(),
+            used_fns: vec![],
         }
+    }
+
+    fn get_used_fn(&mut self, id: FuncInst) -> Option<ir::FuncRef> {
+        self.used_fns
+            .iter()
+            .find_map(|(i, f)| (*i == id).then_some(*f))
+    }
+
+    fn push_used_fn(&mut self, id: FuncInst, f: ir::FuncRef) {
+        self.used_fns.push((id, f));
     }
 
     fn spec(&mut self, ty: SubsRef) -> TypeSpec {
@@ -191,7 +203,11 @@ impl<'ctx> Emmiter<'ctx> {
                     }
                 }
                 &FinstKind::Call(id) => {
-                    let (fref, arg_count) = self.gen.use_func(id, builder.fb.func);
+                    let existing = builder.get_used_fn(id);
+                    let (fref, arg_count) = self.gen.use_func(id, existing, builder.fb.func);
+                    if existing.is_none() {
+                        builder.push_used_fn(id, fref);
+                    }
                     let args = builder
                         .stack
                         .drain(builder.stack.len() - arg_count as usize..)
@@ -199,6 +215,7 @@ impl<'ctx> Emmiter<'ctx> {
                         .into_iter()
                         .map(|(slot, ..)| builder.slot_as_value(slot))
                         .collect::<Vec<_>>();
+
                     let call = builder.fb.ins().call(fref, &args);
                     let rets = builder.fb.inst_results(call);
                     if let &[ret] = rets {
@@ -211,6 +228,7 @@ impl<'ctx> Emmiter<'ctx> {
                     let (slot, spec) = builder.stack.pop().unwrap();
                     let value = builder.slot_as_value(slot);
                     let var = Variable::from_u32(builder.stack.len() as u32);
+
                     builder.fb.declare_var(var, spec.repr);
                     builder.fb.def_var(var, value);
                     builder.stack.push((Slot::Var(var), spec));
@@ -221,6 +239,7 @@ impl<'ctx> Emmiter<'ctx> {
                 }
                 &FinstKind::DropScope(size, returns) => {
                     let return_slot = returns.then(|| builder.stack.pop().unwrap());
+
                     builder.stack.drain(builder.stack.len() - size as usize..);
                     if let Some((slot, spec)) = return_slot {
                         let value = builder.slot_as_value(slot);

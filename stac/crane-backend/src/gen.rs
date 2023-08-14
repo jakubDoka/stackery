@@ -51,9 +51,14 @@ impl Generator {
         f
     }
 
-    pub fn use_func(&mut self, id: FuncInst, func: &mut ir::Function) -> (ir::FuncRef, usize) {
+    pub fn use_func(
+        &mut self,
+        id: FuncInst,
+        got_em: Option<ir::FuncRef>,
+        func: &mut ir::Function,
+    ) -> (ir::FuncRef, usize) {
         let id = self.func_mapping[id as usize];
-        let fref = self.module.declare_func_in_func(id, func);
+        let fref = got_em.unwrap_or_else(|| self.module.declare_func_in_func(id, func));
         let param_count = self
             .module
             .declarations()
