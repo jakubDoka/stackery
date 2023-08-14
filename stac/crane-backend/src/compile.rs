@@ -11,10 +11,13 @@ use pollster::FutureExt;
 
 use stac::{
     mini_alloc::{ArenaBase, DiverBase, IdentStr},
-    BuiltInType, Diagnostics, FileRef, Files, FuncId, Instrs, Interpreter, LoaderFut, LoaderRes,
-    ModuleLoader, ModuleMeta, Modules, Type,
+    BuiltInType, Diagnostics, FileRef, Files, FuncId, FuncInstances, Instrs, Interpreter,
+    LoaderFut, LoaderRes, ModuleLoader, ModuleMeta, Modules, Type,
 };
 use target_lexicon::PointerWidth;
+
+#[cfg(test)]
+mod test;
 
 #[derive(clap::Args)]
 pub struct Command {
@@ -26,69 +29,74 @@ pub struct Command {
     output: String,
     #[clap(long, short = 'O')]
     object_only: bool,
+    #[clap(long, short, default_value = "false")]
+    dump_ir: bool,
 }
 
 impl Command {
-    pub fn run(self) {
-        let target = resolve_target(self.target);
-        let arch = resolve_arch(&target);
+    pub fn run(self, lp: impl LoaderProvider, stdout: &mut impl std::io::Write) -> Option<()> {
+        let target = resolve_target(stdout, self.target)?;
+        let arch = resolve_arch(stdout, &target)?;
 
-        let mut loader = Loader::new(self.root.clone());
+        let mut loader = lp.provide(self.root.clone());
         let mut diags = Diagnostics::default();
         let mut modules = Modules::new();
 
-        let root = match self.root.canonicalize() {
-            Ok(root) => root,
-            Err(err) => terminate(format_args!(
-                "failed to canonicalize root file path ({}): {}",
-                self.root.display(),
-                err
-            )),
-        };
-        let root = IdentStr::from_str(root.to_str().unwrap());
+        let root = IdentStr::from_str(self.root.to_str().unwrap());
 
         let Some(meta) = ModuleLoader::new(&mut modules, &mut diags)
             .update(root, &mut loader)
             .block_on()
         else {
-            terminate(diags);
+            terminate(stdout, diags)?;
         };
 
         let mut instrs = Instrs::new();
 
-        Self::build_instrs(&meta, &modules, arch, &mut diags, &mut instrs);
+        Self::build_instrs(stdout, &meta, &modules, arch, &mut diags, &mut instrs);
 
         let Some(entry) = instrs.entry_of(meta.root()) else {
-            terminate(format_args!(
-                "no entry point found, expencted function called \"main\" in \"{}\"",
-                modules.files()[meta.root()].name().display()
-            ));
+            terminate(
+                stdout,
+                format_args!(
+                    "no entry point found, expencted function called \"main\" in \"{}\"",
+                    modules.files()[meta.root()].name().display()
+                ),
+            )?;
         };
 
         let entry = FuncId {
             module: meta.root(),
             func: entry,
         };
-        let mut call_frontier = vec![stac::Entry {
+        let mut instances = FuncInstances::default();
+        instances.project(stac::Entry {
             id: entry,
             inputs: Vec::new(),
+            ip: instrs.func(entry).signature_len,
             ret: Type::BuiltIn(BuiltInType::I32),
-        }];
+        });
 
         let mut gen = Generator::new(target.clone());
 
-        while let Some(entry) = call_frontier.pop() {
-            let mut interp = Interpreter::new(arch, &mut diags, &modules, &instrs);
-            let ir = interp.eval(&entry, &mut call_frontier);
+        while let Some((id, entry)) = instances.next() {
+            let mut interp = Interpreter::new(arch, &mut instances, &mut diags, &modules, &instrs);
+            let ir = interp.eval(&entry);
             if diags.error_count() > 0 {
-                terminate(diags);
+                terminate(stdout, diags)?;
             }
 
-            let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch);
-            emmiter.emit(&entry, ir);
+            for (id, recent) in instances.recent() {
+                let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, false);
+                let sig = emmiter.load_signature(recent);
+                gen.declare_func(id, sig);
+            }
+
+            let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, self.dump_ir);
+            emmiter.emit(&entry, id, ir);
 
             if diags.error_count() > 0 {
-                terminate(diags);
+                terminate(stdout, diags)?;
             }
         }
 
@@ -120,16 +128,19 @@ impl Command {
                 .footer(stac::Severty::Note, format_args!("output: {}", self.output));
         }
 
-        println!("{}", diags);
+        writeln!(stdout, "{diags}").unwrap();
+
+        Some(())
     }
 
     fn build_instrs(
+        stdout: &mut impl std::io::Write,
         meta: &ModuleMeta,
         modules: &Modules,
         arch: stac::Layout,
         diags: &mut Diagnostics,
         instrs: &mut Instrs,
-    ) {
+    ) -> Option<()> {
         let mut arena = ArenaBase::new(1 << 12);
         let mut diver = DiverBase::new(1 << 8);
         let mut resolver = stac::resolver();
@@ -139,43 +150,56 @@ impl Command {
             let diver = diver.untyped_dive();
             let parser = stac::Parser::new(modules.files(), module, diags, &scope);
             let Some(ast) = parser.parse(diver) else {
-                terminate(diags);
+                terminate(stdout, diags)?;
             };
 
             let builder = stac::InstrBuilder::new(arch, instrs, modules, diags, &mut resolver);
             if builder.build(module, ast).is_none() || diags.error_count() > 0 {
-                terminate(diags);
+                terminate(stdout, diags)?;
             }
         }
+
+        Some(())
     }
 }
 
-fn resolve_target(target: Option<String>) -> target_lexicon::Triple {
+fn resolve_target(
+    stdout: &mut impl std::io::Write,
+    target: Option<String>,
+) -> Option<target_lexicon::Triple> {
     let Some(target) = target else {
-        return target_lexicon::Triple::host();
+        return Some(target_lexicon::Triple::host());
     };
 
     match target_lexicon::Triple::from_str(&target) {
-        Ok(target) => target,
-        Err(err) => terminate(format_args!("invalid target: {}", err)),
+        Ok(target) => Some(target),
+        Err(err) => terminate(stdout, format_args!("invalid target: {}", err))?,
     }
 }
 
-fn resolve_arch(target: &target_lexicon::Triple) -> stac::Layout {
-    match target.architecture.pointer_width() {
+fn resolve_arch(
+    stdout: &mut impl std::io::Write,
+    target: &target_lexicon::Triple,
+) -> Option<stac::Layout> {
+    Some(match target.architecture.pointer_width() {
         Ok(PointerWidth::U16) => stac::Layout::ARCH_16,
         Ok(PointerWidth::U32) => stac::Layout::ARCH_32,
         Ok(PointerWidth::U64) => stac::Layout::ARCH_64,
-        Err(()) => terminate("target has unsupported pointer width"),
-    }
+        Err(()) => terminate(stdout, "target has unsupported pointer width")?,
+    })
 }
 
-fn terminate(diags: impl Display) -> ! {
-    eprintln!("{diags}");
-    std::process::exit(1);
+fn terminate(stdout: &mut impl std::io::Write, diags: impl Display) -> Option<!> {
+    writeln!(stdout, "{}", diags).unwrap();
+    None
 }
 
-struct Loader {
+pub trait LoaderProvider {
+    type Loader: stac::Loader;
+    fn provide(self, root: PathBuf) -> Self::Loader;
+}
+
+pub struct Loader {
     root: PathBuf,
     cache: HashMap<PathBuf, FileRef>,
 }
@@ -201,6 +225,16 @@ impl Loader {
         }
 
         PathBuf::from_iter([self.root.as_path(), Path::new(id.as_str())])
+    }
+}
+
+pub struct DefaultLoaderProvider;
+
+impl LoaderProvider for DefaultLoaderProvider {
+    type Loader = Loader;
+
+    fn provide(self, root: PathBuf) -> Self::Loader {
+        Loader::new(root)
     }
 }
 

@@ -1,13 +1,14 @@
 use std::array;
 
 use cranelift_codegen::{
-    ir::{self, InstBuilder},
-    isa, Context,
+    entity::SecondaryMap,
+    ir::{self, condcodes::IntCC, InstBuilder},
+    Context,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::Module;
 use stac::{
-    BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type,
+    BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, OpCode, Severty, SubsRef, Type,
     TypeRefIndex,
 };
 
@@ -24,20 +25,51 @@ enum Slot {
     Var(Variable),
 }
 
+struct If {
+    returns: bool,
+    end: ir::Block,
+}
+
+#[derive(Default, Clone)]
+struct Block {
+    has_back_refs: bool,
+}
+
 struct Builder<'ctx> {
     fb: FunctionBuilder<'ctx>,
+    current_block: ir::Block,
     types: &'ctx IrTypes,
     arch: Layout,
     stack: Vec<(Slot, TypeSpec)>,
+    ifs: Vec<If>,
+    blocks: SecondaryMap<ir::Block, Block>,
 }
 
 impl<'ctx> Builder<'ctx> {
-    fn new(res: &'ctx mut Res, types: &'ctx IrTypes, arch: Layout) -> Self {
+    fn new(
+        res: &'ctx mut Res,
+        types: &'ctx IrTypes,
+        arch: Layout,
+        arg_specs: impl Iterator<Item = TypeSpec>,
+    ) -> Self {
+        let mut fb = FunctionBuilder::new(&mut res.ctx.func, &mut res.bctx);
+        let current_block = fb.create_block();
+        let mut stack = vec![];
+
+        fb.append_block_params_for_function_params(current_block);
+        for (&param, spec) in fb.block_params(current_block).iter().zip(arg_specs) {
+            stack.push((Slot::Value(param), spec));
+        }
+        fb.switch_to_block(current_block);
+
         Self {
-            fb: FunctionBuilder::new(&mut res.ctx.func, &mut res.bctx),
+            fb,
+            current_block,
             types,
             arch,
-            stack: vec![],
+            stack,
+            ifs: vec![],
+            blocks: SecondaryMap::new(),
         }
     }
 
@@ -52,21 +84,37 @@ impl<'ctx> Builder<'ctx> {
             Slot::Var(v) => self.fb.use_var(v),
         }
     }
+
+    fn pop_as_value(&mut self) -> (ir::Value, TypeSpec) {
+        let (slot, spec) = self.stack.pop().unwrap();
+        (self.slot_as_value(slot), spec)
+    }
+
+    fn switch_to_block(&mut self, block: ir::Block) {
+        if !self.blocks[self.current_block].has_back_refs {
+            self.fb.seal_block(self.current_block);
+        }
+        self.current_block = block;
+        self.fb.switch_to_block(block);
+    }
+
+    fn finalize(mut self) {
+        self.fb.seal_block(self.current_block);
+        self.fb.finalize();
+    }
 }
 
 impl<'ctx> Emmiter<'ctx> {
-    pub fn emit(self, entry: &stac::Entry, ir: Ir) -> CodeRef {
+    pub fn emit(self, entry: &stac::Entry, id: FuncInst, ir: Ir) -> CodeRef {
         let mut res = Res {
             ctx: Context::new(),
             bctx: FunctionBuilderContext::new(),
         };
 
         res.ctx.func.signature = self.load_signature(&entry);
-        // TODO: push params
 
-        let mut builder = Builder::new(&mut res, &ir.types, self.arch);
-        let entry = builder.fb.create_block();
-        builder.fb.switch_to_block(entry);
+        let arg_specs = entry.inputs.iter().filter_map(|ty| self.load_local(ty));
+        let mut builder = Builder::new(&mut res, &ir.types, self.arch, arg_specs);
 
         for &Finst { ref kind, ty, .. } in ir.instrs.iter() {
             match kind {
@@ -78,6 +126,11 @@ impl<'ctx> Emmiter<'ctx> {
                     stac::LitKindAst::Int(i) => {
                         let spec = builder.spec(ty);
                         let value = builder.fb.ins().iconst(spec.repr, i.value() as i64);
+                        builder.stack.push((Slot::Value(value), spec));
+                    }
+                    &stac::LitKindAst::Bool(b) => {
+                        let spec = builder.spec(ty);
+                        let value = builder.fb.ins().iconst(spec.repr, b as i64);
                         builder.stack.push((Slot::Value(value), spec));
                     }
                 },
@@ -115,11 +168,43 @@ impl<'ctx> Emmiter<'ctx> {
                             let rhs = builder.slot_as_value(rhs);
                             builder.fb.def_var(var, rhs);
                         }
+                        (stac::op_group!(cmp), I8 | I16 | I32 | I64) => {
+                            let rhs = builder.slot_as_value(rhs);
+                            let lhs = builder.slot_as_value(lhs);
+                            let strategy = match op {
+                                Eq => IntCC::Equal,
+                                Ne => IntCC::NotEqual,
+                                Lt if lty.signed => IntCC::SignedLessThan,
+                                Lt => IntCC::UnsignedLessThan,
+                                Le if lty.signed => IntCC::SignedLessThanOrEqual,
+                                Le => IntCC::UnsignedLessThanOrEqual,
+                                Gt if lty.signed => IntCC::SignedGreaterThan,
+                                Gt => IntCC::UnsignedGreaterThan,
+                                Ge if lty.signed => IntCC::SignedGreaterThanOrEqual,
+                                Ge => IntCC::UnsignedGreaterThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            let value = builder.fb.ins().icmp(strategy, lhs, rhs);
+                            builder.stack.push((Slot::Value(value), lty));
+                        }
                         _ => todo!(),
                     }
                 }
-                FinstKind::Call(_) => {
-                    todo!()
+                &FinstKind::Call(id) => {
+                    let (fref, arg_count) = self.gen.use_func(id, builder.fb.func);
+                    let args = builder
+                        .stack
+                        .drain(builder.stack.len() - arg_count as usize..)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|(slot, ..)| builder.slot_as_value(slot))
+                        .collect::<Vec<_>>();
+                    let call = builder.fb.ins().call(fref, &args);
+                    let rets = builder.fb.inst_results(call);
+                    if let &[ret] = rets {
+                        let spec = builder.spec(ty);
+                        builder.stack.push((Slot::Value(ret), spec));
+                    }
                 }
                 FinstKind::Field(_) => todo!(),
                 FinstKind::Decl(true) => {
@@ -142,6 +227,40 @@ impl<'ctx> Emmiter<'ctx> {
                         builder.stack.push((Slot::Value(value), spec));
                     }
                 }
+                FinstKind::If => {
+                    let then = builder.fb.create_block();
+                    let end = builder.fb.create_block();
+                    let (cond, _) = builder.pop_as_value();
+                    let spec = builder.spec(ty);
+                    let returns = spec.layout.takes_space();
+
+                    builder.fb.ins().brif(cond, then, &[], end, &[]);
+                    builder.switch_to_block(then);
+                    builder.ifs.push(If { returns, end });
+                }
+                FinstKind::Else => {
+                    let If { returns, end } = builder.ifs.pop().unwrap();
+                    let ret = returns.then(|| builder.pop_as_value().0);
+
+                    let new_end = builder.fb.create_block();
+                    builder.fb.ins().jump(new_end, ret.as_slice());
+                    builder.switch_to_block(end);
+                    builder.ifs.push(If {
+                        returns,
+                        end: new_end,
+                    });
+                }
+                FinstKind::EndIf => {
+                    let If { end, returns } = builder.ifs.pop().unwrap();
+                    let ret = returns.then(|| builder.pop_as_value());
+
+                    if let Some((_, spec)) = ret {
+                        let val = builder.fb.append_block_param(end, spec.repr);
+                        builder.stack.push((Slot::Value(val), spec));
+                    }
+                    builder.fb.ins().jump(end, ret.map(|(v, _)| v).as_slice());
+                    builder.switch_to_block(end);
+                }
             }
         }
 
@@ -152,21 +271,20 @@ impl<'ctx> Emmiter<'ctx> {
             builder.fb.ins().return_(&[]);
         }
 
-        builder.fb.seal_block(entry);
+        builder.finalize();
 
-        builder.fb.finalize();
+        if self.dump_ir {
+            self.diags
+                .builder(self.modules.files())
+                .footer(Severty::Note, format_args!("Generated IR for {entry:?}"))
+                .footer(Severty::Note, res.ctx.func.display());
+        }
 
-        let id = self
-            .gen
+        let module_id = self.gen.func_mapping[id as usize];
+        self.gen
             .module
-            .declare_function(
-                "main",
-                cranelift_module::Linkage::Export,
-                &res.ctx.func.signature,
-            )
+            .define_function(module_id, &mut res.ctx)
             .unwrap();
-
-        self.gen.module.define_function(id, &mut res.ctx).unwrap();
 
         CodeRef::from_repr(0)
     }
@@ -177,17 +295,19 @@ impl<'ctx> Emmiter<'ctx> {
                 .inputs
                 .iter()
                 .filter_map(|ty| self.load_local(ty))
+                .map(|spec| spec.repr)
                 .map(ir::AbiParam::new)
                 .collect(),
             returns: vec![ir::AbiParam::new(ir::types::I32)],
-            call_conv: isa::CallConv::SystemV,
+            // TODO: we could use fast internally
+            call_conv: self.gen.module.target_config().default_call_conv,
         }
     }
 
-    fn load_local(&self, local: &stac::Local) -> Option<ir::Type> {
+    fn load_local(&self, local: &stac::Local) -> Option<TypeSpec> {
         match local {
             stac::Local::Ct(_) => None,
-            stac::Local::Rt(ty) => Some(TypeSpec::from_ty(ty, self.arch).repr),
+            stac::Local::Rt(ty) => Some(TypeSpec::from_ty(ty, self.arch)),
         }
     }
 }
@@ -196,7 +316,7 @@ impl<'ctx> Emmiter<'ctx> {
 struct TypeSpec {
     signed: bool,
     repr: ir::Type,
-    _layout: Layout,
+    layout: Layout,
 }
 
 impl TypeSpec {
@@ -207,7 +327,7 @@ impl TypeSpec {
         let signed = ty.is_signed();
         Self {
             repr,
-            _layout: layout,
+            layout,
             signed,
         }
     }
@@ -248,7 +368,7 @@ impl TypeSpec {
     fn _invalid() -> TypeSpec {
         TypeSpec {
             repr: ir::types::INVALID,
-            _layout: Layout::ZERO,
+            layout: Layout::ZERO,
             signed: false,
         }
     }

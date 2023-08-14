@@ -117,8 +117,8 @@ pub struct Span {
 impl Span {
     pub(crate) fn new(row: usize, col: usize, file_ref: FileRef) -> Self {
         Self {
-            row: row as u16,
-            col: col as u16,
+            row: row as _,
+            col: col as _,
             file: file_ref,
         }
     }
@@ -128,11 +128,11 @@ impl Span {
     }
 
     pub fn row(&self) -> usize {
-        self.row as usize
+        self.row as _
     }
 
     pub fn col(&self) -> usize {
-        self.col as usize
+        self.col as _
     }
 
     pub fn to_pos(&self) -> Pos {
@@ -152,17 +152,17 @@ pub struct Pos {
 impl Pos {
     pub fn new(row: usize, col: usize) -> Self {
         Self {
-            row: row as u16,
-            col: col as u16,
+            row: row as _,
+            col: col as _,
         }
     }
 
     pub fn row(&self) -> usize {
-        self.row as usize
+        self.row as _
     }
 
     pub fn col(&self) -> usize {
-        self.col as usize
+        self.col as _
     }
 
     pub fn to_span(&self, file_ref: FileRef) -> Span {

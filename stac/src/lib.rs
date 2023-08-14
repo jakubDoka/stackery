@@ -43,6 +43,6 @@ pub use {instrs::instr_test_util::*, loader::load_test_util::*};
 
 pub use {
     diagnostics::*, graphs::*, instantiate::*, instrs::*, layout::*, lexer::*, loader::*,
-    mini_alloc, parser::expr::*, parser::fmt::*, parser::*, source::*, storage::refs::*,
-    storage::*, temp_mem::*, types::*,
+    mini_alloc, parser::expr::*, parser::fmt::*, parser::*, print_test, source::*,
+    storage::refs::*, storage::*, temp_mem::*, types::*,
 };

@@ -34,7 +34,7 @@ fn get_config() -> &'static Config {
     CONFIG.get_or_init(Config::new)
 }
 
-pub fn case(name: &str, body: impl FnOnce(&mut String)) {
+pub fn case(name: &str, body: impl FnOnce(&str, &mut String)) {
     struct Case<'a> {
         name: &'a str,
         buffer: String,
@@ -152,7 +152,7 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
         buffer: String::new(),
     };
 
-    body(&mut case.buffer);
+    body(name, &mut case.buffer);
 
     impl Drop for Case<'_> {
         fn drop(&mut self) {
@@ -169,11 +169,11 @@ pub fn case(name: &str, body: impl FnOnce(&mut String)) {
 
 #[macro_export]
 macro_rules! cases {
-    ($(fn $name:ident($ctx:ident) $body:block)*) => {$(
+    ($(fn $name:ident($test_name:tt, $ctx:ident) $body:block)*) => {$(
         #[test]
         fn $name() {
             let fn_name = $crate::function_name($name);
-            let test_fn = |$ctx: &mut String| $body;
+            let test_fn = |$test_name: &str, $ctx: &mut String| $body;
             $crate::case(&fn_name, test_fn);
         }
     )*};
@@ -184,11 +184,11 @@ mod tests {
     use super::*;
 
     cases! {
-        fn test1(ctx) {
+        fn test1(_, ctx) {
             ctx.push_str("test1");
         }
 
-        fn test2(ctx) {
+        fn test2(_, ctx) {
             ctx.push_str("test2");
         }
     }

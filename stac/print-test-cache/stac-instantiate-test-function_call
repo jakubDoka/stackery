@@ -11,6 +11,4 @@ module root:
   body:
     func#1:1
     call 0
-
-
-Panic occurred during test execution.
+call 0 : i32

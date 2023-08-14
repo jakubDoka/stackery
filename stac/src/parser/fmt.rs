@@ -85,9 +85,21 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
     match unit {
         UnitAst::Literal(ref l) => match l.kind {
             LitKindAst::Int(i) => ctx.push_str(&i.value().to_string()),
+            LitKindAst::Bool(b) => ctx.push_str(&b.to_string()),
         },
         UnitAst::Ident(ident) => ctx.push_str(ident.ident.as_str()),
         UnitAst::Import(ident) => ctx.push_str(ident.ident.as_str()),
+        UnitAst::If(i) => {
+            ctx.push_str("if ");
+            format_expr(&i.cond, ctx, indent);
+            ctx.push_str(" ");
+            format_expr(&i.then, ctx, indent);
+            if let Some(else_) = &i.else_ {
+                ctx.push_str(" ");
+                ctx.push_str("else ");
+                format_expr(else_, ctx, indent);
+            }
+        }
         UnitAst::Block(b) => {
             format_block(b, ctx, indent);
         }

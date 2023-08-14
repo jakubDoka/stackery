@@ -247,7 +247,7 @@ impl CycleDetector {
 mod test {
     use super::{CycleDetector, Graph};
 
-    fn perform_test(graph_source: &str, ctx: &mut String) {
+    fn perform_test(_: &str, graph_source: &str, ctx: &mut String) {
         let graph = parse_graph(graph_source);
         let mut cycle_finder = super::CycleFinder::default();
         let mut merged_graph = Graph::new();
@@ -289,7 +289,7 @@ mod test {
         ";
     }
 
-    fn perform_cycle_detect_test(souce: &str, ctx: &mut String) {
+    fn perform_cycle_detect_test(_: &str, souce: &str, ctx: &mut String) {
         let graph = parse_graph(souce);
         let mut cycle_detector = CycleDetector::new();
         let cycles = cycle_detector.detect_all(&graph);

@@ -352,9 +352,11 @@ impl Severty {
 
 #[cfg(test)]
 mod test {
-    use crate::{DiagnosticConfig, Diagnostics, File, Files, Lexer, Severty, TokenKind};
+    use crate::{
+        print_cases, DiagnosticConfig, Diagnostics, File, Files, Lexer, Severty, TokenKind,
+    };
 
-    fn perform_test(code: &str, ctx: &mut String) {
+    fn perform_test(_: &str, code: &str, ctx: &mut String) {
         let mut files = Files::new();
         let file = files.push(File::new("main".into(), code.into()));
         let lexer = Lexer::new(&files, file);
@@ -373,17 +375,14 @@ mod test {
         ctx.push_str(diags.view());
     }
 
-    print_test::cases! {
-        fn just_do_it(ctx) {
-            perform_test("
+    print_cases! { perform_test:
+        just_do_it "
 main: || {
 \tx: 1;
 }
-", ctx)
-        }
+";
 
-        fn lot_or_code(ctx) {
-            perform_test("
+        lot_or_code "
 main: || {
 \tx: 1;
 
@@ -394,7 +393,6 @@ f: x
 
 
 };
-", ctx)
-        }
+";
     }
 }

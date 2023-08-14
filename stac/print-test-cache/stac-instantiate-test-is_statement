@@ -1,0 +1,18 @@
+module root:
+  bi = :{bi}
+  main = sig:
+    mod0
+    . i32
+  body:
+    true
+    if 10
+    false
+    if 7
+    0
+    else 9
+    1
+    endif
+    else 12
+    2
+    endif
+const 1 : i32

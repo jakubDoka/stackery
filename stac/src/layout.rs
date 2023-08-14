@@ -90,4 +90,8 @@ impl Layout {
     pub fn expanded_align(&self) -> u32 {
         Self::expand_align(self.align())
     }
+
+    pub fn takes_space(&self) -> bool {
+        self.size() > 0
+    }
 }

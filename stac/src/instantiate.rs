@@ -1,16 +1,18 @@
 mod interp_impl;
 
 use crate::{
-    Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules, Mutable, OpCode,
-    Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
+    Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules, OpCode, Ref,
+    Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
 };
 
 type SubsRepr = u16;
 pub type SubsRef = Ref<Type, SubsRepr>;
 pub type FuncInst = u32;
 pub type FieldIndex = u16;
+pub type InstrIindex = u16;
+pub type LabelRefCount = u16;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Local {
     Ct(Resolved),
     Rt(Type),
@@ -24,6 +26,10 @@ pub enum FinstKind {
     BinOp(OpCode),
     Decl(bool),
     Field(FieldIndex),
+
+    If,
+    Else,
+    EndIf,
 
     Drop,
     DropScope(FrameSize, Returns),
@@ -55,15 +61,51 @@ impl Ir {
     }
 }
 
+#[derive(Default)]
+pub struct FuncInstances {
+    lookup: Vec<Entry>,
+    progress: usize,
+    recent: usize,
+}
+
+impl FuncInstances {
+    pub fn next(&mut self) -> Option<(FuncInst, Entry)> {
+        self.lookup.get(self.progress).map(|e| {
+            self.progress += 1;
+            ((self.progress - 1) as _, e.clone())
+        })
+    }
+
+    pub fn project(&mut self, value: Entry) -> FuncInst {
+        if let Some(pos) = self.lookup.iter().position(|e| *e == value) {
+            return pos as _;
+        }
+        let id = self.lookup.len() as _;
+        self.lookup.push(value);
+        id
+    }
+
+    pub fn recent(&self) -> impl IntoIterator<Item = (FuncInst, &Entry)> {
+        (self.recent as FuncInst..).zip(&self.lookup[self.recent..])
+    }
+
+    pub fn clear_recent(&mut self) {
+        self.recent = self.lookup.len();
+    }
+}
+
 pub struct Interpreter<'ctx> {
     arch: Layout,
+    instances: &'ctx mut FuncInstances,
     diags: &'ctx mut Diagnostics,
     modules: &'ctx Modules,
     instrs: &'ctx Instrs,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub id: FuncId,
+    pub ip: u16,
     pub inputs: Vec<Local>,
     pub ret: Type,
 }
@@ -71,12 +113,14 @@ pub struct Entry {
 impl<'ctx> Interpreter<'ctx> {
     pub fn new(
         arch: Layout,
+        instances: &'ctx mut FuncInstances,
         diags: &'ctx mut Diagnostics,
         modules: &'ctx Modules,
         instrs: &'ctx Instrs,
     ) -> Self {
         Self {
             arch,
+            instances,
             diags,
             modules,
             instrs,
@@ -95,7 +139,9 @@ pub fn resolver() -> impl Resolver {
             body: crate::InstrBody,
             span: crate::Span,
         ) -> Option<Resolved> {
-            let mut interp = Interpreter::new(ctx.arch, ctx.diags, ctx.modules, ctx.instrs);
+            let mut instances = crate::FuncInstances::default();
+            let mut interp =
+                Interpreter::new(ctx.arch, &mut instances, ctx.diags, ctx.modules, ctx.instrs);
             interp.ct_eval(span, ctx.module, body, decls)
         }
     }
@@ -107,10 +153,10 @@ pub fn resolver() -> impl Resolver {
 mod test {
     use crate::{
         print_cases, BuiltInType, Diagnostics, Finst, FuncId, Instrs, Interpreter, Layout,
-        LoaderMock, Modules, Mutable, Type,
+        LoaderMock, Modules, Type,
     };
 
-    fn perform_test(source: &str, ctx: &mut String) -> Option<()> {
+    fn perform_test(_: &str, source: &str, ctx: &mut String) -> Option<()> {
         let mut mods = Modules::new();
         let loader = LoaderMock::new(source);
         let meta = crate::load_modules(&mut mods, loader, ctx)?;
@@ -125,18 +171,19 @@ mod test {
         };
 
         let mut diags = Diagnostics::default();
-        let mut interp = Interpreter::new(Layout::ARCH_64, &mut diags, &mods, &instrs);
-        let ir = interp.eval(
-            &crate::Entry {
-                id: FuncId {
-                    module: meta.root(),
-                    func: entry,
-                },
-                inputs: vec![],
-                ret: Type::BuiltIn(BuiltInType::I32),
-            },
-            &mut Vec::new(),
-        );
+        let mut instances = crate::FuncInstances::default();
+        let mut interp =
+            Interpreter::new(Layout::ARCH_64, &mut instances, &mut diags, &mods, &instrs);
+        let id = FuncId {
+            module: meta.root(),
+            func: entry,
+        };
+        let ir = interp.eval(&crate::Entry {
+            id,
+            ip: instrs.func(id).signature_len,
+            inputs: vec![],
+            ret: Type::BuiltIn(BuiltInType::I32),
+        });
 
         if !diags.view().is_empty() {
             ctx.push_str("diagnostics:\n");
@@ -174,6 +221,9 @@ mod test {
                     ctx.push_str(" ");
                     ctx.push_str(r.to_string().as_str());
                 }
+                crate::FinstKind::If => ctx.push_str("if"),
+                crate::FinstKind::Else => ctx.push_str("else"),
+                crate::FinstKind::EndIf => ctx.push_str("endif"),
             }
             ctx.push_str(" : ");
             ctx.push_str(ir.get_ty(*ty).to_string().as_str());
@@ -234,6 +284,18 @@ mod test {
             let bi = :{bi}
             let fun = fn(): bi.i32 1
             let main = fn(): bi.i32 fun()
+        ";
+        is_statement "
+            let bi = :{bi}
+            let main = fn(): bi.i32
+                if true if false 0 else 1 else 2
+        ";
+        runtime_if "
+            let bi = :{bi}
+            let main = fn(): bi.i32 {
+                let mut bool = true;
+                if bool if bool 0 else 1 else 2
+            }
         ";
     }
 }

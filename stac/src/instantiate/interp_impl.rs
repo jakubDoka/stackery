@@ -1,7 +1,10 @@
+use std::ops::Deref;
+
 use crate::{
     lexer, ArgCount, BuiltInType, CtxSym, Finst, FinstKind, FrameSize, FuncId, FuncType, InstrBody,
-    InstrKind, IntLit, IrTypes, LitKindAst, ModuleDecl, ModuleRef, Mutable, OpCode, Resolved,
-    Returns, Severty, ShadowStore, Span, SubsRef, SubsTable, Sym, Type, TypeRef, UnificationError,
+    InstrKind, InstrRef, IntLit, IrTypes, LitKindAst, ModuleDecl, ModuleRef, Mutable, OpCode,
+    Resolved, Returns, Severty, ShadowStore, Span, SubsRef, SubsTable, Sym, Type, TypeRef,
+    UnificationError,
 };
 
 use super::{Entry, Interpreter, Ir, Layout, Local, SubsRepr};
@@ -34,6 +37,11 @@ struct Operand {
     ty: SubsRef,
 }
 
+enum If {
+    Const,
+    Runtime(SubsRef),
+}
+
 #[derive(Default)]
 struct Res<'a> {
     _module: ModuleRef,
@@ -49,8 +57,9 @@ struct Res<'a> {
     ip: usize,
     type_group_seq: SubsRepr,
 
+    if_stack: Vec<If>,
+
     ir: Ir,
-    call_frontier: Vec<Entry>,
 }
 
 impl<'a> Res<'a> {
@@ -180,6 +189,16 @@ impl<'a> Res<'a> {
             }
         }
     }
+
+    fn root_value(&self, instr: Result<Resolved, usize>) -> Resolved {
+        match instr {
+            Err(s) => match self.decls[s].value.clone() {
+                DeclValue::Runtime(_) => unreachable!(),
+                DeclValue::Const(v) => v,
+            },
+            Ok(r) => r,
+        }
+    }
 }
 
 impl<'ctx> Interpreter<'ctx> {
@@ -214,7 +233,38 @@ impl<'ctx> Interpreter<'ctx> {
         Some(r)
     }
 
-    pub fn eval(&mut self, entry: &Entry, call_frontier: &mut Vec<Entry>) -> Ir {
+    fn eval_signature(
+        &mut self,
+        f: FuncId,
+        func: crate::Func,
+        view: crate::InstrBody<'_>,
+        _span: Span,
+    ) -> (Vec<Type>, Type) {
+        let mut res = Res::new(f.module, true, view, self.instrs.decls_of(f.module));
+
+        while let Some(instr) = res.body.instrs.deref()[..func.signature_len as usize].get(res.ip) {
+            res.ip += 1;
+            self.eval_instr(&instr.kind, instr.span.to_span(f.module), &mut res);
+        }
+
+        let ret = match res.pop_operand_as_value().1 {
+            Some(Resolved::Type(t)) => t,
+            f => todo!("error handilng: {f:?}"),
+        };
+
+        let params = res
+            .decls
+            .drain(..)
+            .map(|d| match d.value {
+                DeclValue::Const(Resolved::Type(t)) => t,
+                f => todo!("error handilng: {f:?}"),
+            })
+            .collect();
+
+        (params, ret)
+    }
+
+    pub fn eval(&mut self, entry: &Entry) -> Ir {
         let mut res = Res::new(
             entry.id.module,
             false,
@@ -223,6 +273,7 @@ impl<'ctx> Interpreter<'ctx> {
         );
 
         res.params = entry.inputs.clone();
+        res.ip = entry.ip as _;
 
         while let Some(instr) = res.body.instrs.get(res.ip) {
             res.ip += 1;
@@ -244,8 +295,6 @@ impl<'ctx> Interpreter<'ctx> {
             );
         }
 
-        call_frontier.append(&mut res.call_frontier);
-
         res.remap_types()
     }
 
@@ -264,7 +313,67 @@ impl<'ctx> Interpreter<'ctx> {
                 self.eval_res(Resolved::Const(res.body.consts[c].clone()), span, res)
             }
             InstrKind::Type(t) => self.eval_res(Resolved::Type(res.body.get_ty(t)), span, res),
+            InstrKind::If(e) => self.eval_if(e, span, res),
+            InstrKind::Else(e) => self.eval_else(e, span, res),
+            InstrKind::EndIf => self.eval_endif(span, res),
         }
+    }
+
+    fn eval_if(&mut self, end_block: InstrRef, span: Span, res: &mut Res) {
+        let (ty, r) = res.pop_operand_as_value();
+
+        let bool = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Bool));
+        self.unify_subs(ty, bool, span, res);
+
+        if let Some(Resolved::Const(LitKindAst::Bool(b))) = r {
+            res.if_stack.push(If::Const);
+            if !b {
+                res.ip = end_block.index() + 1;
+            }
+            return;
+        }
+
+        let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unknown));
+        res.if_stack.push(If::Runtime(ty));
+        res.ir.instrs.push(Finst {
+            kind: FinstKind::If,
+            ty,
+            span,
+        });
+    }
+
+    fn eval_else(&mut self, end_block: InstrRef, span: Span, res: &mut Res) {
+        let If::Runtime(ty) = res.if_stack.pop().unwrap() else {
+            res.ip = end_block.index() + 1;
+            return;
+        };
+
+        let nothing = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+        let last_instr = res.ir.instrs.last().map_or(nothing, |f| f.ty);
+        let ty = self.unify_subs(last_instr, ty, span, res);
+
+        res.ir.instrs.push(Finst {
+            kind: FinstKind::Else,
+            ty,
+            span,
+        });
+        res.if_stack.push(If::Runtime(ty));
+    }
+
+    fn eval_endif(&mut self, span: Span, res: &mut Res) {
+        let If::Runtime(ty) = res.if_stack.pop().unwrap() else {
+            return;
+        };
+
+        let nothing = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+        let last_instr = res.ir.instrs.last().map_or(nothing, |f| f.ty);
+        let ty = self.unify_subs(last_instr, ty, span, res);
+
+        res.ir.instrs.push(Finst {
+            kind: FinstKind::EndIf,
+            ty,
+            span,
+        });
     }
 
     fn eval_uninit(&mut self, _typ: TypeRef, _res: &mut Res) {
@@ -278,6 +387,7 @@ impl<'ctx> Interpreter<'ctx> {
             Resolved::Module(_) => Type::BuiltIn(BuiltInType::Module),
             Resolved::Const(c) => match c {
                 LitKindAst::Int(_) => Type::BuiltIn(BuiltInType::Integer),
+                LitKindAst::Bool(_) => Type::BuiltIn(BuiltInType::Bool),
             },
         }
     }
@@ -406,7 +516,7 @@ impl<'ctx> Interpreter<'ctx> {
                 None
             }
             (_, lhs, rhs) => {
-                let [lhs_r, rhs_r] = [self.root_value(lhs, res), self.root_value(rhs, res)];
+                let [lhs_r, rhs_r] = [res.root_value(lhs), res.root_value(rhs)];
                 self.fold_resolved_binop(op, span, lhs_r, rhs_r)
             }
         };
@@ -476,81 +586,46 @@ impl<'ctx> Interpreter<'ctx> {
         }
     }
 
-    fn eval_call(&mut self, _ac: ArgCount, _span: Span, _res: &mut Res) {
-        //let func = res.stack.pop().unwrap();
-        //let args_range = res.stack.len() - ac as usize..;
+    fn eval_call(&mut self, ac: ArgCount, span: Span, res: &mut Res) {
+        let (_, Some(Resolved::Type(Type::Func(FuncType::Static(id))))) =
+            res.pop_operand_as_value()
+        else {
+            self.diags.todo_error(
+                self.modules.files(),
+                span,
+                "cannot call this expression (yet)",
+            );
+            return;
+        };
 
-        //let Type::Func(func_ty) = &res.types[func.ty] else {
-        //    self.diags
-        //        .builder(self.modules.files())
-        //        .footer(Severty::Error, "cannot call this expression")
-        //        .annotation(Severty::Error, span, "this expression is not callable");
-        //    return;
-        //};
+        let (func, view) = self.instrs.func_data(id);
+        let (params, ret) = self.eval_signature(id, func.clone(), view, span);
 
-        //let sig = match func_ty {
-        //    &FuncType::Static(func) => self.instrs.sig_of(func),
-        //    FuncType::Dynamic(func) => &func,
-        //};
+        let entry = Entry {
+            id,
+            ip: func.signature_len,
+            inputs: params.iter().cloned().map(Local::Rt).collect(),
+            ret: ret.clone(),
+        };
+        let inst_id = self.instances.project(entry);
 
-        //if let &FuncType::Static(func) = func_ty {
-        //    let inputs = res.stack[args_range.clone()]
-        //        .iter()
-        //        .map(|op| {
-        //            if op.runtime {
-        //                Local::Rt(res.types[op.ty].clone())
-        //            } else {
-        //                Local::Ct(self.root_value(res.ir.instrs[op.start].0.clone(), res))
-        //            }
-        //        })
-        //        .collect::<Vec<_>>();
+        let param_range = res.stack.len() - ac as usize..;
+        let operands = res.stack.drain(param_range.clone()).collect::<Vec<_>>();
+        for (param, operand) in params.iter().zip(&operands) {
+            let param_ty = res.intern_and_create_group(param);
+            self.unify_subs(param_ty, operand.ty, span, res);
+        }
 
-        //    let entry = Entry {
-        //        id: func,
-        //        inputs: inputs.clone(),
-        //        ret: sig.ret.clone(),
-        //    };
-
-        //    res.call_frontier.push(entry);
-        //}
-
-        //if sig.args.len() != ac as usize {
-        //    self.diags
-        //        .builder(self.modules.files())
-        //        .footer(Severty::Error, "wrong number of arguments")
-        //        .annotation(
-        //            Severty::Error,
-        //            span,
-        //            format_args!(
-        //                "expected {} arguments, found {}",
-        //                sig.args.len(),
-        //                ac as usize
-        //            ),
-        //        );
-        //    return;
-        //}
-
-        //let has_side_effects = true; // TODO: use value from the type
-        //if func.runtime
-        //    || has_side_effects
-        //    || res.stack[args_range.clone()].iter().any(|a| a.runtime)
-        //{
-        //    let base_operand = res.stack.drain(args_range).next().unwrap_or(func);
-
-        //    let ty = res.create_group(sig.ret.clone());
-        //    res.stack.push(Operand {
-        //        start: base_operand.start,
-        //        runtime: true,
-        //        mutable: false,
-        //        ty,
-        //    });
-
-        //    res.ir.instrs.push((InstrKind::Call(ac), ty));
-
-        //    return;
-        //}
-
-        todo!()
+        let ty = res.intern_and_create_group(&ret);
+        res.stack.push(Operand {
+            value: OperandValue::AsInstr,
+            ty,
+        });
+        res.ir.instrs.push(Finst {
+            kind: FinstKind::Call(inst_id),
+            ty,
+            span,
+        });
     }
 
     fn unify_subs(&mut self, a: SubsRef, b: SubsRef, span: Span, res: &mut Res) -> SubsRef {
@@ -649,7 +724,7 @@ impl<'ctx> Interpreter<'ctx> {
             if let Some(r) = resolved {
                 res.push_res(ty, r, span)
             }
-            
+
             res.ir.instrs.push(Finst {
                 kind: FinstKind::Decl(mutable == Mutable::True),
                 ty,
@@ -717,15 +792,5 @@ impl<'ctx> Interpreter<'ctx> {
             ty,
             span,
         });
-    }
-
-    fn root_value(&mut self, instr: Result<Resolved, usize>, res: &Res) -> Resolved {
-        match instr {
-            Err(s) => match res.decls[s].value.clone() {
-                DeclValue::Runtime(_) => unreachable!(),
-                DeclValue::Const(v) => v,
-            },
-            Ok(r) => r,
-        }
     }
 }

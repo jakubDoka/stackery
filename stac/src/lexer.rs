@@ -170,8 +170,8 @@ define_lexer! {
     }
 
     tokens {
-        //If = "if"
-        //Else = "else"
+        If = "if"
+        Else = "else"
         //Loop = "loop"
         //Break = "break"
         //Continue = "continue"
@@ -183,8 +183,8 @@ define_lexer! {
         Let = "let"
         Mut = "mut"
 
-        //True = "true"
-        //False = "false"
+        True = "true"
+        False = "false"
 
         Dot = "."
         //DoubleDot = ".."
@@ -306,7 +306,7 @@ impl<'a> Iterator for ImportLexer<'a> {
 mod test {
     use crate::{print_cases, ImportLexer, TokenKind};
 
-    fn perform_test(imput: &str, ctx: &mut String) {
+    fn perform_test(_: &str, imput: &str, ctx: &mut String) {
         let mut lexer = TokenKind::lexer(imput);
         while let Some(token) = lexer.next() {
             ctx.push_str(&format!("{:?} {:?}\n", token, lexer.slice()));

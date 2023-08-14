@@ -1,0 +1,11 @@
+module root:
+  foo = sig:
+    mod0
+    . i32
+  body:
+    true
+    if 5
+    1
+    else 7
+    2
+    endif

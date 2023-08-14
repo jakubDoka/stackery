@@ -1,4 +1,4 @@
-#![feature(return_position_impl_trait_in_trait)]
+#![feature(return_position_impl_trait_in_trait, never_type, option_as_slice)]
 
 use clap::Parser;
 
@@ -19,6 +19,6 @@ fn main() {
     let args = Args::parse();
 
     match args.command {
-        Command::Ct(command) => command.run(),
-    }
+        Command::Ct(command) => command.run(compile::DefaultLoaderProvider, &mut std::io::stdout()),
+    };
 }

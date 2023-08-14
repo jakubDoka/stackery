@@ -1,0 +1,34 @@
+module root:
+  bi = :{bi}
+  main = sig:
+    mod0
+    . i32
+  body:
+    true
+    decl mut
+    sym0
+    if 12
+    sym0
+    if 9
+    0
+    else 11
+    1
+    endif
+    else 14
+    2
+    endif
+    drop scope 1 returns
+const true : bool
+decl mut : bool
+sym0 : bool
+if : i32
+sym0 : bool
+if : i32
+const 0 : i32
+else : i32
+const 1 : i32
+endif : i32
+else : i32
+const 2 : i32
+endif : i32
+drop scope 1 true : ()

@@ -3,8 +3,8 @@ use mini_alloc::IdentStr;
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
     ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, FuncId,
-    FuncType, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span, Sym, Type,
-    TypeRef, UnaryAst, UnitAst,
+    FuncType, IfAst, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span, Sym,
+    Type, TypeRef, UnaryAst, UnitAst,
 };
 
 use super::{
@@ -153,6 +153,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
             UnitAst::Literal(l) => self.build_literal(l, res),
             UnitAst::Ident(i) => self.build_ident(i, res),
             UnitAst::Import(i) => self.build_import(i, res),
+            UnitAst::If(i) => self.build_if(i, res),
             UnitAst::Block(b) => self.build_block(b, res),
             UnitAst::Unary(u) => self.build_unary(u, res),
             UnitAst::Call(c) => self.build_call(c, res),
@@ -207,6 +208,33 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         };
 
         res.push_instr(InstrKind::Module(module), import.span);
+        Some(())
+    }
+
+    fn build_if<'arena>(
+        &mut self,
+        IfAst {
+            keyword,
+            cond,
+            then,
+            else_,
+        }: &IfAst<'arena>,
+        res: &mut Res<'arena>,
+    ) -> Option<()> {
+        self.build_expr(cond, res)?;
+        let if_ref = res.push_instr(InstrKind::EndIf, *keyword);
+
+        self.build_expr(then, res)?;
+
+        let end_ref = res.push_instr(InstrKind::EndIf, *keyword);
+        res.body.instrs[if_ref].kind = InstrKind::If(end_ref);
+
+        if let Some(else_) = else_ {
+            self.build_expr(else_, res)?;
+            let final_ref = res.push_instr(InstrKind::EndIf, *keyword);
+            res.body.instrs[end_ref].kind = InstrKind::Else(final_ref);
+        }
+
         Some(())
     }
 

@@ -35,15 +35,21 @@ pub enum Mutable {
 
 #[derive(Clone, Debug)]
 pub enum InstrKind {
-    Uninit(TypeRef),
-    Sym(Sym),
     Module(ModuleRef),
     Const(ConstRef),
     Type(TypeRef),
+
+    Uninit(TypeRef),
+    Sym(Sym),
+    Decl(Mutable),
     BinOp(OpCode),
     Call(ArgCount),
     Field(CtxSym),
-    Decl(Mutable),
+
+    If(InstrRef),
+    Else(InstrRef),
+    EndIf,
+
     Drop,
     DropScope(FrameSize, Returns),
 }
@@ -157,6 +163,17 @@ impl Instrs {
                 _ => None,
             })
     }
+
+    pub fn func_data(&self, f: FuncId) -> (Func, InstrBody) {
+        let module_view = self.decls.view(self.modules[f.module]);
+        let func = module_view.funcs[f.func].clone();
+        let body = self.bodies.view(func.body);
+        (func, body)
+    }
+
+    pub fn func(&self, id: FuncId) -> Func {
+        self.decls.view(self.modules[id.module]).funcs[id.func].clone()
+    }
 }
 
 impl ModuleDeclBuilder {
@@ -197,7 +214,7 @@ impl<'ctx> TyResolverCtx<'ctx> {
 pub struct ScopeFrame(usize);
 
 impl ScopeFrame {
-    pub fn new<T>(s: &mut Vec<T>) -> Self {
+    pub fn new<T>(s: &Vec<T>) -> Self {
         Self(s.len())
     }
 
@@ -220,7 +237,7 @@ pub trait Resolver {
     ) -> Option<Resolved>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Resolved {
     Type(Type),
     Module(ModuleRef),
@@ -343,6 +360,15 @@ pub mod instr_test_util {
                 ctx.push_str("call ");
                 ctx.push_str(ac.to_string().as_str());
             }
+            InstrKind::If(s) => {
+                ctx.push_str("if ");
+                ctx.push_str(s.index().to_string().as_str());
+            }
+            InstrKind::Else(label) => {
+                ctx.push_str("else ");
+                ctx.push_str(label.index().to_string().as_str());
+            }
+            InstrKind::EndIf => ctx.push_str("endif"),
         }
     }
 
@@ -435,7 +461,7 @@ mod test {
 
     use crate::{load_modules, parse_modules, print_cases, TyResolverMock};
 
-    fn prefrom_test(source: &str, ctx: &mut String) {
+    fn prefrom_test(_: &str, source: &str, ctx: &mut String) {
         let mut mods = crate::Modules::new();
         let loader = crate::LoaderMock::new(source);
         let Some(meta) = load_modules(&mut mods, loader, ctx) else {
@@ -451,5 +477,6 @@ mod test {
         function "let main = fn(): :{bi}.i32 0";
         arguments "let main = fn(a: :{bi}.i32): :{bi}.i32 a * 2";
         import "let bi = :{bi} let drop = fn(): bi.i32 42";
+        if_stmt "let foo = fn(): :{bi}.i32 if true 1 else 2";
     }
 }

@@ -94,6 +94,8 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         let token = self.next();
 
         let expr = match token.kind {
+            If => self.if_expr(diver.untyped_dive(), token.span),
+            Else => self.unex_tok(token, "else can only follow an if expression")?,
             Fn => self.func(diver.untyped_dive(), token.span),
             Mut => self.unex_tok(token, "mut can only follow a declaration")?,
             Comma => self.unex_tok(token, "comma can only follow an expression")?,
@@ -123,6 +125,8 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
                 .map(UnitAst::Decl),
             Dot => self.unex_tok(token, "dot can only follow an expression")?,
             Int => self.int(token),
+            True => self.bool(token, true),
+            False => self.bool(token, false),
             Op(op) => self.unary(
                 diver.untyped_dive(),
                 OpAst {
@@ -135,6 +139,22 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         }?;
 
         self.handle_postfix(diver, expr)
+    }
+
+    fn if_expr(&mut self, mut diver: Diver, keyword: crate::Span) -> Option<UnitAst<'arena>> {
+        let cond = self.expr(diver.untyped_dive())?;
+        let then = self.expr(diver.untyped_dive())?;
+        let else_ = self
+            .try_advance(Else)
+            .map(|_| self.expr(diver))
+            .transpose()?;
+
+        Some(UnitAst::If(self.arena.alloc(IfAst {
+            keyword,
+            cond,
+            then,
+            else_,
+        })))
     }
 
     fn decl(&mut self, mut diver: Diver, keyword: Span) -> Option<DeclAst<'arena>> {
@@ -291,6 +311,13 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         })
     }
 
+    fn bool(&self, token: Token, value: bool) -> Option<crate::UnitAst<'arena>> {
+        Some(crate::UnitAst::Literal(crate::LitAst {
+            span: token.span,
+            kind: crate::LitKindAst::Bool(value),
+        }))
+    }
+
     fn ident(&mut self, objective: impl fmt::Display) -> Option<IdentAst> {
         let token =
             self.expect_advance(Ident, format_args!("expected identifier for {}", objective))?;
@@ -328,6 +355,7 @@ pub enum UnitAst<'arena> {
     Ident(IdentAst),
     Import(IdentAst),
 
+    If(&'arena IfAst<'arena>),
     Block(&'arena BlockAst<'arena>),
     Unary(&'arena UnaryAst<'arena>),
     Call(&'arena CallAst<'arena>),
@@ -339,19 +367,28 @@ pub enum UnitAst<'arena> {
 
 impl UnitAst<'_> {
     pub fn span(&self) -> Span {
+        use UnitAst::*;
         match self {
-            UnitAst::Literal(literal) => literal.span,
-            UnitAst::Ident(ident) => ident.span,
-            UnitAst::Import(ident) => ident.span,
-            UnitAst::Block(block) => block.brace,
-            UnitAst::Unary(unary) => unary.op.span,
-            UnitAst::Call(call) => call.caller.span(),
-            UnitAst::Func(func) => func.keyword,
-            UnitAst::Decl(decl) => decl.keyword,
-            UnitAst::Paren(expr) => expr.span(),
-            UnitAst::Field(field) => field.dot,
+            Literal(literal) => literal.span,
+            Ident(ident) | Import(ident) => ident.span,
+            If(if_) => if_.keyword,
+            Block(block) => block.brace,
+            Unary(unary) => unary.op.span,
+            Call(call) => call.caller.span(),
+            Func(func) => func.keyword,
+            Decl(decl) => decl.keyword,
+            Paren(expr) => expr.span(),
+            Field(field) => field.dot,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IfAst<'arena> {
+    pub keyword: Span,
+    pub cond: ExprAst<'arena>,
+    pub then: ExprAst<'arena>,
+    pub else_: Option<ExprAst<'arena>>,
 }
 
 #[derive(Debug, Clone)]
@@ -447,12 +484,14 @@ impl IntLit {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LitKindAst {
     Int(IntLit),
+    Bool(bool),
 }
 
 impl fmt::Display for LitKindAst {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LitKindAst::Int(int) => int.value().fmt(f),
+            LitKindAst::Bool(bool) => bool.fmt(f),
         }
     }
 }
@@ -468,7 +507,7 @@ mod test {
     use crate::{format_ast, Diagnostics, File, Files, Parser};
     use mini_alloc::{ArenaBase, DiverBase};
 
-    fn perform_test(source_code: &str, ctx: &mut String) {
+    fn perform_test(_: &str, source_code: &str, ctx: &mut String) {
         let mut files = Files::new();
         let file = File::new("test".into(), source_code.into());
         let file_id = files.push(file);

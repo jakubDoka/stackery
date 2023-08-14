@@ -917,7 +917,7 @@ mod test {
         assert!(to_reserve.iter().all(|&r| &vec[r] == &[1, 2, 3, 4]));
     }
 
-    fn perform_subs_test(source: &str, ctx: &mut String) {
+    fn perform_subs_test(_: &str, source: &str, ctx: &mut String) {
         let mut subs = super::SubsTable::<u16>::new();
 
         for line in source.lines() {

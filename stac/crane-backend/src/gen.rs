@@ -1,6 +1,10 @@
-use cranelift_codegen::settings::{self, Flags};
+use cranelift_codegen::{
+    ir,
+    settings::{self, Flags},
+};
+use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use stac::{Diagnostics, Instrs, Layout, Modules, Ref};
+use stac::{Diagnostics, FuncInst, Instrs, Layout, Modules, Ref};
 use target_lexicon::Triple;
 
 mod emit_impl;
@@ -10,6 +14,7 @@ pub type CodeRef = Ref<(), u32>;
 pub struct Generator {
     _target: Triple,
     module: ObjectModule,
+    func_mapping: Vec<cranelift_module::FuncId>,
 }
 
 impl Generator {
@@ -30,20 +35,51 @@ impl Generator {
         Self {
             _target: target,
             module,
+            func_mapping: Vec::new(),
         }
     }
 
     pub fn finish(self) -> Vec<u8> {
         self.module.finish().emit().unwrap()
     }
+
+    pub fn declare_func(&mut self, id: FuncInst, sig: ir::Signature) -> cranelift_module::FuncId {
+        let name = Self::func_name(id);
+        let linkage = Linkage::Export;
+        let f = self.module.declare_function(&name, linkage, &sig).unwrap();
+        self.func_mapping.push(f);
+        f
+    }
+
+    pub fn use_func(&mut self, id: FuncInst, func: &mut ir::Function) -> (ir::FuncRef, usize) {
+        let id = self.func_mapping[id as usize];
+        let fref = self.module.declare_func_in_func(id, func);
+        let param_count = self
+            .module
+            .declarations()
+            .get_function_decl(id)
+            .signature
+            .params
+            .len();
+        (fref, param_count)
+    }
+
+    fn func_name(id: FuncInst) -> String {
+        if id == 0 {
+            String::from("main")
+        } else {
+            format!("func_{}", id)
+        }
+    }
 }
 
 pub struct Emmiter<'ctx> {
-    _diags: &'ctx mut Diagnostics,
+    diags: &'ctx mut Diagnostics,
     gen: &'ctx mut Generator,
-    _modules: &'ctx Modules,
+    modules: &'ctx Modules,
     _instrs: &'ctx Instrs,
     arch: Layout,
+    dump_ir: bool,
 }
 
 impl<'ctx> Emmiter<'ctx> {
@@ -53,13 +89,15 @@ impl<'ctx> Emmiter<'ctx> {
         modules: &'ctx Modules,
         instrs: &'ctx Instrs,
         arch: Layout,
+        dump_ir: bool,
     ) -> Self {
         Self {
-            _diags: diags,
+            diags,
             gen,
-            _modules: modules,
+            modules,
             _instrs: instrs,
             arch,
+            dump_ir,
         }
     }
 }

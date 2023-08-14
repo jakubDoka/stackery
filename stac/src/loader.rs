@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{BitSet, Diagnostics, File, FileRef, Files, ShadowStore, Slice, VecStore};
-use mini_alloc::IdentStr;
+use mini_alloc::{hashbrown::HashMap, IdentStr};
 
 mod loader_impl;
 
@@ -198,23 +198,23 @@ enum VisErrorReason {
     FilePrivate,
 }
 
+pub macro print_cases($test_func:ident: $($name:ident $($arg:expr),*;)*) {
+    $crate::print_test::cases! {
+        $(
+            fn $name(name, ctx) {
+                $test_func(name, $($arg)*, ctx);
+            }
+        )*
+    }
+}
+
 #[cfg(test)]
 pub mod load_test_util {
-    use std::{collections::HashMap, future::Future, io};
+    use std::future::Future;
 
-    use crate::{File, FileRef, Loader, LoaderCtx, LoaderFut, LoaderRes, ModuleMeta, Modules};
+    use crate::{FileRef, Loader, LoaderCtx, LoaderFut, ModuleMeta, Modules};
     use mini_alloc::IdentStr;
     use pollster::FutureExt;
-
-    pub macro print_cases($test_func:ident: $($name:ident $($arg:expr),*;)*) {
-        print_test::cases! {
-            $(
-                fn $name(ctx) {
-                    $test_func($($arg)*, ctx);
-                }
-            )*
-        }
-    }
 
     pub macro bail($message:literal $diags:ident $ctx:ident $control:ident) {
         $ctx.push_str($message);
@@ -291,76 +291,6 @@ pub mod load_test_util {
         }
     }
 
-    pub struct LoaderMock<'a> {
-        modules: HashMap<&'a str, &'a str>,
-        loaded: HashMap<IdentStr, FileRef>,
-    }
-
-    impl<'a> LoaderMock<'a> {
-        pub fn new(mut files: &'a str) -> Self {
-            let delim = '`';
-            let mut modules = HashMap::new();
-
-            if !files.contains(delim) {
-                modules.insert("root", files);
-
-                return Self {
-                    modules,
-                    loaded: HashMap::new(),
-                };
-            }
-
-            while let Some((_, rest)) = files.split_once(delim) {
-                let (name, rest) = rest.split_once(char::is_whitespace).unwrap();
-                let (source, rest) = rest.split_once(delim).unwrap();
-                modules.insert(name, source);
-                files = rest;
-            }
-
-            Self {
-                modules,
-                loaded: HashMap::new(),
-            }
-        }
-
-        fn load(
-            &mut self,
-            mut ctx: crate::LoaderCtx<'_>,
-            _: Option<crate::FileRef>,
-            id: mini_alloc::IdentStr,
-        ) -> Result<crate::FileRef, io::Result<LoaderRes>> {
-            if let Some(&file) = self.loaded.get(&id) {
-                return Ok(file);
-            }
-
-            let id_str = id.as_str();
-
-            let Some(&source) = self.modules.get(id_str) else {
-                return Err(Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("module {} not found", id_str),
-                )));
-            };
-
-            let file = File::new(id.as_str().into(), source.to_owned());
-            let slot = ctx.reserve_slot();
-            self.loaded.insert(id, slot);
-
-            Err(Ok(LoaderRes { file, slot }))
-        }
-    }
-
-    impl<'a> Loader for LoaderMock<'a> {
-        fn create_loader(
-            &mut self,
-            ctx: LoaderCtx<'_>,
-            from: Option<FileRef>,
-            id: IdentStr,
-        ) -> Result<FileRef, impl LoaderFut> {
-            self.load(ctx, from, id).map_err(|fut| async move { fut })
-        }
-    }
-
     pub fn load_modules(
         mods: &mut Modules,
         mut loader: impl Loader,
@@ -387,18 +317,88 @@ pub mod load_test_util {
     }
 }
 
+pub struct LoaderMock<'a> {
+    modules: HashMap<&'a str, &'a str>,
+    loaded: HashMap<IdentStr, FileRef>,
+}
+
+impl<'a> LoaderMock<'a> {
+    pub fn new(mut files: &'a str) -> Self {
+        let delim = '`';
+        let mut modules = HashMap::new();
+
+        if !files.contains(delim) {
+            modules.insert("root", files);
+
+            return Self {
+                modules,
+                loaded: HashMap::new(),
+            };
+        }
+
+        while let Some((_, rest)) = files.split_once(delim) {
+            let (name, rest) = rest.split_once(char::is_whitespace).unwrap();
+            let (source, rest) = rest.split_once(delim).unwrap();
+            modules.insert(name, source);
+            files = rest;
+        }
+
+        Self {
+            modules,
+            loaded: HashMap::new(),
+        }
+    }
+
+    fn load(
+        &mut self,
+        mut ctx: crate::LoaderCtx<'_>,
+        _: Option<crate::FileRef>,
+        id: mini_alloc::IdentStr,
+    ) -> Result<crate::FileRef, io::Result<LoaderRes>> {
+        if let Some(&file) = self.loaded.get(&id) {
+            return Ok(file);
+        }
+
+        let id_str = id.as_str();
+
+        let Some(&source) = self.modules.get(id_str) else {
+            return Err(Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("module {} not found", id_str),
+            )));
+        };
+
+        let file = File::new(id.as_str().into(), source.to_owned());
+        let slot = ctx.reserve_slot();
+        self.loaded.insert(id, slot);
+
+        Err(Ok(LoaderRes { file, slot }))
+    }
+}
+
+impl<'a> Loader for LoaderMock<'a> {
+    fn create_loader(
+        &mut self,
+        ctx: LoaderCtx<'_>,
+        from: Option<FileRef>,
+        id: IdentStr,
+    ) -> Result<FileRef, impl LoaderFut> {
+        self.load(ctx, from, id).map_err(|fut| async move { fut })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
         load_modules, print_cases, DelayedLoaderMock, Loader, LoaderMock, ModuleRef, Modules,
     };
 
-    fn perform_test(source: &str, ctx: &mut String) {
+    fn perform_test(_: &str, source: &str, ctx: &mut String) {
         let loader = LoaderMock::new(source);
         perform_test_low(loader, ctx);
     }
 
-    fn perfrom_delayed_test(source: &str, ctx: &mut String) {
+    fn perfrom_delayed_test(_: &str, source: &str, ctx: &mut String) {
         let delay_ms = 50;
         let now = std::time::Instant::now();
         let loader = DelayedLoaderMock::new(delay_ms, LoaderMock::new(source));

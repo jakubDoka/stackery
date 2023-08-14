@@ -8,12 +8,4 @@ module root:
     1
     1
     +
-diagnostics:
-error: no such field on the type
--> "root":2:36
-2|             let bi = :{bi}
-3|             let main = fn(): bi.i32.f 1 + 1
-                                       ^ accessed here
-4|         
-
 const 2 : i32
