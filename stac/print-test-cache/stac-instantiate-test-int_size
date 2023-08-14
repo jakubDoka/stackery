@@ -1,9 +1,12 @@
 module root:
   bi = :{bi}
-  main = (): i32:
+  main = sig:
+    mod0
+    . i32
+  body:
     mod0
     . i64
     . size
     1
     +
-9 : i32
+const 9 : i32

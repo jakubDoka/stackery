@@ -3,8 +3,8 @@ use mini_alloc::IdentStr;
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
     ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, FuncId,
-    FuncType, InstrBodyRef, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span,
-    Sym, Type, TypeRef, UnaryAst, UnitAst,
+    FuncType, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span, Sym, Type,
+    TypeRef, UnaryAst, UnitAst,
 };
 
 use super::{
@@ -33,22 +33,15 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         self.collect_decls(ast, &mut res);
         self.build_funcs(&mut res);
 
-        self.finish_queue(&mut res);
         self.instrs.modules[module] = self.instrs.decls.finish(&mut res.module);
 
         Some(())
     }
 
-    fn finish_queue(&mut self, res: &mut Res) {
-        if !res.func_queue.is_empty() {
-            todo!()
-        }
-    }
-
     fn build_funcs(&mut self, res: &mut Res) {
-        for (func, ast) in std::mem::take(&mut res.func_queue) {
-            if let Some(body) = self.build_func(ast, res) {
-                res.module.funcs[func].body = body;
+        while let Some((func_ref, ast)) = res.func_queue.pop() {
+            if let Some(func) = self.build_func(ast, res) {
+                res.module.funcs[func_ref] = func;
             }
         }
     }
@@ -123,18 +116,23 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         }
     }
 
-    fn build_func<'arena>(
-        &mut self,
-        ast: FuncAst<'arena>,
-        res: &mut Res<'arena>,
-    ) -> Option<InstrBodyRef> {
+    fn build_func<'arena>(&mut self, ast: FuncAst<'arena>, res: &mut Res<'arena>) -> Option<Func> {
+        let param_count = self.build_signature(&ast, res)?;
+        let signature_len = res.body.instrs.len() as InstrRepr;
+
         let base_frame = ScopeFrame::new(&mut res.scope);
         self.decl_params(ast.args, res);
 
         self.build_expr(&ast.body, res)?;
 
         base_frame.end(&mut res.scope);
-        Some(self.instrs.bodies.finish(&mut res.body))
+        let body = self.instrs.bodies.finish(&mut res.body);
+
+        Some(Func {
+            signature_len,
+            param_count,
+            body,
+        })
     }
 
     fn decl_params(&mut self, arg: &[FuncArgAst], res: &mut Res) {
@@ -298,8 +296,6 @@ impl<'ctx> super::InstrBuilder<'ctx> {
 
     fn queue_func<'arena>(&mut self, func: &FuncAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
         let func_ref = res.add_to_compile_queue(func.clone());
-        res.module.funcs[func_ref].param_count = self.build_signature(func, res)?;
-        res.module.funcs[func_ref].signature_len = res.body.instrs.len() as InstrRepr;
         let func_ty = Type::Func(FuncType::Static(FuncId {
             module: res.module_ref,
             func: func_ref,
@@ -482,9 +478,6 @@ impl<'arena> Res<'arena> {
     fn push_res_as_instr(&mut self, global_sym: &Resolved, span: Span) {
         let instr = match global_sym {
             Resolved::Type(t) => InstrKind::Type(self.body.intern_ty(t)),
-            &Resolved::Func(f) => {
-                InstrKind::Type(self.body.intern_ty(&Type::Func(FuncType::Static(f))))
-            }
             &Resolved::Module(m) => InstrKind::Module(m),
             Resolved::Const(c) => InstrKind::Const(self.body.consts.find_or_push(c)),
         };

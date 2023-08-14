@@ -6,7 +6,10 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::Module;
-use stac::{BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type};
+use stac::{
+    BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, Mutable, OpCode, SubsRef, Type,
+    TypeRefIndex,
+};
 
 use super::*;
 
@@ -39,8 +42,8 @@ impl<'ctx> Builder<'ctx> {
     }
 
     fn spec(&mut self, ty: SubsRef) -> TypeSpec {
-        let ty = &self.types[ty];
-        TypeSpec::from_ty(ty, self.arch)
+        let ty = self.types.get_ty(ty);
+        TypeSpec::from_ty(&ty, self.arch)
     }
 
     fn slot_as_value(&mut self, slot: Slot) -> ir::Value {
@@ -119,7 +122,7 @@ impl<'ctx> Emmiter<'ctx> {
                     todo!()
                 }
                 FinstKind::Field(_) => todo!(),
-                FinstKind::Decl(Mutable::True) => {
+                FinstKind::Decl(true) => {
                     let (slot, spec) = builder.stack.pop().unwrap();
                     let value = builder.slot_as_value(slot);
                     let var = Variable::from_u32(builder.stack.len() as u32);

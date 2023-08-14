@@ -1,4 +1,7 @@
 module root:
   bi = :{bi}
-  drop = (): i32:
+  drop = sig:
+    mod0
+    . i32
+  body:
     42

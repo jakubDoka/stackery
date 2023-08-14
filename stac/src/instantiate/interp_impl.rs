@@ -90,15 +90,12 @@ impl<'a> Res<'a> {
         id
     }
 
-    fn intern_type(&mut self, ty: &Type) -> TypeRef {
-        match ty {
-            &Type::BuiltIn(b) => TypeRef::from_repr(b as _),
-            other => self.ir.types.find_or_push(other),
-        }
+    fn intern_ty(&mut self, ty: &Type) -> TypeRef {
+        self.ir.intern_ty(ty)
     }
 
     fn intern_and_create_group(&mut self, ty: &Type) -> SubsRef {
-        let ty = self.intern_type(ty);
+        let ty = self.intern_ty(ty);
         self.create_group(ty)
     }
 
@@ -114,22 +111,21 @@ impl<'a> Res<'a> {
     fn get_subs(&mut self, ty: SubsRef) -> Type {
         let ty = self.subs_table.root_of_ref(ty);
         let ty = self.type_mapping[ty];
-        self.ir.types[ty].clone()
+        self.ir.get_ty(ty)
     }
 
     fn set_subs(&mut self, ty: SubsRef, new: Type) {
         let ty = self.subs_table.root_of_ref(ty);
-        let ty = self.type_mapping[ty];
-        self.type_mapping[ty] = self.ir.types.find_or_push(&new);
+        self.type_mapping[ty] = self.ir.intern_ty(&new);
     }
 
     fn pop_operand(&mut self) -> (SubsRef, Option<Result<Resolved, usize>>) {
         let operand = self.stack.pop().unwrap();
         let res = match operand.value {
-            OperandValue::Func(f) => Resolved::Func(f),
+            OperandValue::Func(f) => Resolved::Type(Type::Func(FuncType::Static(f))),
             OperandValue::Module(m) => Resolved::Module(m),
             OperandValue::Decl(u) => return (operand.ty, Some(Err(u))),
-            OperandValue::Type(t) => Resolved::Type(self.ir.types[t].clone()),
+            OperandValue::Type(t) => Resolved::Type(self.ir.get_ty(t)),
             OperandValue::AsInstr => match self.ir.instrs.pop().unwrap() {
                 Finst {
                     kind: FinstKind::Const(c),
@@ -159,12 +155,12 @@ impl<'a> Res<'a> {
 
     fn push_res(&mut self, ty: SubsRef, r: Resolved, span: Span) {
         match r {
-            Resolved::Type(t) => self.stack.push(Operand {
-                value: OperandValue::Type(self.ir.types.find_or_push(&t)),
+            Resolved::Type(Type::Func(FuncType::Static(f))) => self.stack.push(Operand {
+                value: OperandValue::Func(f),
                 ty,
             }),
-            Resolved::Func(f) => self.stack.push(Operand {
-                value: OperandValue::Func(f),
+            Resolved::Type(t) => self.stack.push(Operand {
+                value: OperandValue::Type(self.ir.intern_ty(&t)),
                 ty,
             }),
             Resolved::Module(m) => self.stack.push(Operand {
@@ -263,9 +259,11 @@ impl<'ctx> Interpreter<'ctx> {
             InstrKind::Decl(mutable) => self.eval_decl(span, mutable, res),
             InstrKind::Drop => self.eval_drop(span, res),
             InstrKind::DropScope(s, r) => self.eval_drop_scope(s, r, span, res),
-            InstrKind::Module(_) => todo!(),
-            InstrKind::Const(_) => todo!(),
-            InstrKind::Type(_) => todo!(),
+            InstrKind::Module(m) => self.eval_res(Resolved::Module(m), span, res),
+            InstrKind::Const(c) => {
+                self.eval_res(Resolved::Const(res.body.consts[c].clone()), span, res)
+            }
+            InstrKind::Type(t) => self.eval_res(Resolved::Type(res.body.get_ty(t)), span, res),
         }
     }
 
@@ -275,8 +273,8 @@ impl<'ctx> Interpreter<'ctx> {
 
     fn res_ty(&mut self, c: &Resolved, _res: &mut Res) -> Type {
         match c {
+            Resolved::Type(Type::Func(f)) => Type::Func(f.clone()),
             Resolved::Type(_) => Type::BuiltIn(BuiltInType::Type),
-            &Resolved::Func(f) => Type::Func(FuncType::Static(f)),
             Resolved::Module(_) => Type::BuiltIn(BuiltInType::Module),
             Resolved::Const(c) => match c {
                 LitKindAst::Int(_) => Type::BuiltIn(BuiltInType::Integer),
@@ -359,21 +357,24 @@ impl<'ctx> Interpreter<'ctx> {
     fn eval_binop(&mut self, op: OpCode, span: Span, res: &mut Res) {
         let [(rty, rhs), (lty, lhs)] = [res.pop_operand(), res.pop_operand()];
 
-        let (Some(rhs), Some(lhs)) = (rhs, lhs) else {
-            let ty = self.infer_binop_type(op, span, rty, lty, res);
-            res.stack.push(Operand {
-                value: OperandValue::AsInstr,
-                ty,
-            });
-            res.ir.instrs.push(Finst {
-                kind: FinstKind::BinOp(op),
-                ty,
-                span,
-            });
-            return;
-        };
-
-        self.fold_binop(op, span, [lhs, rhs], res);
+        match (rhs, lhs) {
+            (Some(rhs), Some(lhs)) => self.fold_binop(op, span, [lhs, rhs], res),
+            (rhs, _) => {
+                if let Some(Ok(rhs)) = rhs {
+                    res.push_res(rty, rhs, span);
+                }
+                let ty = self.infer_binop_type(op, span, rty, lty, res);
+                res.stack.push(Operand {
+                    value: OperandValue::AsInstr,
+                    ty,
+                });
+                res.ir.instrs.push(Finst {
+                    kind: FinstKind::BinOp(op),
+                    ty,
+                    span,
+                });
+            }
+        }
     }
 
     fn fold_binop(
@@ -565,9 +566,13 @@ impl<'ctx> Interpreter<'ctx> {
                 self.diags
                     .builder(self.modules.files())
                     .footer(Severty::Error, "cannot unify types")
-                    .annotation(Severty::Error, span, "of this binary operation")
+                    .footer(
+                        Severty::Note,
+                        format_args!("the types are {} and {}", ra, rb),
+                    )
+                    .annotation(Severty::Error, span, "of this")
                     .terminate();
-                res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit))
+                res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unknown))
             }
         }
     }
@@ -604,12 +609,6 @@ impl<'ctx> Interpreter<'ctx> {
                     res,
                 );
             }
-            Resolved::Func(..) => {
-                self.diags
-                    .builder(self.modules.files())
-                    .footer(Severty::Error, "no such field on the function")
-                    .annotation(Severty::Error, span, "accessed here");
-            }
             Resolved::Module(m) => {
                 let decls = self.instrs.decls_of(m);
                 let Some(item) = decls.decls.iter().rfind(|d| d.name.ident == *field) else {
@@ -644,9 +643,19 @@ impl<'ctx> Interpreter<'ctx> {
             return;
         }
 
-        let decl_value = if let Some(resolved) = resolved {
+        let decl_value = if mutable != Mutable::True && let Some(resolved) = resolved {
             DeclValue::Const(resolved)
         } else {
+            if let Some(r) = resolved {
+                res.push_res(ty, r, span)
+            }
+            
+            res.ir.instrs.push(Finst {
+                kind: FinstKind::Decl(mutable == Mutable::True),
+                ty,
+                span,
+            });
+
             let next_index = res
                 .decls
                 .iter()
@@ -680,8 +689,16 @@ impl<'ctx> Interpreter<'ctx> {
     }
 
     fn eval_drop_scope(&mut self, size: FrameSize, ret: Returns, span: Span, res: &mut Res) {
-        if ret && let (ty, Some(val)) = res.pop_operand_as_value() {
-            res.push_res(ty, val, span);
+        if ret {
+            let (ty, val) = res.pop_operand_as_value();
+            if let Some(val) = val {
+                res.push_res(ty, val, span);
+            } else {
+                res.stack.push(Operand {
+                    value: OperandValue::AsInstr,
+                    ty,
+                })
+            }
         }
 
         let final_drop_size = res
@@ -689,6 +706,10 @@ impl<'ctx> Interpreter<'ctx> {
             .drain(res.decls.len() - size as usize..)
             .filter(|d| matches!(d.value, DeclValue::Runtime(_)))
             .count();
+
+        if final_drop_size == 0 {
+            return;
+        }
 
         let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
         res.ir.instrs.push(Finst {

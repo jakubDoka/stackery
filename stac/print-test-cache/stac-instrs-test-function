@@ -1,3 +1,6 @@
 module root:
-  main = (): i32:
+  main = sig:
+    mod0
+    . i32
+  body:
     0

@@ -1,10 +1,10 @@
-use std::ops::Deref;
+use std::ops::IndexMut;
 
 use mini_alloc::IdentStr;
 
 use crate::{
     gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, BuiltInType, Diagnostics,
-    Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Span, Type, VecStore,
+    FuncType, Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Span, Type, VecStore,
 };
 
 mod instr_emmiter;
@@ -83,12 +83,20 @@ impl InstrBodyBuilder {
 
 impl<'a> InstrBody<'a> {
     pub fn get_ty(&self, ty: TypeRef) -> Type {
+        self.types.get_ty(ty)
+    }
+}
+
+pub trait TypeRefIndex: IndexMut<TypeRef, Output = Type> {
+    fn get_ty(&self, ty: TypeRef) -> Type {
         match BuiltInType::from_index(ty.index()) {
             Ok(b) => Type::BuiltIn(b),
-            Err(index) => self.types.deref()[index].clone(),
+            Err(index) => self[TypeRef::from_repr(index as InstrRepr)].clone(),
         }
     }
 }
+
+impl<T: IndexMut<TypeRef, Output = Type> + ?Sized> TypeRefIndex for T {}
 
 gen_storage_group! {
     ModuleDecls ModuleDeclRef ModuleDecl ModuleDeclBuilder 'a {
@@ -141,7 +149,11 @@ impl Instrs {
             .decls
             .iter()
             .find_map(|decl| match decl.data {
-                Resolved::Func(id) if decl.name.ident.as_str() == Self::ENTRY_NAME => Some(id.func),
+                Resolved::Type(Type::Func(FuncType::Static(id)))
+                    if decl.name.ident.as_str() == Self::ENTRY_NAME =>
+                {
+                    Some(id.func)
+                }
                 _ => None,
             })
     }
@@ -211,7 +223,6 @@ pub trait Resolver {
 #[derive(Clone, Debug)]
 pub enum Resolved {
     Type(Type),
-    Func(FuncId),
     Module(ModuleRef),
     Const(LitKindAst),
 }
@@ -254,8 +265,8 @@ pub mod instr_test_util {
     use mini_alloc::{ArenaBase, DiverBase};
 
     use crate::{
-        bail, instrs::InstrKind, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef, Modules,
-        Mutable, Parser, Resolved, Resolver,
+        bail, instrs::InstrKind, FuncType, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef,
+        Modules, Mutable, Parser, Resolved, Resolver, Type,
     };
 
     #[derive(Default)]
@@ -287,8 +298,9 @@ pub mod instr_test_util {
                     },
                     &InstrKind::Module(module) => Resolved::Module(module),
                     &InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
-                    &InstrKind::Type(ty) => Resolved::Type(body.types[ty].clone()),
-                    _ => todo!(),
+                    &InstrKind::Type(ty) => Resolved::Type(body.get_ty(ty)),
+                    &InstrKind::Drop => stack.pop().unwrap(),
+                    i => todo!("{:?}", i),
                 };
 
                 stack.push(value);
@@ -315,7 +327,7 @@ pub mod instr_test_util {
                 ctx.push_str(". ");
                 ctx.push_str(&body.idents[f].to_string());
             }
-            InstrKind::Type(t) => ctx.push_str(&body.types[t].to_string()),
+            InstrKind::Type(t) => ctx.push_str(&body.get_ty(t).to_string()),
             InstrKind::Module(m) => display_id("mod", m.index(), ctx),
             InstrKind::Const(c) => ctx.push_str(&body.consts[c].to_string()),
             InstrKind::Decl(Mutable::False) => ctx.push_str("decl"),
@@ -348,7 +360,7 @@ pub mod instr_test_util {
             ctx.push_str(" = ");
 
             let func = match decl.data.clone() {
-                Resolved::Func(func) => func.func,
+                Resolved::Type(Type::Func(FuncType::Static(func))) => func.func,
                 Resolved::Type(ty) => {
                     ctx.push_str(&ty.to_string());
                     ctx.push('\n');
@@ -370,7 +382,16 @@ pub mod instr_test_util {
             let func = &view.funcs[func];
 
             let body_view = instrs.bodies.view(func.body);
-            for instr in body_view.instrs.iter() {
+
+            ctx.push_str("sig:\n");
+            for instr in body_view.instrs.iter().take(func.signature_len as usize) {
+                ctx.push_str("    ");
+                display_instr(&instr.kind, &body_view, ctx);
+                ctx.push('\n');
+            }
+
+            ctx.push_str("  body:\n");
+            for instr in body_view.instrs.iter().skip(func.signature_len as usize) {
                 ctx.push_str("    ");
                 display_instr(&instr.kind, &body_view, ctx);
                 ctx.push('\n');

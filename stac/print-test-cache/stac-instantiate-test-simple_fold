@@ -1,4 +1,14 @@
-failed to build module
+module root:
+  bi = :{bi}
+  main = sig:
+    mod0
+    . i32
+    . f
+  body:
+    1
+    1
+    +
+diagnostics:
 error: no such field on the type
 -> "root":2:36
 2|             let bi = :{bi}
@@ -6,4 +16,4 @@ error: no such field on the type
                                        ^ accessed here
 4|         
 
-2 : i32
+const 2 : i32

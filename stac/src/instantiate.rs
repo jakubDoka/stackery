@@ -2,7 +2,7 @@ mod interp_impl;
 
 use crate::{
     Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules, Mutable, OpCode,
-    Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef,
+    Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
 };
 
 type SubsRepr = u16;
@@ -22,7 +22,7 @@ pub enum FinstKind {
     Sym(Sym),
     Call(FuncInst),
     BinOp(OpCode),
-    Decl(Mutable),
+    Decl(bool),
     Field(FieldIndex),
 
     Drop,
@@ -40,6 +40,19 @@ pub struct Finst {
 pub struct Ir {
     pub instrs: Vec<Finst>,
     pub types: IrTypes,
+}
+
+impl Ir {
+    pub fn get_ty(&self, ty: TypeRef) -> Type {
+        self.types.get_ty(ty)
+    }
+
+    fn intern_ty(&mut self, t: &Type) -> TypeRef {
+        match t {
+            &Type::BuiltIn(b) => TypeRef::from_repr(b as _),
+            other => self.types.find_or_push(other),
+        }
+    }
 }
 
 pub struct Interpreter<'ctx> {
@@ -148,11 +161,8 @@ mod test {
                     ctx.push_str("binop ");
                     ctx.push_str(op.name());
                 }
-                crate::FinstKind::Decl(m) => match m {
-                    Mutable::False => ctx.push_str("decl"),
-                    Mutable::True => ctx.push_str("decl mut"),
-                    Mutable::CtTrue => ctx.push_str("decl ct mut"),
-                },
+                crate::FinstKind::Decl(false) => ctx.push_str("decl"),
+                crate::FinstKind::Decl(true) => ctx.push_str("decl mut"),
                 crate::FinstKind::Field(f) => {
                     ctx.push_str(". ");
                     ctx.push_str(f.to_string().as_str());
@@ -166,7 +176,7 @@ mod test {
                 }
             }
             ctx.push_str(" : ");
-            ctx.push_str(ir.types[*ty].to_string().as_str());
+            ctx.push_str(ir.get_ty(*ty).to_string().as_str());
             ctx.push('\n');
         }
 

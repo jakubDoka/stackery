@@ -1,6 +1,9 @@
 module root:
   bi = :{bi}
-  main = (): i32:
+  main = sig:
+    mod0
+    . i32
+  body:
     1
     decl ct mut
     sym0
@@ -10,6 +13,4 @@ module root:
     (|\+|-|\*|/|%|<<|>>|&|\||\^)=
     sym0
     drop scope 1 returns
-padding decl : i32
-2 : i32
-drop scope 1 returns : ()
+const 2 : i32

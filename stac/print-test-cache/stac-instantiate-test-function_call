@@ -1,9 +1,16 @@
 module root:
   bi = :{bi}
-  fun = (): i32:
+  fun = sig:
+    mod0
+    . i32
+  body:
     1
-  main = (): i32:
-    func0
+  main = sig:
+    mod0
+    . i32
+  body:
+    func#1:1
     call 0
-func0 : func#1:1
-call 0 : i32
+
+
+Panic occurred during test execution.

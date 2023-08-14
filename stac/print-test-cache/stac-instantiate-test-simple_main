@@ -1,5 +1,8 @@
 module root:
   bi = :{bi}
-  main = (): i32:
+  main = sig:
+    mod0
+    . i32
+  body:
     0
-0 : i32
+const 0 : i32

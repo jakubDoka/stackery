@@ -1,12 +1,13 @@
 module root:
   bi = :{bi}
-  main = (): i32:
+  main = sig:
+    mod0
+    . i32
+  body:
     1
     decl
     sym0
     1
     +
     drop scope 1 returns
-padding decl : {integer}
-2 : i32
-drop scope 1 returns : ()
+const 2 : i32
