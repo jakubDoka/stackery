@@ -11,4 +11,4 @@ module root:
   body:
     func#1:1
     call 0
-call 0 : i32
+const 1 : i32

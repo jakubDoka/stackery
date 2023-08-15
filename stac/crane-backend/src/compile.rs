@@ -96,7 +96,6 @@ impl Command {
                 let sig = emmiter.load_signature(recent);
                 gen.declare_func(id, sig);
             }
-            instances.clear_recent();
 
             let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, self.dump_ir);
             emmiter.emit(&entry, id, ir);
@@ -239,16 +238,11 @@ impl Loader {
         })
     }
 
-    fn resolve_path(&self, files: &Files, from: Option<FileRef>, id: &IdentStr) -> PathBuf {
+    fn resolve_path(&self, _files: &Files, _rom: Option<FileRef>, id: &IdentStr) -> PathBuf {
         let path = Path::new(id.as_str());
 
         if path.is_absolute() {
             return path.to_owned();
-        }
-
-        if let Some(from) = from {
-            let from = files[from].name();
-            return PathBuf::from_iter([from.as_ref(), Path::new(id.as_str())]);
         }
 
         PathBuf::from_iter([self.root.as_path(), Path::new(id.as_str())])
@@ -272,7 +266,9 @@ impl stac::Loader for Loader {
         from: Option<FileRef>,
         id: IdentStr,
     ) -> Result<FileRef, impl LoaderFut> {
-        let path = self.resolve_path(ctx.files, from, &id);
+        let path = self
+            .resolve_path(ctx.files, from, &id)
+            .with_extension("stac");
 
         if let Some(&file) = self.cache.get(&path) {
             return Ok(file);
@@ -319,7 +315,13 @@ fn load_file_async(
             if let Some(path) = self.path.take() {
                 let waker = cx.waker().clone();
                 let handle = std::thread::spawn(move || {
-                    let f = std::fs::read_to_string(path);
+                    let message_path = path.clone();
+                    let f = std::fs::read_to_string(path).map_err(|err| {
+                        std::io::Error::new(
+                            err.kind(),
+                            format!("{}: {}", message_path.display(), err),
+                        )
+                    });
                     waker.wake();
                     f
                 });

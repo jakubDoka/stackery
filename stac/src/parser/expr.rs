@@ -97,6 +97,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
             If => self.if_expr(diver.untyped_dive(), token.span),
             Else => self.unex_tok(token, "else can only follow an if expression")?,
             Fn => self.func(diver.untyped_dive(), token.span),
+            Rt => self.rt(diver.untyped_dive(), token.span),
             Mut => self.unex_tok(token, "mut can only follow a declaration")?,
             Comma => self.unex_tok(token, "comma can only follow an expression")?,
             Semi => self.unex_tok(
@@ -118,7 +119,6 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
                     &token.source[":{".len()..token.source.len() - "}".len()],
                 ),
             })),
-            Ct => todo!(),
             Let => self
                 .decl(diver.untyped_dive(), token.span)
                 .map(|d| &*self.arena.alloc(d))
@@ -141,6 +141,11 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         self.handle_postfix(diver, expr)
     }
 
+    fn rt(&mut self, mut diver: Diver, _keyword: Span) -> Option<UnitAst<'arena>> {
+        let expr = self.expr(diver.untyped_dive())?;
+        Some(UnitAst::Rt(self.arena.alloc(expr)))
+    }
+
     fn if_expr(&mut self, mut diver: Diver, keyword: crate::Span) -> Option<UnitAst<'arena>> {
         let cond = self.expr(diver.untyped_dive())?;
         let then = self.expr(diver.untyped_dive())?;
@@ -158,7 +163,6 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     }
 
     fn decl(&mut self, mut diver: Diver, keyword: Span) -> Option<DeclAst<'arena>> {
-        let ct = self.try_advance(Ct).map(|t| t.span);
         let mutable = self.try_advance(Mut).map(|t| t.span);
         let name = self.ident("decl name")?;
         let ty = self
@@ -173,7 +177,6 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
 
         Some(DeclAst {
             keyword,
-            ct,
             mutable,
             name,
             ty,
@@ -252,19 +255,13 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     }
 
     fn func_arg(&mut self, diver: Diver) -> Option<FuncArgAst<'arena>> {
-        let ct = self.try_advance(Ct).map(|token| token.span);
         let name = self.ident("parameter name")?;
         let colon = self
             .expect_advance(Colon, "expected colon after parameter name")?
             .span;
         let ty = self.expr(diver)?;
 
-        Some(FuncArgAst {
-            ct,
-            name,
-            colon,
-            ty,
-        })
+        Some(FuncArgAst { name, colon, ty })
     }
 
     fn int(&mut self, token: Token<'src>) -> Option<UnitAst<'arena>> {
@@ -363,6 +360,7 @@ pub enum UnitAst<'arena> {
     Decl(&'arena DeclAst<'arena>),
     Paren(&'arena ExprAst<'arena>),
     Field(&'arena FieldAst<'arena>),
+    Rt(&'arena ExprAst<'arena>),
 }
 
 impl UnitAst<'_> {
@@ -377,7 +375,7 @@ impl UnitAst<'_> {
             Call(call) => call.caller.span(),
             Func(func) => func.keyword,
             Decl(decl) => decl.keyword,
-            Paren(expr) => expr.span(),
+            Paren(expr) | Rt(expr) => expr.span(),
             Field(field) => field.dot,
         }
     }
@@ -401,7 +399,6 @@ pub struct FieldAst<'arena> {
 #[derive(Debug, Clone)]
 pub struct DeclAst<'arena> {
     pub keyword: Span,
-    pub ct: Option<Span>,
     pub mutable: Option<Span>,
     pub name: IdentAst,
     pub ty: Option<ExprAst<'arena>>,
@@ -431,7 +428,6 @@ pub struct FuncAst<'arena> {
 
 #[derive(Debug, Clone)]
 pub struct FuncArgAst<'arena> {
-    pub ct: Option<Span>,
     pub name: IdentAst,
     pub colon: Span,
     pub ty: ExprAst<'arena>,

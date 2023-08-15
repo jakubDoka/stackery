@@ -1,8 +1,8 @@
 mod interp_impl;
 
 use crate::{
-    Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules, OpCode, Ref,
-    Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
+    BuiltInType, Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules,
+    OpCode, Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
 };
 
 type SubsRepr = u16;
@@ -56,7 +56,10 @@ impl Ir {
     fn intern_ty(&mut self, t: &Type) -> TypeRef {
         match t {
             &Type::BuiltIn(b) => TypeRef::from_repr(b as _),
-            other => self.types.find_or_push(other),
+            other => {
+                let r = self.types.find_or_push(other).index();
+                TypeRef::from_repr((r + BuiltInType::COUNT) as _)
+            }
         }
     }
 }
@@ -85,12 +88,10 @@ impl FuncInstances {
         id
     }
 
-    pub fn recent(&self) -> impl IntoIterator<Item = (FuncInst, &Entry)> {
-        (self.recent as FuncInst..).zip(&self.lookup[self.recent..])
-    }
-
-    pub fn clear_recent(&mut self) {
+    pub fn recent(&mut self) -> impl IntoIterator<Item = (FuncInst, &Entry)> {
+        let prev = self.recent;
         self.recent = self.lookup.len();
+        (prev as FuncInst..).zip(&self.lookup[prev..])
     }
 }
 
@@ -256,7 +257,7 @@ mod test {
         local_mutable_var "
             let bi = :{bi}
             let main = fn(): bi.i32 {
-                let ct mut x = 1
+                let mut x = 1
                 x += 1
                 x
             }
@@ -264,8 +265,8 @@ mod test {
         multiple_locals "
             let bi = :{bi}
             let main = fn(): bi.i32 {
-                let ct mut x = 1
-                let ct mut y = 2
+                let mut x = 1
+                let mut y = 2
                 { let x = 3 y += x }
                 x += y + x
                 y += x + y
@@ -293,8 +294,7 @@ mod test {
         runtime_if "
             let bi = :{bi}
             let main = fn(): bi.i32 {
-                let mut bool = true;
-                if bool if bool 0 else 1 else 2
+                if rt true if rt true 0 else 1 else 2
             }
         ";
     }

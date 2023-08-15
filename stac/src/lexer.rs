@@ -179,7 +179,7 @@ define_lexer! {
         //For = "for"
         //In = "in"
         Fn = "fn"
-        Ct = "ct"
+        Rt = "rt"
         Let = "let"
         Mut = "mut"
 

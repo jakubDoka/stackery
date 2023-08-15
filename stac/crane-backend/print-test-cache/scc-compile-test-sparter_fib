@@ -11,20 +11,44 @@ block0:
 
 note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(1) }, ip: 3, inputs: [Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
 note: function u0:0(i32) -> i32 system_v {
-    sig0 = (i32, i32, i32) -> i32 system_v
+    sig0 = (i32) -> i32 system_v
     fn0 = colocated u0:2 sig0
 
 block0(v0: i32):
+    v1 = call fn0(v0)
+    return v1
+}
+
+note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(2) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Ct(Const(Int(IntLit([0, 0, 0, 0, 0, 0, 0, 0])))), Ct(Const(Int(IntLit([1, 0, 0, 0, 0, 0, 0, 0]))))], ret: BuiltIn(I32) }
+note: function u0:0(i32) -> i32 system_v {
+    sig0 = (i32, i32, i32) -> i32 system_v
+    fn0 = colocated u0:3 sig0
+
+block0(v0: i32):
     v1 = iconst.i32 0
-    v2 = iconst.i32 1
-    v3 = call fn0(v0, v1, v2)  ; v1 = 0, v2 = 1
-    return v3
+    v2 = icmp eq v0, v1  ; v1 = 0
+    brif v2, block1, block2
+
+block1:
+    v3 = iconst.i32 0
+    jump block3(v3)  ; v3 = 0
+
+block2:
+    v4 = iconst.i32 1
+    v5 = isub.i32 v0, v4  ; v4 = 1
+    v6 = iconst.i32 1
+    v7 = iconst.i32 1
+    v8 = call fn0(v5, v6, v7)  ; v6 = 1, v7 = 1
+    jump block3(v8)
+
+block3(v9: i32):
+    return v9
 }
 
 note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(2) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Rt(BuiltIn(I32)), Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
 note: function u0:0(i32, i32, i32) -> i32 system_v {
     sig0 = (i32, i32, i32) -> i32 system_v
-    fn0 = colocated u0:2 sig0
+    fn0 = colocated u0:3 sig0
 
 block0(v0: i32, v1: i32, v2: i32):
     v3 = iconst.i32 0

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{DefaultRef, FuncId};
+use crate::{Const, DefaultRef, FuncId};
 
 mod unify_impl;
 
@@ -196,6 +196,13 @@ impl BuiltInType {
             Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
+        }
+    }
+
+    pub(crate) fn from_const(c: &Const) -> BuiltInType {
+        match c {
+            Const::Bool(_) => Self::Bool,
+            Const::Int(_) => Self::Integer,
         }
     }
 }

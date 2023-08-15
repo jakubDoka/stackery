@@ -5,10 +5,10 @@ module root:
     . i32
   body:
     true
-    decl mut
-    sym0
+    rt
     if 12
-    sym0
+    true
+    rt
     if 9
     0
     else 11
@@ -17,12 +17,9 @@ module root:
     else 14
     2
     endif
-    drop scope 1 returns
 const true : bool
-decl mut : bool
-sym0 : bool
 if : i32
-sym0 : bool
+const true : bool
 if : i32
 const 0 : i32
 else : i32
@@ -31,4 +28,3 @@ endif : i32
 else : i32
 const 2 : i32
 endif : i32
-drop scope 1 true : ()

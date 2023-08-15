@@ -3,8 +3,8 @@ use mini_alloc::IdentStr;
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
     ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, FuncId,
-    FuncType, IfAst, ModItemAst, ModuleRef, Mutable, OpAst, OpCode, Resolved, Severty, Span, Sym,
-    Type, TypeRef, UnaryAst, UnitAst,
+    FuncType, IfAst, ModItemAst, ModuleRef, OpAst, OpCode, Resolved, Severty, Span, Sym, Type,
+    TypeRef, UnaryAst, UnitAst,
 };
 
 use super::{
@@ -57,12 +57,9 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         res: &mut Res<'arena>,
     ) -> Option<InstrRepr> {
         let frame = ScopeFrame::new(&mut res.scope);
-        for FuncArgAst { ct, name, ty, .. } in *args {
+        for FuncArgAst { name, ty, .. } in *args {
             self.build_expr(ty, res);
-            let Some(mutable) = self.resolve_mutability(*ct, None) else {
-                continue;
-            };
-            res.push_instr(InstrKind::Decl(mutable), name.span);
+            res.push_instr(InstrKind::Decl(false), name.span);
             res.scope.push(name.clone());
         }
 
@@ -161,7 +158,18 @@ impl<'ctx> super::InstrBuilder<'ctx> {
             UnitAst::Decl(d) => self.build_decl(d, res),
             UnitAst::Paren(p) => self.build_expr(p, res),
             UnitAst::Field(f) => self.build_field(f, res),
+            UnitAst::Rt(r) => self.build_rt(r, res),
         }
+    }
+
+    fn build_rt<'arena>(
+        &mut self,
+        r: &crate::ExprAst<'arena>,
+        res: &mut Res<'arena>,
+    ) -> Option<()> {
+        self.build_expr(r, res)?;
+        res.push_instr(InstrKind::Rt, r.span());
+        Some(())
     }
 
     fn build_literal(&mut self, lit: &LitAst, res: &mut Res) -> Option<()> {
@@ -286,13 +294,15 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         self.build_expr(last, res)?;
 
         let frame_size = frame.size(&res.scope);
-        res.push_instr(
-            InstrKind::DropScope(
-                frame_size as FrameSize,
-                !block.trailing_semi && needs_drop(last),
-            ),
-            block.brace,
-        );
+        if frame_size > 0 {
+            res.push_instr(
+                InstrKind::DropScope(
+                    frame_size as FrameSize,
+                    !block.trailing_semi && needs_drop(last),
+                ),
+                block.brace,
+            );
+        }
 
         frame.end(&mut res.scope);
         Some(())
@@ -337,7 +347,6 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         &mut self,
         DeclAst {
             keyword,
-            ct,
             mutable,
             name,
             ty,
@@ -357,30 +366,10 @@ impl<'ctx> super::InstrBuilder<'ctx> {
             res.push_instr(InstrKind::Uninit(ty), *keyword);
         }
 
-        let mutable = self.resolve_mutability(*ct, *mutable)?;
-
         res.scope.push(name.clone());
-        res.push_instr(InstrKind::Decl(mutable), *keyword);
+        res.push_instr(InstrKind::Decl(mutable.is_some()), *keyword);
 
         Some(())
-    }
-
-    fn resolve_mutability(&mut self, ct: Option<Span>, mutable: Option<Span>) -> Option<Mutable> {
-        Some(match (ct, mutable) {
-            (None, None) => Mutable::False,
-            (None, Some(_)) => Mutable::True,
-            (Some(span), None) => {
-                self.diags
-                    .builder(self.modules.files())
-                    .footer(
-                        Severty::Warning,
-                        "nonmutable declaration does not need to be marked ct",
-                    )
-                    .annotation(Severty::Warning, span, "found here")
-                    .terminate()?;
-            }
-            (Some(_), Some(_)) => Mutable::CtTrue,
-        })
     }
 
     fn build_field<'arena>(
@@ -421,7 +410,6 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         &mut self,
         DeclAst {
             keyword,
-            ct,
             mutable,
             name,
             ty: _,
@@ -448,17 +436,6 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                     "top level declarations cannot be mutable (yet)",
                 )
                 .annotation(Severty::Error, span, "declared here")
-                .terminate()?;
-        }
-
-        if let &Some(span) = ct {
-            self.diags
-                .builder(self.modules.files())
-                .footer(
-                    Severty::Warning,
-                    "top level declarations are always compile time (for now)",
-                )
-                .annotation(Severty::Warning, span, "declared here")
                 .terminate()?;
         }
 

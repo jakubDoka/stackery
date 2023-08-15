@@ -1,0 +1,3 @@
+let func = fn(f: :{bi}.i32): :{bi}.i32 f
+
+

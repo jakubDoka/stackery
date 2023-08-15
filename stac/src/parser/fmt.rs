@@ -129,9 +129,6 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
                 false,
                 false,
                 |param, ctx, indent| {
-                    if param.ct.is_some() {
-                        ctx.push_str("ct ");
-                    }
                     ctx.push_str(param.name.ident.as_str());
                     ctx.push_str(": ");
                     format_expr(&param.ty, ctx, indent);
@@ -165,6 +162,10 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
             format_unit(&f.on, ctx, indent);
             ctx.push('.');
             ctx.push_str(f.name.ident.as_str());
+        }
+        UnitAst::Rt(e) => {
+            ctx.push_str("rt ");
+            format_expr(e, ctx, indent);
         }
     }
 }

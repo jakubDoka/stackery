@@ -5,7 +5,7 @@ module root:
     . i32
   body:
     1
-    decl ct mut
+    decl mut
     sym0
     sym0
     1

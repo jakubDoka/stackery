@@ -210,7 +210,7 @@ impl<'ctx> Emmiter<'ctx> {
                     }
                     let args = builder
                         .stack
-                        .drain(builder.stack.len() - arg_count as usize..)
+                        .drain(builder.stack.len().saturating_sub(arg_count as usize)..)
                         .collect::<Vec<_>>()
                         .into_iter()
                         .map(|(slot, ..)| builder.slot_as_value(slot))

@@ -25,13 +25,7 @@ pub type TypeRef = Ref<Type, InstrRepr>;
 pub type CtxSym = Ref<IdentStr, InstrRepr>;
 pub type SourceOffset = Pos;
 pub type IrTypes = VecStore<Type, InstrRepr>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mutable {
-    False,
-    True,
-    CtTrue,
-}
+pub type Mutable = bool;
 
 #[derive(Clone, Debug)]
 pub enum InstrKind {
@@ -49,6 +43,8 @@ pub enum InstrKind {
     If(InstrRef),
     Else(InstrRef),
     EndIf,
+
+    Rt,
 
     Drop,
     DropScope(FrameSize, Returns),
@@ -283,7 +279,7 @@ pub mod instr_test_util {
 
     use crate::{
         bail, instrs::InstrKind, FuncType, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef,
-        Modules, Mutable, Parser, Resolved, Resolver, Type,
+        Modules, Parser, Resolved, Resolver, Type,
     };
 
     #[derive(Default)]
@@ -347,9 +343,8 @@ pub mod instr_test_util {
             InstrKind::Type(t) => ctx.push_str(&body.get_ty(t).to_string()),
             InstrKind::Module(m) => display_id("mod", m.index(), ctx),
             InstrKind::Const(c) => ctx.push_str(&body.consts[c].to_string()),
-            InstrKind::Decl(Mutable::False) => ctx.push_str("decl"),
-            InstrKind::Decl(Mutable::True) => ctx.push_str("decl mut"),
-            InstrKind::Decl(Mutable::CtTrue) => ctx.push_str("decl ct mut"),
+            InstrKind::Decl(false) => ctx.push_str("decl"),
+            InstrKind::Decl(true) => ctx.push_str("decl mut"),
             InstrKind::Drop => ctx.push_str("drop"),
             InstrKind::DropScope(s, r) => {
                 ctx.push_str("drop scope ");
@@ -369,6 +364,7 @@ pub mod instr_test_util {
                 ctx.push_str(label.index().to_string().as_str());
             }
             InstrKind::EndIf => ctx.push_str("endif"),
+            InstrKind::Rt => ctx.push_str("rt"),
         }
     }
 

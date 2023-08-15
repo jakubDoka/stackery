@@ -15,7 +15,7 @@ impl<'a> LoaderProvider for LoaderProviderMock<'a> {
 fn perform_test(name: &str, sources: &str, ctx: &mut String) {
     let lp = LoaderProviderMock(sources);
     let command = Command {
-        root: PathBuf::from("root"),
+        input: PathBuf::from("root"),
         target: None,
         output: name.to_owned(),
         object_only: false,
@@ -43,7 +43,7 @@ stac::print_cases! { perform_test:
     ";
     sparter_fib "
         let i32 = :{bi}.i32
-        let main = fn(): i32 fib(10)
+        let main = fn(): i32 fib(rt 10)
         let fib = fn(n: i32): i32 fib_rcur(n, 0, 1)
         let fib_rcur = fn(n: i32, a: i32, b: i32): i32
             if n == 0
