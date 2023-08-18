@@ -12,8 +12,8 @@ use pollster::FutureExt;
 
 use stac::{
     mini_alloc::{ArenaBase, DiverBase, IdentStr},
-    BuiltInType, Diagnostics, FileRef, Files, FuncId, FuncInstances, Instrs, Interpreter,
-    LoaderFut, LoaderRes, ModuleLoader, ModuleMeta, Modules, Type,
+    BuiltInType, Diagnostics, FileRef, Files, Instances, Instrs, Interpreter, LoaderFut, LoaderRes,
+    ModuleLoader, ModuleMeta, Modules, Resolved, Type, Types,
 };
 use target_lexicon::PointerWidth;
 
@@ -56,9 +56,11 @@ impl Command {
             terminate(stdout, diags)?;
         };
 
-        let mut instrs = Instrs::new();
+        let builtin_names = BuiltInType::ALL.map(|ty| ty.name());
+        let mut instrs = Instrs::new(builtin_names);
+        let mut types = Types::default();
 
-        Self::build_instrs(stdout, &meta, &modules, arch, &mut diags, &mut instrs)?;
+        Self::build_instrs(stdout, &meta, &modules, &mut diags, &mut instrs)?;
 
         let Some(entry) = instrs.entry_of(meta.root()) else {
             terminate(
@@ -70,35 +72,72 @@ impl Command {
             )?;
         };
 
-        let entry = FuncId {
-            module: meta.root(),
-            func: entry,
+        let mut instances = Instances::new();
+        let Resolved::Def(id) = Interpreter::new(
+            arch,
+            &mut instances,
+            &mut diags,
+            &modules,
+            &instrs,
+            &mut types,
+        )
+        .access_module_decl(meta.root(), entry) else {
+            todo!("error handling")
         };
-        let mut instances = FuncInstances::default();
-        instances.project(stac::Entry {
-            id: entry,
+
+        instances.project_entry(stac::Entry {
+            id,
             inputs: Vec::new(),
-            ip: instrs.func(entry).signature_len,
+            ip: instrs.initial_ip_for(id),
             ret: Type::BuiltIn(BuiltInType::I32),
         });
 
         let mut gen = Generator::new(target.clone());
 
-        while let Some((id, entry)) = instances.next() {
-            let mut interp = Interpreter::new(arch, &mut instances, &mut diags, &modules, &instrs);
-            let ir = interp.eval(&entry);
+        while let Some((eid, entry)) = instances.next_entry() {
+            let mut interp = Interpreter::new(
+                arch,
+                &mut instances,
+                &mut diags,
+                &modules,
+                &instrs,
+                &mut types,
+            );
+
+            let ir = match interp.eval(&entry) {
+                stac::EvalResult::Rt(ir) => ir,
+                stac::EvalResult::Const(c) if entry.id == id => {
+                    diags.builder(modules.files()).footer(
+                        stac::Severty::Error,
+                        format_args!("entry point must be a function, found constant `{}`", c),
+                    );
+                    terminate(stdout, diags)?;
+                }
+                stac::EvalResult::Const(_) => continue,
+            };
+
             if diags.error_count() > 0 {
                 terminate(stdout, diags)?;
             }
 
-            for (id, recent) in instances.recent() {
-                let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, false);
+            for (id, recent) in instances.recent_entries() {
+                let emmiter = Emmiter::new(
+                    &mut diags, &mut gen, &modules, &instrs, &mut types, arch, false,
+                );
                 let sig = emmiter.load_signature(recent);
                 gen.declare_func(id, sig);
             }
 
-            let emmiter = Emmiter::new(&mut diags, &mut gen, &modules, &instrs, arch, self.dump_ir);
-            emmiter.emit(&entry, id, ir);
+            let emmiter = Emmiter::new(
+                &mut diags,
+                &mut gen,
+                &modules,
+                &instrs,
+                &mut types,
+                arch,
+                self.dump_ir,
+            );
+            emmiter.emit(&entry, eid, ir);
 
             if diags.error_count() > 0 {
                 terminate(stdout, diags)?;
@@ -146,7 +185,10 @@ impl Command {
 
             diags.builder(modules.files()).footer(
                 severty,
-                format_args!("program exited with status code {}", status.code().unwrap()),
+                format_args!(
+                    "program exited with status code {}",
+                    status.code().unwrap_or(1)
+                ),
             );
         }
 
@@ -159,13 +201,11 @@ impl Command {
         stdout: &mut impl std::io::Write,
         meta: &ModuleMeta,
         modules: &Modules,
-        arch: stac::Layout,
         diags: &mut Diagnostics,
         instrs: &mut Instrs,
     ) -> Option<()> {
         let mut arena = ArenaBase::new(1 << 12);
         let mut diver = DiverBase::new(1 << 8);
-        let mut resolver = stac::resolver();
 
         for &module in meta.order() {
             let scope = arena.scope();
@@ -175,7 +215,7 @@ impl Command {
                 terminate(stdout, diags)?;
             };
 
-            let builder = stac::InstrBuilder::new(arch, instrs, modules, diags, &mut resolver);
+            let builder = stac::InstrBuilder::new(instrs, modules, diags);
             if builder.build(module, ast).is_none() || diags.error_count() > 0 {
                 terminate(stdout, diags)?;
             }

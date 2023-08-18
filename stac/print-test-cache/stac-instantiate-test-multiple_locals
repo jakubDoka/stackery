@@ -1,37 +1,39 @@
-module root:
-  bi = :{bi}
-  main = sig:
+root:
+  bi = const:
     mod0
-    . i32
-  body:
-    1
-    decl mut
-    2
-    decl mut
-    3
-    decl
-    sym1
-    sym1
-    sym2
-    +
-    (|\+|-|\*|/|%|<<|>>|&|\||\^)=
-    drop scope 1
-    sym0
-    sym0
-    sym1
-    sym0
-    +
-    +
-    (|\+|-|\*|/|%|<<|>>|&|\||\^)=
-    sym1
-    sym1
-    sym0
-    sym1
-    +
-    +
-    (|\+|-|\*|/|%|<<|>>|&|\||\^)=
-    sym0
-    sym1
-    +
-    drop scope 2 returns
+  main = const:
+    func:
+      sym0
+      . i32
+      1
+      mut inited decl
+      2
+      mut inited decl
+      3
+      inited decl
+      sym3
+      sym3
+      sym4
+      +
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      drop scope 1
+      sym2
+      sym2
+      sym3
+      sym2
+      +
+      +
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym3
+      sym3
+      sym2
+      sym3
+      +
+      +
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym2
+      sym3
+      +
+      drop scope 2 returns
+
 const 24 : i32

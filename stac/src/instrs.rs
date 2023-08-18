@@ -1,53 +1,91 @@
-use std::ops::IndexMut;
+use core::fmt;
 
 use mini_alloc::IdentStr;
 
 use crate::{
-    gen_storage_group, loader::ModuleShadowStore, parser::expr::IdentAst, BuiltInType, Diagnostics,
-    FuncType, Layout, LitKindAst, ModuleRef, Modules, OpCode, Pos, Ref, Span, Type, VecStore,
+    gen_storage_group, loader::ModuleShadowStore, Diagnostics, ExprAst, LitKindAst, ModuleRef,
+    Modules, OpCode, Pos, RecordKind, Ref, Slice,
 };
 
 mod instr_emmiter;
 
 type InstrRepr = u16;
+type DefaultRef<T> = Ref<T, InstrRepr>;
 
 pub type ArgCount = InstrRepr;
 pub type Returns = bool;
 pub type Scoped = bool;
+pub type HasValue = bool;
 pub type FrameSize = InstrRepr;
 pub type Sym = InstrRepr;
+pub type FieldCount = InstrRepr;
+pub type HasType = bool;
 
-pub type InstrRef = Ref<Instr, InstrRepr>;
+pub type InstrRef = DefaultRef<Instr>;
 pub type Const = LitKindAst;
-pub type ConstRef = Ref<Const, InstrRepr>;
-pub type FuncRef = Ref<Func, InstrRepr>;
-pub type TypeRef = Ref<Type, InstrRepr>;
-pub type CtxSym = Ref<IdentStr, InstrRepr>;
+pub type ConstRef = DefaultRef<Const>;
+pub type DefRef = DefaultRef<Def>;
+pub type CtxSym = DefaultRef<IdentStr>;
 pub type SourceOffset = Pos;
-pub type IrTypes = VecStore<Type, InstrRepr>;
 pub type Mutable = bool;
+pub type Fields = Slice<IdentStr, InstrRepr>;
 
 #[derive(Clone, Debug)]
 pub enum InstrKind {
     Module(ModuleRef),
     Const(ConstRef),
-    Type(TypeRef),
+    Def(DefRef),
 
-    Uninit(TypeRef),
     Sym(Sym),
-    Decl(Mutable),
+    Decl {
+        mutable: bool,
+        inited: bool,
+        typed: bool,
+    },
     BinOp(OpCode),
     Call(ArgCount),
     Field(CtxSym),
 
+    // TODO: make flags for this
+    Ctor(FieldCount, CtorMode, HasType),
+    CtorField(CtxSym, HasValue),
+
     If(InstrRef),
     Else(InstrRef),
     EndIf,
+    Return(Returns),
 
     Rt,
 
     Drop,
     DropScope(FrameSize, Returns),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CtorMode {
+    Filled,
+    Complete,
+    Defaulted,
+}
+
+impl From<&Option<Option<ExprAst<'_>>>> for CtorMode {
+    fn from(expr: &Option<Option<ExprAst<'_>>>) -> Self {
+        match expr {
+            Some(Some(_)) => Self::Filled,
+            Some(None) => Self::Defaulted,
+            None => Self::Complete,
+        }
+    }
+}
+
+impl fmt::Display for CtorMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Filled => write!(f, "filled"),
+            Self::Complete => write!(f, "complete"),
+            Self::Defaulted => write!(f, "defaulted"),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -56,63 +94,63 @@ pub struct Instr {
     pub span: SourceOffset,
 }
 
-#[derive(Clone)]
-pub struct Decl {
-    pub name: IdentAst,
-    pub data: Resolved,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum DefKind {
+    Record {
+        kind: RecordKind,
+        fields: Fields,
+    },
+    Func {
+        arg_count: ArgCount,
+        signature_len: ArgCount,
+    },
+    #[default]
+    Const,
+}
+impl DefKind {
+    fn initial_ip(self) -> InstrRepr {
+        match self {
+            Self::Record { .. } => 0,
+            Self::Func { signature_len, .. } => signature_len,
+            Self::Const => 0,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Def {
+    pub kind: DefKind,
+    pub body: InstrBodyRef,
 }
 
 gen_storage_group! {
     InstrBodyes InstrBodyRef InstrBody InstrBodyBuilder 'a {
         instrs: Instr,
         consts: LitKindAst,
-        idents: IdentStr,
-        types: Type,
     }
 }
-
-impl InstrBodyBuilder {
-    pub fn intern_ty(&mut self, ty: &Type) -> TypeRef {
-        match ty {
-            &Type::BuiltIn(b) => TypeRef::from_repr(b as InstrRepr),
-            other => {
-                let r = self.types.find_or_push(other).index();
-                TypeRef::from_repr((r + BuiltInType::COUNT) as InstrRepr)
-            }
-        }
-    }
-}
-
-impl<'a> InstrBody<'a> {
-    pub fn get_ty(&self, ty: TypeRef) -> Type {
-        self.types.get_ty(ty)
-    }
-}
-
-pub trait TypeRefIndex: IndexMut<TypeRef, Output = Type> {
-    fn get_ty(&self, ty: TypeRef) -> Type {
-        match BuiltInType::from_index(ty.index()) {
-            Ok(b) => Type::BuiltIn(b),
-            Err(index) => self[TypeRef::from_repr(index as InstrRepr)].clone(),
-        }
-    }
-}
-
-impl<T: IndexMut<TypeRef, Output = Type> + ?Sized> TypeRefIndex for T {}
 
 gen_storage_group! {
     ModuleDecls ModuleDeclRef ModuleDecl ModuleDeclBuilder 'a {
-        decls: Decl,
-        funcs: Func,
+        defs: Def,
+        idents: IdentStr,
+        decls: IdentStr,
     }
 }
 
-#[derive(Clone, Default)]
-pub struct Func {
-    pub param_count: ArgCount,
-    /// Measured in instructions,
-    pub signature_len: InstrRepr,
-    pub body: InstrBodyRef,
+impl<'a> ModuleDecl<'a> {
+    pub fn lookup_def(&self, name: &str) -> Option<DefRef> {
+        self.decls
+            .iter()
+            .position(|i| i.as_str() == name)
+            .map(|i| DefRef::from_repr(i as _))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DefId {
+    pub ns: ModuleRef,
+    pub index: DefRef,
 }
 
 #[derive(Default)]
@@ -125,84 +163,39 @@ pub struct Instrs {
 impl Instrs {
     const ENTRY_NAME: &'static str = "main";
 
-    pub fn new() -> Self {
-        Self::default().init()
+    pub fn new<'a>(builtin_names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut s = Self::default();
+        let mut mb = ModuleDeclBuilder::default();
+        mb.decls
+            .extend(builtin_names.into_iter().map(IdentStr::from));
+        s.modules[Modules::BUILTIN] = s.decls.finish(&mut mb);
+        s
     }
 
-    fn init(mut self) -> Self {
-        let mut builder = ModuleDeclBuilder::default();
-        builder.mount_integers();
-        self.modules[Modules::BUILTIN] = self.decls.finish(&mut builder);
-
-        self
-    }
-
-    pub fn body_of(&self, id: FuncId) -> InstrBody {
-        let module_view = self.decls.view(self.modules[id.module]);
-        self.bodies.view(module_view.funcs[id.func].body)
+    pub fn body_of(&self, id: DefId) -> InstrBody {
+        let module_view = self.decls.view(self.modules[id.ns]);
+        self.bodies.view(module_view.defs[id.index].body)
     }
 
     pub fn decls_of(&self, module: ModuleRef) -> ModuleDecl {
         self.decls.view(self.modules[module])
     }
 
-    pub fn entry_of(&self, root: ModuleRef) -> Option<FuncRef> {
+    pub fn entry_of(&self, root: ModuleRef) -> Option<DefRef> {
         self.decls_of(root)
             .decls
             .iter()
-            .find_map(|decl| match decl.data {
-                Resolved::Type(Type::Func(FuncType::Static(id)))
-                    if decl.name.ident.as_str() == Self::ENTRY_NAME =>
-                {
-                    Some(id.func)
-                }
-                _ => None,
-            })
+            .position(|d| d.as_str() == Self::ENTRY_NAME)
+            .map(|i| DefRef::from_repr(i as _))
     }
 
-    pub fn func_data(&self, f: FuncId) -> (Func, InstrBody) {
-        let module_view = self.decls.view(self.modules[f.module]);
-        let func = module_view.funcs[f.func].clone();
-        let body = self.bodies.view(func.body);
-        (func, body)
+    pub fn get_def(&self, f: DefId) -> Def {
+        let module_view = self.decls_of(f.ns);
+        module_view.defs[f.index].clone()
     }
 
-    pub fn func(&self, id: FuncId) -> Func {
-        self.decls.view(self.modules[id.module]).funcs[id.func].clone()
-    }
-}
-
-impl ModuleDeclBuilder {
-    fn mount_integers(&mut self) {
-        for ty in BuiltInType::ALL {
-            self.decls.push(Decl {
-                name: IdentAst {
-                    ident: IdentStr::from_str(ty.name()),
-                    span: Span::new(0, 0, Modules::BUILTIN),
-                },
-                data: Resolved::Type(Type::BuiltIn(ty)),
-            });
-        }
-    }
-}
-
-pub struct TyResolverCtx<'ctx> {
-    pub module: ModuleRef,
-    pub arch: Layout,
-    pub instrs: &'ctx Instrs,
-    pub diags: &'ctx mut Diagnostics,
-    pub modules: &'ctx Modules,
-}
-
-impl<'ctx> TyResolverCtx<'ctx> {
-    pub fn stack_borrow(&mut self) -> TyResolverCtx {
-        TyResolverCtx {
-            module: self.module,
-            arch: self.arch,
-            instrs: self.instrs,
-            diags: self.diags,
-            modules: self.modules,
-        }
+    pub fn initial_ip_for(&self, id: DefId) -> InstrRepr {
+        self.get_def(id).kind.initial_ip()
     }
 }
 
@@ -223,128 +216,73 @@ impl ScopeFrame {
     }
 }
 
-pub trait Resolver {
-    fn resolve(
-        &mut self,
-        ctx: TyResolverCtx,
-        decls: ModuleDecl,
-        body: InstrBody,
-        span: Span,
-    ) -> Option<Resolved>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Resolved {
-    Type(Type),
-    Module(ModuleRef),
-    Const(LitKindAst),
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct FuncId {
-    pub module: ModuleRef,
-    pub func: FuncRef,
-}
-
 pub struct InstrBuilder<'ctx> {
-    arch: Layout,
     instrs: &'ctx mut Instrs,
     modules: &'ctx Modules,
     diags: &'ctx mut Diagnostics,
-    resolver: &'ctx mut dyn Resolver,
 }
 
 impl<'ctx> InstrBuilder<'ctx> {
     pub fn new(
-        arch: Layout,
         instrs: &'ctx mut Instrs,
         modules: &'ctx Modules,
         diags: &'ctx mut Diagnostics,
-        resolver: &'ctx mut dyn Resolver,
     ) -> Self {
         Self {
-            arch,
             instrs,
             modules,
             diags,
-            resolver,
         }
     }
 }
 
 #[cfg(test)]
 pub mod instr_test_util {
-
     use mini_alloc::{ArenaBase, DiverBase};
 
     use crate::{
-        bail, instrs::InstrKind, FuncType, InstrBody, Instrs, Layout, ModuleMeta, ModuleRef,
-        Modules, Parser, Resolved, Resolver, Type,
+        bail, instrs::InstrKind, Def, InstrBody, Instrs, ModuleDecl, ModuleMeta, ModuleRef,
+        Modules, Parser,
     };
-
-    #[derive(Default)]
-    pub struct TyResolverMock {}
-
-    impl Resolver for TyResolverMock {
-        fn resolve(
-            &mut self,
-            ctx: crate::TyResolverCtx,
-            _: crate::ModuleDecl,
-            body: crate::InstrBody,
-            _span: crate::Span,
-        ) -> Option<super::Resolved> {
-            let mut stack = Vec::<Resolved>::new();
-
-            for instr in body.instrs {
-                let value = match &instr.kind {
-                    InstrKind::Field(i) => match stack.pop().unwrap() {
-                        Resolved::Module(m) => {
-                            let view = ctx.instrs.decls.view(ctx.instrs.modules[m]);
-                            view.decls
-                                .iter()
-                                .find(|d| d.name.ident == body.idents[*i])
-                                .unwrap()
-                                .data
-                                .clone()
-                        }
-                        _ => todo!(),
-                    },
-                    &InstrKind::Module(module) => Resolved::Module(module),
-                    &InstrKind::Const(c) => Resolved::Const(body.consts[c].clone()),
-                    &InstrKind::Type(ty) => Resolved::Type(body.get_ty(ty)),
-                    &InstrKind::Drop => stack.pop().unwrap(),
-                    i => todo!("{:?}", i),
-                };
-
-                stack.push(value);
-            }
-
-            Some(stack.pop().unwrap())
-        }
-    }
 
     pub fn display_id(prefix: &str, id: usize, ctx: &mut String) {
         ctx.push_str(prefix);
         ctx.push_str(id.to_string().as_str());
     }
 
-    pub fn display_instr(instr: &InstrKind, body: &InstrBody, ctx: &mut String) {
+    pub fn display_instr(
+        instr: &InstrKind,
+        instrs: &Instrs,
+        body: InstrBody,
+        module: ModuleDecl,
+        indent: usize,
+        ctx: &mut String,
+    ) {
         match instr.clone() {
-            InstrKind::Uninit(ty) => {
-                ctx.push_str("uninit ");
-                ctx.push_str(&body.types[ty].to_string());
-            }
             InstrKind::Sym(s) => display_id("sym", s as usize, ctx),
             InstrKind::BinOp(op) => ctx.push_str(op.name()),
             InstrKind::Field(f) => {
                 ctx.push_str(". ");
-                ctx.push_str(&body.idents[f].to_string());
+                ctx.push_str(&module.idents[f].as_str());
             }
-            InstrKind::Type(t) => ctx.push_str(&body.get_ty(t).to_string()),
             InstrKind::Module(m) => display_id("mod", m.index(), ctx),
             InstrKind::Const(c) => ctx.push_str(&body.consts[c].to_string()),
-            InstrKind::Decl(false) => ctx.push_str("decl"),
-            InstrKind::Decl(true) => ctx.push_str("decl mut"),
+            InstrKind::Decl {
+                mutable,
+                inited,
+                typed,
+            } => {
+                if mutable {
+                    ctx.push_str("mut ");
+                }
+                if inited {
+                    ctx.push_str("inited ");
+                }
+                if typed {
+                    ctx.push_str("typed ");
+                }
+                ctx.push_str("decl");
+            }
             InstrKind::Drop => ctx.push_str("drop"),
             InstrKind::DropScope(s, r) => {
                 ctx.push_str("drop scope ");
@@ -365,6 +303,21 @@ pub mod instr_test_util {
             }
             InstrKind::EndIf => ctx.push_str("endif"),
             InstrKind::Rt => ctx.push_str("rt"),
+            InstrKind::Return(true) => ctx.push_str("return value"),
+            InstrKind::Return(false) => ctx.push_str("return"),
+            InstrKind::Def(def) => display_def(&module.defs[def], instrs, module, indent + 1, ctx),
+            InstrKind::Ctor(field_count, spread, has_type) => {
+                ctx.push_str("ctor ");
+                ctx.push_str(field_count.to_string().as_str());
+                ctx.push(' ');
+                ctx.push_str(spread.to_string().as_str());
+                ctx.push_str(if has_type { " typed" } else { "" });
+            }
+            InstrKind::CtorField(name, is_inline) => {
+                ctx.push_str("ctor field ");
+                ctx.push_str(module.idents[name].as_str());
+                ctx.push_str(if is_inline { " inline" } else { "" });
+            }
         }
     }
 
@@ -372,62 +325,46 @@ pub mod instr_test_util {
         let name = modules.name_of(module);
         let view = instrs.decls.view(instrs.modules[module]);
 
-        ctx.push_str("module ");
         ctx.push_str(name.as_str());
         ctx.push_str(":\n");
 
-        for decl in view.decls.iter() {
+        for (decl, def) in view.decls.iter().zip(view.defs.iter()) {
             ctx.push_str("  ");
-            ctx.push_str(decl.name.ident.as_str());
+            ctx.push_str(decl.as_str());
             ctx.push_str(" = ");
 
-            let func = match decl.data.clone() {
-                Resolved::Type(Type::Func(FuncType::Static(func))) => func.func,
-                Resolved::Type(ty) => {
-                    ctx.push_str(&ty.to_string());
-                    ctx.push('\n');
-                    continue;
-                }
-                Resolved::Module(m) => {
-                    ctx.push_str(":{");
-                    ctx.push_str(modules.name_of(m).as_str());
-                    ctx.push_str("}\n");
-                    continue;
-                }
-                Resolved::Const(c) => {
-                    ctx.push_str(&c.to_string());
-                    ctx.push('\n');
-                    continue;
-                }
-            };
-
-            let func = &view.funcs[func];
-
-            let body_view = instrs.bodies.view(func.body);
-
-            ctx.push_str("sig:\n");
-            for instr in body_view.instrs.iter().take(func.signature_len as usize) {
-                ctx.push_str("    ");
-                display_instr(&instr.kind, &body_view, ctx);
-                ctx.push('\n');
-            }
-
-            ctx.push_str("  body:\n");
-            for instr in body_view.instrs.iter().skip(func.signature_len as usize) {
-                ctx.push_str("    ");
-                display_instr(&instr.kind, &body_view, ctx);
-                ctx.push('\n');
-            }
+            display_def(def, instrs, view, 2, ctx);
         }
     }
 
-    pub fn parse_modules(
-        mods: &Modules,
-        meta: &ModuleMeta,
-        instrs: &mut Instrs,
-        mut resolver: impl Resolver,
+    pub fn display_def(
+        def: &Def,
+        instrs: &Instrs,
+        view: ModuleDecl,
+        indent: usize,
         ctx: &mut String,
     ) {
+        let prefix = match def.kind {
+            crate::DefKind::Record { kind, .. } => kind.name(),
+            crate::DefKind::Func { .. } => "func",
+            crate::DefKind::Const => "const",
+        };
+
+        ctx.push_str(prefix);
+        ctx.push_str(":\n");
+
+        let body = instrs.bodies.view(def.body);
+
+        for instr in body.instrs.iter() {
+            for _ in 0..indent {
+                ctx.push_str("  ");
+            }
+            display_instr(&instr.kind, instrs, body, view, indent, ctx);
+            ctx.push('\n');
+        }
+    }
+
+    pub fn parse_modules(mods: &Modules, meta: &ModuleMeta, instrs: &mut Instrs, ctx: &mut String) {
         let mut diags = crate::Diagnostics::default();
 
         let mut arena = ArenaBase::new(1000);
@@ -440,8 +377,7 @@ pub mod instr_test_util {
                 bail!("failed to parse module" diags ctx continue);
             };
 
-            let builder =
-                crate::InstrBuilder::new(Layout::ARCH_64, instrs, mods, &mut diags, &mut resolver);
+            let builder = crate::InstrBuilder::new(instrs, mods, &mut diags);
 
             if builder.build(module, items).is_none() || !diags.view().is_empty() {
                 bail!("failed to build module" diags ctx continue);
@@ -454,8 +390,7 @@ pub mod instr_test_util {
 
 #[cfg(test)]
 mod test {
-
-    use crate::{load_modules, parse_modules, print_cases, TyResolverMock};
+    use crate::{load_modules, parse_modules, print_cases};
 
     fn prefrom_test(_: &str, source: &str, ctx: &mut String) {
         let mut mods = crate::Modules::new();
@@ -464,9 +399,8 @@ mod test {
             return;
         };
 
-        let mut instrs = crate::Instrs::new();
-        let resolver = TyResolverMock::default();
-        parse_modules(&mods, &meta, &mut instrs, resolver, ctx);
+        let mut instrs = crate::Instrs::new([]);
+        parse_modules(&mods, &meta, &mut instrs, ctx);
     }
 
     print_cases! { prefrom_test:
@@ -474,5 +408,32 @@ mod test {
         arguments "let main = fn(a: :{bi}.i32): :{bi}.i32 a * 2";
         import "let bi = :{bi} let drop = fn(): bi.i32 42";
         if_stmt "let foo = fn(): :{bi}.i32 if true 1 else 2";
+        structs "
+            let foo = struct {
+                a: :{bi}.i32
+                b: :{bi}.i32
+                c: union {
+                    c: :{bi}.i32
+                    d: :{bi}.i32
+                }
+                d: enum {
+                    b: :{bi}.i32
+                }
+            }
+        ";
+        symbol_numbering "
+            let foo = {
+                let goo = {
+                    let loo = 3
+                    loo
+                    2
+                }
+                let moo = 3
+                moo
+                foo
+                0
+            }
+            let soo = 1
+        ";
     }
 }

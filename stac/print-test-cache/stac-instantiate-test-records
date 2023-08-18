@@ -1,0 +1,46 @@
+root:
+  bi = const:
+    mod0
+  point = const:
+    struct:
+      sym0
+      . i32
+      inited decl
+      sym0
+      . i32
+      inited decl
+
+  optuion = const:
+    enum:
+      sym0
+      . unit
+      inited decl
+      sym0
+      . i32
+      inited decl
+
+  field_alias = const:
+    union:
+      sym0
+      . i32
+      inited decl
+      sym0
+      . i32
+      inited decl
+
+  nested = const:
+    struct:
+      enum:
+        union:
+          sym0
+          . i32
+          inited decl
+          sym0
+          . i32
+          inited decl
+
+        inited decl
+
+      inited decl
+
+no entry point

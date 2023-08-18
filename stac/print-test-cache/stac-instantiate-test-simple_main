@@ -1,8 +1,11 @@
-module root:
-  bi = :{bi}
-  main = sig:
+root:
+  bi = const:
     mod0
-    . i32
-  body:
-    0
-const 0 : i32
+  main = const:
+    func:
+      sym0
+      . i32
+      0
+
+function fully folded
+result: 0

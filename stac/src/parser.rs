@@ -90,6 +90,10 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     fn peek(&self) -> Token<'src> {
         self.next
     }
+
+    fn has_next(&self, pat: impl TokenPattern) -> bool {
+        pat.matches(self.peek())
+    }
 }
 
 trait TokenPattern: Clone {

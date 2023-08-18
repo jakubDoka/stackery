@@ -2,3 +2,4 @@
 let other = :{other}
 let foo = other.func(100) + 1
 let main = fn(): :{bi}.i32 foo
+

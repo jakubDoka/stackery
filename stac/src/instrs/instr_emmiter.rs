@@ -2,21 +2,36 @@ use mini_alloc::IdentStr;
 
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
-    ArgCount, BinaryAst, BlockAst, BuiltInType, ExprAst, FieldAst, FrameSize, FuncArgAst, FuncId,
-    FuncType, IfAst, ModItemAst, ModuleRef, OpAst, OpCode, Resolved, Severty, Span, Sym, Type,
-    TypeRef, UnaryAst, UnitAst,
+    ArgCount, BinaryAst, BlockAst, CtorAst, DefKind, DefRef, ExprAst, FieldAst, FrameSize,
+    FuncArgAst, IfAst, ModItemAst, ModuleRef, OpAst, OpCode, RecordAst, RecordItemAst, ReturnAst,
+    Severty, Span, Sym, UnaryAst, UnitAst,
 };
 
 use super::{
-    CtxSym, Decl, Func, FuncRef, Instr, InstrBodyBuilder, InstrKind, InstrRef, InstrRepr,
-    ModuleDeclBuilder, ScopeFrame, TyResolverCtx,
+    CtorMode, CtxSym, Def, Instr, InstrBodyBuilder, InstrKind, InstrRef, InstrRepr,
+    ModuleDeclBuilder, ScopeFrame,
 };
 
+pub enum DefAst<'arena> {
+    Func(FuncAst<'arena>),
+    Record(RecordAst<'arena>),
+}
+
+impl<'arena> DefAst<'arena> {
+    fn keyword(&self) -> Span {
+        match self {
+            DefAst::Func(FuncAst { keyword, .. }) => *keyword,
+            DefAst::Record(RecordAst { keyword, .. }) => *keyword,
+        }
+    }
+}
+
+#[derive(Default)]
 struct Res<'arena> {
     module_ref: ModuleRef,
     body: InstrBodyBuilder,
     module: ModuleDeclBuilder,
-    func_queue: Vec<(FuncRef, FuncAst<'arena>)>,
+    compile_queue: Vec<(DefRef, DefAst<'arena>)>,
     scope: Vec<IdentAst>,
 }
 
@@ -24,24 +39,40 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     pub fn build(mut self, module: ModuleRef, ast: &[ModItemAst]) -> Option<()> {
         let mut res = Res {
             module_ref: module,
-            body: Default::default(),
-            module: Default::default(),
-            func_queue: Default::default(),
-            scope: Default::default(),
+            ..Default::default()
         };
 
+        self.bind_decls(ast, &mut res);
         self.collect_decls(ast, &mut res);
-        self.build_funcs(&mut res);
+        self.consume_queue(&mut res);
 
         self.instrs.modules[module] = self.instrs.decls.finish(&mut res.module);
 
         Some(())
     }
 
-    fn build_funcs(&mut self, res: &mut Res) {
-        while let Some((func_ref, ast)) = res.func_queue.pop() {
-            if let Some(func) = self.build_func(ast, res) {
-                res.module.funcs[func_ref] = func;
+    fn bind_decls(&mut self, ast: &[ModItemAst], res: &mut Res) {
+        for item in ast.iter() {
+            match item {
+                ModItemAst::Decl(DeclAst { name, .. }) => {
+                    res.module.decls.push(name.ident.clone());
+                    res.scope.push(name.clone());
+                }
+            }
+        }
+    }
+
+    fn consume_queue(&mut self, res: &mut Res) {
+        while let Some((id, def)) = res.compile_queue.pop() {
+            let def = match def {
+                DefAst::Func(ast) => self.build_func(ast, res),
+                DefAst::Record(ast) => self.build_record(ast, res),
+            };
+
+            if let Some(def) = def {
+                res.module.defs[id] = def;
+            } else {
+                res.body.clear();
             }
         }
     }
@@ -49,27 +80,27 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     fn build_signature<'arena>(
         &mut self,
         FuncAst {
-            args,
-            return_ty,
-            keyword,
-            ..
+            args, return_ty, ..
         }: &FuncAst<'arena>,
         res: &mut Res<'arena>,
     ) -> Option<InstrRepr> {
         let frame = ScopeFrame::new(&mut res.scope);
+
         for FuncArgAst { name, ty, .. } in *args {
             self.build_expr(ty, res);
-            res.push_instr(InstrKind::Decl(false), name.span);
+            res.push_instr(
+                InstrKind::Decl {
+                    mutable: false,
+                    inited: true,
+                    typed: false,
+                },
+                name.span,
+            );
             res.scope.push(name.clone());
         }
 
         if let Some(return_ty) = return_ty {
             self.build_expr(return_ty, res);
-        } else {
-            res.push_instr(
-                InstrKind::Type(TypeRef::from_repr(BuiltInType::Unit as InstrRepr)),
-                *keyword,
-            );
         }
 
         frame.end(&mut res.scope);
@@ -77,57 +108,56 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         Some(args.len() as InstrRepr)
     }
 
-    fn resolve<'arena>(
+    fn build_record<'arena>(
         &mut self,
-        expr: &ExprAst<'arena>,
+        ast: RecordAst<'arena>,
         res: &mut Res<'arena>,
-    ) -> Option<Resolved> {
-        self.build_expr(expr, res)?;
-
-        let ctx = TyResolverCtx {
-            arch: self.arch,
-            module: res.module_ref,
-            diags: &mut self.diags,
-            instrs: &self.instrs,
-            modules: &self.modules,
-        };
-
-        let resolved = self
-            .resolver
-            .resolve(ctx, res.module.view(), res.body.view(), expr.span());
-        res.body.clear();
-        resolved
-    }
-
-    fn resolve_ty<'arena>(&mut self, expr: &ExprAst<'arena>, res: &mut Res<'arena>) -> Type {
-        match self.resolve(expr, res) {
-            Some(Resolved::Type(ty)) => ty,
-            Some(..) => {
-                self.diags
-                    .builder(self.modules.files())
-                    .footer(Severty::Error, "expected this to evaluate into type")
-                    .annotation(Severty::Error, expr.span(), "this evalueates into TODO");
-                Type::BuiltIn(BuiltInType::Unknown)
-            }
-            None => Type::BuiltIn(BuiltInType::Unknown),
-        }
-    }
-
-    fn build_func<'arena>(&mut self, ast: FuncAst<'arena>, res: &mut Res<'arena>) -> Option<Func> {
-        let param_count = self.build_signature(&ast, res)?;
-        let signature_len = res.body.instrs.len() as InstrRepr;
-
+    ) -> Option<Def> {
         let base_frame = ScopeFrame::new(&mut res.scope);
-        self.decl_params(ast.args, res);
 
-        self.build_expr(&ast.body, res)?;
+        let names = ast.fields.iter().map(|f| f.name.ident.clone());
+        let fields = res.module.idents.extend(names);
+
+        for RecordItemAst { name, value, .. } in ast.fields {
+            self.build_expr(value, res);
+            res.push_instr(
+                InstrKind::Decl {
+                    mutable: false,
+                    inited: true,
+                    typed: false,
+                },
+                name.span,
+            );
+        }
 
         base_frame.end(&mut res.scope);
         let body = self.instrs.bodies.finish(&mut res.body);
 
-        Some(Func {
-            signature_len,
-            param_count,
+        Some(Def {
+            kind: DefKind::Record {
+                kind: ast.kind,
+                fields,
+            },
+            body,
+        })
+    }
+
+    fn build_func<'arena>(&mut self, ast: FuncAst<'arena>, res: &mut Res<'arena>) -> Option<Def> {
+        let arg_count = self.build_signature(&ast, res)?;
+        let signature_len = res.body.instrs.len() as InstrRepr;
+
+        let base_frame = ScopeFrame::new(&mut res.scope);
+        self.decl_params(ast.args, res);
+        self.build_expr(&ast.body, res)?;
+        base_frame.end(&mut res.scope);
+
+        let body = self.instrs.bodies.finish(&mut res.body);
+
+        Some(Def {
+            kind: DefKind::Func {
+                arg_count,
+                signature_len,
+            },
             body,
         })
     }
@@ -151,15 +181,61 @@ impl<'ctx> super::InstrBuilder<'ctx> {
             UnitAst::Ident(i) => self.build_ident(i, res),
             UnitAst::Import(i) => self.build_import(i, res),
             UnitAst::If(i) => self.build_if(i, res),
-            UnitAst::Block(b) => self.build_block(b, res),
+            UnitAst::Block(b) => self.build_block(b.clone(), res),
             UnitAst::Unary(u) => self.build_unary(u, res),
             UnitAst::Call(c) => self.build_call(c, res),
-            UnitAst::Func(f) => self.queue_func(f, res),
+            &UnitAst::Func(f) => self.queue(DefAst::Func(f.clone()), res),
             UnitAst::Decl(d) => self.build_decl(d, res),
             UnitAst::Paren(p) => self.build_expr(p, res),
             UnitAst::Field(f) => self.build_field(f, res),
             UnitAst::Rt(r) => self.build_rt(r, res),
+            UnitAst::Return(r) => self.build_return(r, res),
+            UnitAst::Record(r) => self.queue(DefAst::Record(r.clone()), res),
+            UnitAst::Ctor(c) => self.build_ctor(c, res),
         }
+    }
+
+    fn build_ctor<'arena>(
+        &mut self,
+        CtorAst {
+            brace: _,
+            ty,
+            fill,
+            fields,
+        }: &CtorAst<'arena>,
+        res: &mut Res<'arena>,
+    ) -> Option<()> {
+        for field in fields.iter() {
+            if let Some(expr) = &field.value {
+                self.build_expr(expr, res)?;
+            }
+            let name = res.intern_ident(&field.name.ident);
+            res.push_instr(
+                InstrKind::CtorField(name, field.value.is_none()),
+                field.name.span,
+            );
+        }
+
+        if let Some(Some(expr)) = fill {
+            self.build_expr(expr, res)?;
+        }
+
+        let fill_mode = CtorMode::from(fill);
+        self.build_unit(ty, res)?;
+        res.push_instr(
+            InstrKind::Ctor(fields.len() as _, fill_mode, true),
+            ty.span(),
+        );
+
+        Some(())
+    }
+
+    fn build_return<'arena>(&mut self, r: &ReturnAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
+        if let Some(expr) = &r.expr {
+            self.build_expr(expr, res)?;
+        }
+        res.push_instr(InstrKind::Return(r.expr.is_some()), r.keyword);
+        Some(())
     }
 
     fn build_rt<'arena>(
@@ -180,11 +256,6 @@ impl<'ctx> super::InstrBuilder<'ctx> {
 
     fn build_ident(&mut self, ident: &IdentAst, res: &mut Res) -> Option<()> {
         let Some(sym) = res.lookup_sym(&ident.ident) else {
-            if let Some(global_sym) = res.lookup_global_sym(&ident.ident).cloned() {
-                res.push_res_as_instr(&global_sym, ident.span);
-                return Some(());
-            }
-
             self.diags
                 .builder(self.modules.files())
                 .footer(Severty::Error, "use of undeclared identifier")
@@ -248,7 +319,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
 
     fn build_block<'arena>(
         &mut self,
-        block: &'arena BlockAst<'arena>,
+        block: BlockAst<'arena>,
         res: &mut Res<'arena>,
     ) -> Option<()> {
         let Some((last, rest)) = block.exprs.split_last() else {
@@ -332,14 +403,10 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         Some(())
     }
 
-    fn queue_func<'arena>(&mut self, func: &FuncAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
-        let func_ref = res.add_to_compile_queue(func.clone());
-        let func_ty = Type::Func(FuncType::Static(FuncId {
-            module: res.module_ref,
-            func: func_ref,
-        }));
-        let ty = res.body.intern_ty(&func_ty);
-        res.push_instr(InstrKind::Type(ty), func.keyword);
+    fn queue<'arena>(&mut self, def: DefAst<'arena>, res: &mut Res<'arena>) -> Option<()> {
+        let def_ref = res.module.defs.push(Def::default());
+        res.push_instr(InstrKind::Def(def_ref), def.keyword());
+        res.compile_queue.push((def_ref, def));
         Some(())
     }
 
@@ -354,20 +421,22 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         }: &DeclAst<'arena>,
         res: &mut Res<'arena>,
     ) -> Option<()> {
+        if let Some(ty) = ty {
+            self.build_expr(ty, res)?;
+        }
         if let Some(value) = value {
             self.build_expr(value, res)?;
-        } else {
-            let ty = ty
-                .as_ref()
-                .map_or(Type::BuiltIn(BuiltInType::Unknown), |ty| {
-                    self.resolve_ty(ty, res)
-                });
-            let ty = res.body.intern_ty(&ty);
-            res.push_instr(InstrKind::Uninit(ty), *keyword);
         }
 
         res.scope.push(name.clone());
-        res.push_instr(InstrKind::Decl(mutable.is_some()), *keyword);
+        res.push_instr(
+            InstrKind::Decl {
+                mutable: mutable.is_some(),
+                inited: value.is_some(),
+                typed: ty.is_some(),
+            },
+            *keyword,
+        );
 
         Some(())
     }
@@ -395,28 +464,31 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     }
 
     fn collect_decls<'arena>(&mut self, ast: &'arena [ModItemAst<'arena>], res: &mut Res<'arena>) {
-        for ast in ast {
+        for _ in 0..ast.len() {
+            res.module.defs.push(Def::default());
+        }
+        for (i, ast) in ast.iter().enumerate() {
             match ast {
                 ModItemAst::Decl(decl) => {
-                    if let Some(delc) = self.collect_decl(decl, res) {
-                        res.module.decls.push(delc);
+                    if let Some(def) = self.collect_const(decl, res) {
+                        res.module.defs[DefRef::from_repr(i as _)] = def;
                     }
                 }
             }
         }
     }
 
-    fn collect_decl<'arena>(
+    fn collect_const<'arena>(
         &mut self,
         DeclAst {
             keyword,
             mutable,
-            name,
-            ty: _,
+            name: _,
+            ty,
             value,
         }: &'arena DeclAst,
         res: &mut Res<'arena>,
-    ) -> Option<Decl> {
+    ) -> Option<Def> {
         let Some(value) = value else {
             self.diags
                 .builder(self.modules.files())
@@ -439,31 +511,40 @@ impl<'ctx> super::InstrBuilder<'ctx> {
                 .terminate()?;
         }
 
-        let data = self.resolve(value, res)?;
+        if let Some(ty) = ty {
+            self.diags
+                .builder(self.modules.files())
+                .footer(
+                    Severty::Error,
+                    "top level declarations cannot have a type (yet)",
+                )
+                .annotation(Severty::Error, ty.span(), "declared here")
+                .terminate()?;
+        }
 
-        Some(Decl {
-            name: name.clone(),
-            data,
+        let frame = ScopeFrame::new(&res.scope);
+        self.build_expr(value, res)?;
+        frame.end(&mut res.scope);
+
+        let body = self.instrs.bodies.finish(&mut res.body);
+
+        Some(Def {
+            kind: DefKind::Const,
+            body,
         })
     }
 }
 
 impl<'arena> Res<'arena> {
-    fn add_to_compile_queue(&mut self, f: FuncAst<'arena>) -> FuncRef {
-        let func = self.module.funcs.push(Func::default());
-        self.func_queue.push((func, f));
-        func
-    }
-
     fn push_instr(&mut self, kind: InstrKind, span: Span) -> InstrRef {
         self.body.instrs.push(Instr {
-            kind: kind.into(),
+            kind,
             span: span.to_pos(),
         })
     }
 
     fn intern_ident(&mut self, ident: &IdentStr) -> CtxSym {
-        self.body.idents.find_or_push(ident)
+        self.module.idents.find_or_push(ident)
     }
 
     fn lookup_sym(&self, ident: &IdentStr) -> Option<Sym> {
@@ -471,21 +552,5 @@ impl<'arena> Res<'arena> {
             .iter()
             .rposition(|si| si.ident == *ident)
             .map(|s| s as Sym)
-    }
-
-    fn lookup_global_sym(&self, ident: &IdentStr) -> Option<&Resolved> {
-        self.module
-            .decls
-            .values()
-            .find_map(|decl| (decl.name.ident == *ident).then_some(&decl.data))
-    }
-
-    fn push_res_as_instr(&mut self, global_sym: &Resolved, span: Span) {
-        let instr = match global_sym {
-            Resolved::Type(t) => InstrKind::Type(self.body.intern_ty(t)),
-            &Resolved::Module(m) => InstrKind::Module(m),
-            Resolved::Const(c) => InstrKind::Const(self.body.consts.find_or_push(c)),
-        };
-        self.push_instr(instr, span);
     }
 }

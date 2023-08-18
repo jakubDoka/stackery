@@ -1,4 +1,4 @@
-note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(0) }, ip: 1, inputs: [], ret: BuiltIn(I32) }
+note: Generated IR for Entry { id: DefId { ns: Ref(1), index: Ref(4) }, ip: 1, inputs: [], ret: BuiltIn(I32) }
 note: function u0:0() -> i32 system_v {
     sig0 = (i32) -> i32 system_v
     fn0 = colocated u0:1 sig0
@@ -9,7 +9,7 @@ block0:
     return v1
 }
 
-note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(1) }, ip: 3, inputs: [Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
+note: Generated IR for Entry { id: DefId { ns: Ref(1), index: Ref(5) }, ip: 3, inputs: [Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
 note: function u0:0(i32) -> i32 system_v {
     sig0 = (i32) -> i32 system_v
     fn0 = colocated u0:2 sig0
@@ -19,7 +19,7 @@ block0(v0: i32):
     return v1
 }
 
-note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(2) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Ct(Const(Int(IntLit([0, 0, 0, 0, 0, 0, 0, 0])))), Ct(Const(Int(IntLit([1, 0, 0, 0, 0, 0, 0, 0]))))], ret: BuiltIn(I32) }
+note: Generated IR for Entry { id: DefId { ns: Ref(1), index: Ref(6) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Ct(Const(Int(IntLit([0, 0, 0, 0, 0, 0, 0, 0])))), Ct(Const(Int(IntLit([1, 0, 0, 0, 0, 0, 0, 0]))))], ret: BuiltIn(I32) }
 note: function u0:0(i32) -> i32 system_v {
     sig0 = (i32, i32, i32) -> i32 system_v
     fn0 = colocated u0:3 sig0
@@ -45,7 +45,7 @@ block3(v9: i32):
     return v9
 }
 
-note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(2) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Rt(BuiltIn(I32)), Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
+note: Generated IR for Entry { id: DefId { ns: Ref(1), index: Ref(6) }, ip: 7, inputs: [Rt(BuiltIn(I32)), Rt(BuiltIn(I32)), Rt(BuiltIn(I32))], ret: BuiltIn(I32) }
 note: function u0:0(i32, i32, i32) -> i32 system_v {
     sig0 = (i32, i32, i32) -> i32 system_v
     fn0 = colocated u0:3 sig0
@@ -61,7 +61,7 @@ block1:
 block2:
     v5 = iconst.i32 1
     v6 = isub.i32 v0, v5  ; v5 = 1
-    v7 = iadd.i32 v1, v2
+    v7 = iadd.i32 v2, v1
     v8 = call fn0(v6, v2, v7)
     jump block3(v8)
 

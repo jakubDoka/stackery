@@ -1,0 +1,17 @@
+root:
+  bi = const:
+    mod0
+  main = const:
+    func:
+      sym0
+      . i32
+      true
+      if 6
+      0
+      return value
+      endif
+      drop
+      1
+
+const 0 : i32
+return value : never

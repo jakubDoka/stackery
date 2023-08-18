@@ -1,10 +1,54 @@
-use std::fmt;
+use std::{
+    fmt,
+    ops::{Index, IndexMut},
+};
 
-use crate::{Const, DefaultRef, FuncId};
+use mini_alloc::IdentStr;
+
+use crate::{Const, DefaultRef, RecordKind, Ref, VecStore};
 
 mod unify_impl;
 
-pub type ParamId = u16;
+pub type RecordRepr = u32;
+pub type RecordInst = Ref<Record, RecordRepr>;
+
+pub struct Record {
+    pub fields: Vec<RecordField>,
+}
+
+pub struct RecordField {
+    pub name: IdentStr,
+    pub ty: Type,
+}
+
+#[derive(Default)]
+pub struct Types {
+    reords: VecStore<Record, RecordRepr>,
+}
+
+impl Types {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn create_record(&mut self) -> RecordInst {
+        self.reords.push(Record { fields: Vec::new() })
+    }
+}
+
+impl Index<RecordInst> for Types {
+    type Output = Record;
+
+    fn index(&self, index: RecordInst) -> &Self::Output {
+        &self.reords[index]
+    }
+}
+
+impl IndexMut<RecordInst> for Types {
+    fn index_mut(&mut self, index: RecordInst) -> &mut Self::Output {
+        &mut self.reords[index]
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Signature {
@@ -41,7 +85,7 @@ pub enum UnificationError {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
     BuiltIn(BuiltInType),
-    Func(FuncType),
+    Record(RecordKind, RecordInst),
 }
 
 impl From<BuiltInType> for Type {
@@ -53,10 +97,9 @@ impl From<BuiltInType> for Type {
 impl Type {
     pub const UNIT: Self = Self::BuiltIn(BuiltInType::Unit);
 
-    pub(crate) fn unify(&self, other: &Self) -> Result<Self, UnificationError> {
+    pub fn unify(&self, other: &Self) -> Result<Self, UnificationError> {
         match (self, other) {
             (&Self::BuiltIn(lhs), &Self::BuiltIn(rhs)) => lhs.unify(rhs).map(Self::BuiltIn),
-            (Self::Func(lhs), Self::Func(rgs)) => lhs.unify(rgs).map(Self::Func),
             _ => Err(UnificationError::Incompatible),
         }
     }
@@ -73,7 +116,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BuiltIn(b) => b.fmt(f),
-            Self::Func(sig) => sig.fmt(f),
+            Self::Record(kind, id) => write!(f, "{:?}#{}", kind, id.index()),
         }
     }
 }
@@ -84,70 +127,48 @@ impl DefaultRef for Type {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum FuncType {
-    Static(FuncId),
-}
+macro_rules! gen_builtin {
+    ($($name:ident = $display:literal)*) => {
+        #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+        #[repr(u8)]
+        pub enum BuiltInType {$( $name, )*}
 
-impl FuncType {
-    pub fn unify(&self, other: &Self) -> Result<Self, UnificationError> {
-        match (self, other) {
-            (Self::Static(lhs), Self::Static(rhs)) if lhs == rhs => Err(UnificationError::Equal),
-            _ => Err(UnificationError::Incompatible),
+
+        impl BuiltInType {
+            pub const COUNT: usize = [$( BuiltInType::$name, )*].len();
+            pub const ALL: [Self; Self::COUNT] = [$( BuiltInType::$name, )*];
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $( Self::$name => $display, )*
+                }
+            }
         }
     }
 }
 
-impl fmt::Display for FuncType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Static(id) => write!(f, "func#{}:{}", id.module.index(), id.module.index()),
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[repr(u8)]
-pub enum BuiltInType {
-    Unknown,
-    Module,
-    Type,
-    Unit,
-    Bool,
-    Integer,
-    Uint,
-    U8,
-    U16,
-    U32,
-    U64,
-    Int,
-    I8,
-    I16,
-    I32,
-    I64,
+gen_builtin! {
+    Unknown = "{unknown}"
+    Never = "never"
+    Module = "module"
+    Def = "def"
+    Type = "type"
+    Unit = "unit"
+    Bool = "bool"
+    Integer = "{integer}"
+    Uint = "uint"
+    U8 = "u8"
+    U16 = "u16"
+    U32 = "u32"
+    U64 = "u64"
+    Int = "int"
+    I8 = "i8"
+    I16 = "i16"
+    I32 = "i32"
+    I64 = "i64"
 }
 
 impl BuiltInType {
-    pub const COUNT: usize = 16;
-    pub const ALL: [Self; Self::COUNT] = [
-        Self::Unknown,
-        Self::Module,
-        Self::Type,
-        Self::Unit,
-        Self::Bool,
-        Self::Integer,
-        Self::Uint,
-        Self::U8,
-        Self::U16,
-        Self::U32,
-        Self::U64,
-        Self::Int,
-        Self::I8,
-        Self::I16,
-        Self::I32,
-        Self::I64,
-    ];
-
     pub const fn from_index(index: usize) -> Result<Self, usize> {
         match index.checked_sub(Self::ALL.len()) {
             Some(index) => Err(index),
@@ -155,11 +176,16 @@ impl BuiltInType {
         }
     }
 
+    pub fn into_ref(self) -> Ref<Type, u16> {
+        Ref::from_repr(self as _)
+    }
+
     pub fn unify(self, rhs: Self) -> Result<Self, UnificationError> {
         use BuiltInType::*;
         match (self, rhs) {
             (a, b) if a == b => Err(UnificationError::Equal),
             (Unknown, a) | (a, Unknown) => Ok(a),
+            (Never, a) | (a, Never) => Ok(a),
             (Integer, a) | (a, Integer) if a.is_integer() => Ok(a),
             _ => Err(UnificationError::Incompatible),
         }
@@ -178,35 +204,13 @@ impl BuiltInType {
         matches!(self, I8 | I16 | I32 | I64 | Int)
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Unknown => "{unknown}",
-            Self::Module => "module",
-            Self::Type => "type",
-            Self::Unit => "()",
-            Self::Bool => "bool",
-            Self::Integer => "{integer}",
-            Self::Uint => "uint",
-            Self::U8 => "u8",
-            Self::U16 => "u16",
-            Self::U32 => "u32",
-            Self::U64 => "u64",
-            Self::Int => "int",
-            Self::I8 => "i8",
-            Self::I16 => "i16",
-            Self::I32 => "i32",
-            Self::I64 => "i64",
-        }
-    }
-
-    pub(crate) fn from_const(c: &Const) -> BuiltInType {
+    pub fn from_const(c: &Const) -> BuiltInType {
         match c {
             Const::Bool(_) => Self::Bool,
             Const::Int(_) => Self::Integer,
         }
     }
 }
-
 impl fmt::Display for BuiltInType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.name().fmt(f)

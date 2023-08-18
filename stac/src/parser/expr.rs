@@ -1,10 +1,16 @@
-use std::fmt;
+use std::{fmt, ops::Not, result};
 
 use mini_alloc::{Diver, IdentStr};
 
-use crate::{OpCode, Parser, Severty, Span, Token, TokenKind::*, TransposeOpt};
+use crate::{
+    OpCode, Parser, RecordKind, Severty, Span, Token,
+    TokenKind::{self, *},
+    TransposeOpt,
+};
 
 impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
+    const NON_EXPR_TOKENS: [TokenKind; 1] = [Semi];
+
     pub fn parse(mut self, mut diver: Diver) -> Option<&'arena [ModItemAst<'arena>]> {
         let mut items = diver.dive::<ModItemAst<'arena>>();
 
@@ -99,7 +105,9 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
             Fn => self.func(diver.untyped_dive(), token.span),
             Rt => self.rt(diver.untyped_dive(), token.span),
             Mut => self.unex_tok(token, "mut can only follow a declaration")?,
+            Record(kind) => self.record(diver.untyped_dive(), kind, token.span),
             Comma => self.unex_tok(token, "comma can only follow an expression")?,
+            Return => self.return_expr(diver.untyped_dive(), token.span),
             Semi => self.unex_tok(
                 token,
                 "semicolon can only follow an expression inside a block",
@@ -124,6 +132,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
                 .map(|d| &*self.arena.alloc(d))
                 .map(UnitAst::Decl),
             Dot => self.unex_tok(token, "dot can only follow an expression")?,
+            DoubleDot => self.unex_tok(token, "double dot can only follow an expression")?,
             Int => self.int(token),
             True => self.bool(token, true),
             False => self.bool(token, false),
@@ -141,8 +150,52 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
         self.handle_postfix(diver, expr)
     }
 
-    fn rt(&mut self, mut diver: Diver, _keyword: Span) -> Option<UnitAst<'arena>> {
-        let expr = self.expr(diver.untyped_dive())?;
+    fn record(
+        &mut self,
+        mut diver: Diver,
+        kind: RecordKind,
+        keyword: Span,
+    ) -> Option<UnitAst<'arena>> {
+        self.expect_advance(LBrace, "expected left brace to start record definition")?;
+
+        let mut items = diver.dive::<RecordItemAst<'arena>>();
+
+        while self.try_advance(RBrace).is_none() {
+            self.skip_semis();
+            let expr = self.record_item(items.untyped_dive())?;
+            items.push(expr);
+        }
+
+        Some(UnitAst::Record(RecordAst {
+            kind,
+            keyword,
+            fields: self.arena.alloc_rev_iter(items),
+        }))
+    }
+
+    fn record_item(&mut self, diver: Diver) -> Option<RecordItemAst<'arena>> {
+        Some(RecordItemAst {
+            name: self.ident("field name")?,
+            colon: self
+                .expect_advance(Colon, "epected colon to separate your mom")?
+                .span,
+            value: self.expr(diver)?,
+        })
+    }
+
+    fn return_expr(&mut self, diver: Diver, keyword: Span) -> Option<UnitAst<'arena>> {
+        let expr = self
+            .has_next(Self::NON_EXPR_TOKENS)
+            .not()
+            .then(|| self.expr(diver))
+            .transpose()?;
+        Some(UnitAst::Return(
+            self.arena.alloc(ReturnAst { keyword, expr }),
+        ))
+    }
+
+    fn rt(&mut self, diver: Diver, _keyword: Span) -> Option<UnitAst<'arena>> {
+        let expr = self.expr(diver)?;
         Some(UnitAst::Rt(self.arena.alloc(expr)))
     }
 
@@ -208,15 +261,92 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
                 }
                 Dot => {
                     self.next();
-                    let name = self.ident("field name")?;
-                    UnitAst::Field(self.arena.alloc(FieldAst {
-                        on: expr,
-                        dot: token.span,
-                        name,
-                    }))
+                    if let Some(b) = self.try_advance(LBrace) {
+                        self.ctor(diver.untyped_dive(), b.span, expr)?
+                    } else {
+                        let name = self.ident("field name")?;
+                        UnitAst::Field(self.arena.alloc(FieldAst {
+                            on: expr,
+                            dot: token.span,
+                            name,
+                        }))
+                    }
                 }
                 _ => break Some(expr),
             }
+        }
+    }
+
+    fn ctor(
+        &mut self,
+        mut diver: Diver,
+        brace: Span,
+        ty: UnitAst<'arena>,
+    ) -> Option<UnitAst<'arena>> {
+        let mut items = diver.dive::<CtorField<'arena>>();
+        let mut fill: Option<result::Result<ExprAst, Span>> = None;
+
+        while self.try_advance(RBrace).is_none() {
+            if let Some(fill) = &fill {
+                let span = self.peek().span;
+                self.diags
+                    .builder(self.files)
+                    .footer(
+                        Severty::Error,
+                        "filling unset fields can only be done after field inits",
+                    )
+                    .annotation(
+                        Severty::Note,
+                        fill.as_ref().map_or_else(|p| *p, |e| e.span()),
+                        "previous fill",
+                    )
+                    .annotation(Severty::Error, span, "excess fill");
+                return None;
+            }
+
+            match self.ctor_field(items.untyped_dive())? {
+                CtorItemAst::Field(f) => drop(items.push(f)),
+                CtorItemAst::Default(d) => fill = Some(result::Result::Err(d)),
+                CtorItemAst::Fill(expr) => fill = Some(result::Result::Ok(expr)),
+            }
+
+            if self.try_advance(RBrace).is_some() {
+                break;
+            }
+
+            self.expect_advance(Comma, "comma or closing brace")?;
+        }
+
+        Some(UnitAst::Ctor(self.arena.alloc(CtorAst {
+            brace,
+            ty,
+            fill: fill.map(result::Result::ok),
+            fields: self.arena.alloc_rev_iter(items),
+        })))
+    }
+
+    fn ctor_field(&mut self, diver: Diver) -> Option<CtorItemAst<'arena>> {
+        let tok = self.peek();
+
+        match tok.kind {
+            Ident => {
+                let name = self.ident("field name")?;
+                let value = self
+                    .try_advance(Colon)
+                    .map(|_| self.expr(diver))
+                    .transpose()?;
+                Some(CtorItemAst::Field(CtorField { name, value }))
+            }
+            DoubleDot => {
+                self.next();
+                if self.has_next([Comma, RBrace]) {
+                    Some(CtorItemAst::Default(tok.span))
+                } else {
+                    let expr = self.expr(diver)?;
+                    Some(CtorItemAst::Fill(expr))
+                }
+            }
+            _ => self.unex_tok(tok, "expected field name or ..")?,
         }
     }
 
@@ -282,9 +412,7 @@ impl<'ctx, 'src, 'arena, 'arena_ctx> Parser<'ctx, 'src, 'arena, 'arena_ctx> {
     }
 
     fn block(&mut self, diver: Diver, brace: Span) -> Option<UnitAst<'arena>> {
-        self.block_low(diver, brace)
-            .map(|b| &*self.arena.alloc(b))
-            .map(UnitAst::Block)
+        self.block_low(diver, brace).map(UnitAst::Block)
     }
 
     fn block_low(&mut self, mut diver: Diver, brace: Span) -> Option<BlockAst<'arena>> {
@@ -353,14 +481,17 @@ pub enum UnitAst<'arena> {
     Import(IdentAst),
 
     If(&'arena IfAst<'arena>),
-    Block(&'arena BlockAst<'arena>),
+    Block(BlockAst<'arena>),
     Unary(&'arena UnaryAst<'arena>),
     Call(&'arena CallAst<'arena>),
     Func(&'arena FuncAst<'arena>),
+    Record(RecordAst<'arena>),
     Decl(&'arena DeclAst<'arena>),
     Paren(&'arena ExprAst<'arena>),
     Field(&'arena FieldAst<'arena>),
     Rt(&'arena ExprAst<'arena>),
+    Return(&'arena ReturnAst<'arena>),
+    Ctor(&'arena CtorAst<'arena>),
 }
 
 impl UnitAst<'_> {
@@ -374,11 +505,54 @@ impl UnitAst<'_> {
             Unary(unary) => unary.op.span,
             Call(call) => call.caller.span(),
             Func(func) => func.keyword,
+            Record(rec) => rec.keyword,
             Decl(decl) => decl.keyword,
             Paren(expr) | Rt(expr) => expr.span(),
             Field(field) => field.dot,
+            Return(r) => r.keyword,
+            Ctor(ctor) => ctor.brace,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct CtorAst<'arena> {
+    pub brace: Span,
+    pub ty: UnitAst<'arena>,
+    pub fill: Option<Option<ExprAst<'arena>>>,
+    pub fields: &'arena [CtorField<'arena>],
+}
+
+pub enum CtorItemAst<'arena> {
+    Field(CtorField<'arena>),
+    Default(Span),
+    Fill(ExprAst<'arena>),
+}
+
+#[derive(Debug, Clone)]
+pub struct CtorField<'arena> {
+    pub name: IdentAst,
+    pub value: Option<ExprAst<'arena>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordAst<'arena> {
+    pub kind: RecordKind,
+    pub keyword: Span,
+    pub fields: &'arena [RecordItemAst<'arena>],
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordItemAst<'arena> {
+    pub name: IdentAst,
+    pub colon: Span,
+    pub value: ExprAst<'arena>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReturnAst<'arena> {
+    pub keyword: Span,
+    pub expr: Option<ExprAst<'arena>>,
 }
 
 #[derive(Debug, Clone)]

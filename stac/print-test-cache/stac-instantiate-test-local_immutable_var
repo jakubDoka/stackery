@@ -1,13 +1,15 @@
-module root:
-  bi = :{bi}
-  main = sig:
+root:
+  bi = const:
     mod0
-    . i32
-  body:
-    1
-    decl
-    sym0
-    1
-    +
-    drop scope 1 returns
+  main = const:
+    func:
+      sym0
+      . i32
+      1
+      inited decl
+      sym2
+      1
+      +
+      drop scope 1 returns
+
 const 2 : i32

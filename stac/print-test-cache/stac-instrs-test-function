@@ -1,6 +1,7 @@
-module root:
-  main = sig:
-    mod0
-    . i32
-  body:
-    0
+root:
+  main = const:
+    func:
+      mod0
+      . i32
+      0
+

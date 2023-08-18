@@ -1,0 +1,25 @@
+root:
+  foo = const:
+    struct:
+      mod0
+      . i32
+      inited decl
+      mod0
+      . i32
+      inited decl
+      union:
+        mod0
+        . i32
+        inited decl
+        mod0
+        . i32
+        inited decl
+
+      inited decl
+      enum:
+        mod0
+        . i32
+        inited decl
+
+      inited decl
+

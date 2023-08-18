@@ -8,8 +8,7 @@ use cranelift_codegen::{
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::Module;
 use stac::{
-    BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, OpCode, Severty, SubsRef, Type,
-    TypeRefIndex,
+    BuiltInType, Finst, FinstKind, Ir, IrTypes, Layout, OpCode, Severty, Type, TypeRef, Types,
 };
 
 use super::*;
@@ -85,9 +84,12 @@ impl<'ctx> Builder<'ctx> {
         self.used_fns.push((id, f));
     }
 
-    fn spec(&mut self, ty: SubsRef) -> TypeSpec {
-        let ty = self.types.get_ty(ty);
-        TypeSpec::from_ty(&ty, self.arch)
+    fn spec(&mut self, ty: TypeRef, types: &Types) -> TypeSpec {
+        let ty = match BuiltInType::from_index(ty.index()) {
+            Ok(ty) => ty.into(),
+            Err(index) => self.types[TypeRef::from_repr(index as _)].clone(),
+        };
+        TypeSpec::from_ty(&ty, self.arch, types)
     }
 
     fn slot_as_value(&mut self, slot: Slot) -> ir::Value {
@@ -136,42 +138,42 @@ impl<'ctx> Emmiter<'ctx> {
                 }
                 FinstKind::Const(c) => match c {
                     stac::LitKindAst::Int(i) => {
-                        let spec = builder.spec(ty);
+                        let spec = builder.spec(ty, self.types);
                         let value = builder.fb.ins().iconst(spec.repr, i.value() as i64);
                         builder.stack.push((Slot::Value(value), spec));
                     }
                     &stac::LitKindAst::Bool(b) => {
-                        let spec = builder.spec(ty);
+                        let spec = builder.spec(ty, self.types);
                         let value = builder.fb.ins().iconst(spec.repr, b as i64);
                         builder.stack.push((Slot::Value(value), spec));
                     }
                 },
                 FinstKind::BinOp(op) => {
-                    let [(lhs, lty), (rhs, _)] = pop_array(&mut builder.stack);
+                    let [(rhs, rty), (lhs, _)] = pop_array(&mut builder.stack);
 
                     use ir::types::*;
                     use OpCode::*;
-                    match (op, lty.repr) {
+                    match (op, rty.repr) {
                         (stac::op_group!(math), I8 | I16 | I32 | I64) => {
                             let rhs = builder.slot_as_value(rhs);
                             let lhs = builder.slot_as_value(lhs);
                             let value = match op {
                                 Mul => builder.fb.ins().imul(lhs, rhs),
-                                Div if lty.signed => builder.fb.ins().sdiv(lhs, rhs),
+                                Div if rty.signed => builder.fb.ins().sdiv(lhs, rhs),
                                 Div => builder.fb.ins().udiv(lhs, rhs),
-                                Mod if lty.signed => builder.fb.ins().srem(lhs, rhs),
+                                Mod if rty.signed => builder.fb.ins().srem(lhs, rhs),
                                 Mod => builder.fb.ins().urem(lhs, rhs),
                                 Add => builder.fb.ins().iadd(lhs, rhs),
                                 Sub => builder.fb.ins().isub(lhs, rhs),
                                 Shl => builder.fb.ins().ishl(lhs, rhs),
-                                Shr if lty.signed => builder.fb.ins().sshr(lhs, rhs),
+                                Shr if rty.signed => builder.fb.ins().sshr(lhs, rhs),
                                 Shr => builder.fb.ins().ushr(lhs, rhs),
                                 BitAnd => builder.fb.ins().band(lhs, rhs),
                                 BitOr => builder.fb.ins().bor(lhs, rhs),
                                 BitXor => builder.fb.ins().bxor(lhs, rhs),
                                 _ => unreachable!(),
                             };
-                            builder.stack.push((Slot::Value(value), lty));
+                            builder.stack.push((Slot::Value(value), rty));
                         }
                         (stac::op_group!(assign), _) => {
                             let Slot::Var(var) = lhs else {
@@ -186,18 +188,18 @@ impl<'ctx> Emmiter<'ctx> {
                             let strategy = match op {
                                 Eq => IntCC::Equal,
                                 Ne => IntCC::NotEqual,
-                                Lt if lty.signed => IntCC::SignedLessThan,
+                                Lt if rty.signed => IntCC::SignedLessThan,
                                 Lt => IntCC::UnsignedLessThan,
-                                Le if lty.signed => IntCC::SignedLessThanOrEqual,
+                                Le if rty.signed => IntCC::SignedLessThanOrEqual,
                                 Le => IntCC::UnsignedLessThanOrEqual,
-                                Gt if lty.signed => IntCC::SignedGreaterThan,
+                                Gt if rty.signed => IntCC::SignedGreaterThan,
                                 Gt => IntCC::UnsignedGreaterThan,
-                                Ge if lty.signed => IntCC::SignedGreaterThanOrEqual,
+                                Ge if rty.signed => IntCC::SignedGreaterThanOrEqual,
                                 Ge => IntCC::UnsignedGreaterThanOrEqual,
                                 _ => unreachable!(),
                             };
                             let value = builder.fb.ins().icmp(strategy, lhs, rhs);
-                            builder.stack.push((Slot::Value(value), lty));
+                            builder.stack.push((Slot::Value(value), rty));
                         }
                         _ => todo!(),
                     }
@@ -219,7 +221,7 @@ impl<'ctx> Emmiter<'ctx> {
                     let call = builder.fb.ins().call(fref, &args);
                     let rets = builder.fb.inst_results(call);
                     if let &[ret] = rets {
-                        let spec = builder.spec(ty);
+                        let spec = builder.spec(ty, self.types);
                         builder.stack.push((Slot::Value(ret), spec));
                     }
                 }
@@ -250,7 +252,7 @@ impl<'ctx> Emmiter<'ctx> {
                     let then = builder.fb.create_block();
                     let end = builder.fb.create_block();
                     let (cond, _) = builder.pop_as_value();
-                    let spec = builder.spec(ty);
+                    let spec = builder.spec(ty, self.types);
                     let returns = spec.layout.takes_space();
 
                     builder.fb.ins().brif(cond, then, &[], end, &[]);
@@ -280,6 +282,15 @@ impl<'ctx> Emmiter<'ctx> {
                     builder.fb.ins().jump(end, ret.map(|(v, _)| v).as_slice());
                     builder.switch_to_block(end);
                 }
+                FinstKind::Return(returns) => {
+                    let ret = returns.then(|| builder.pop_as_value().0);
+                    builder.fb.ins().return_(ret.as_slice());
+                }
+                FinstKind::Uninit => {
+                    let spec = builder.spec(ty, self.types);
+                    let value = builder.fb.ins().iconst(spec.repr, 0);
+                    builder.stack.push((Slot::Value(value), spec));
+                }
             }
         }
 
@@ -297,6 +308,7 @@ impl<'ctx> Emmiter<'ctx> {
                 .builder(self.modules.files())
                 .footer(Severty::Note, format_args!("Generated IR for {entry:?}"))
                 .footer(Severty::Note, res.ctx.func.display());
+            //println!("{}", res.ctx.func.display());
         }
 
         let module_id = self.gen.func_mapping[id as usize];
@@ -326,7 +338,7 @@ impl<'ctx> Emmiter<'ctx> {
     fn load_local(&self, local: &stac::Local) -> Option<TypeSpec> {
         match local {
             stac::Local::Ct(_) => None,
-            stac::Local::Rt(ty) => Some(TypeSpec::from_ty(ty, self.arch)),
+            stac::Local::Rt(ty) => Some(TypeSpec::from_ty(ty, self.arch, self.types)),
         }
     }
 }
@@ -339,10 +351,10 @@ struct TypeSpec {
 }
 
 impl TypeSpec {
-    fn from_ty(ty: &Type, arch: Layout) -> Self {
+    fn from_ty(ty: &Type, arch: Layout, types: &Types) -> Self {
         let ptr_ty = Self::arch_layout_repr(arch);
-        let layout = Layout::from_ty(ty, arch);
-        let repr = Self::type_repr(ty, ptr_ty);
+        let layout = Layout::from_ty(ty, arch, types);
+        let repr = Self::type_repr(ty, ptr_ty, layout);
         let signed = ty.is_signed();
         Self {
             repr,
@@ -351,10 +363,20 @@ impl TypeSpec {
         }
     }
 
-    fn type_repr(ty: &Type, arch: ir::Type) -> ir::Type {
+    fn type_repr(ty: &Type, arch: ir::Type, layout: Layout) -> ir::Type {
         match ty {
             Type::BuiltIn(b) => Self::built_in_type_repr(b, arch),
-            Type::Func(_) => arch,
+            Type::Record(..) => Self::record_repr_for(layout),
+        }
+    }
+
+    fn record_repr_for(layout: Layout) -> ir::Type {
+        match layout.size() {
+            0 => ir::types::INVALID,
+            1 => ir::types::I8,
+            2 => ir::types::I16,
+            4 => ir::types::I32,
+            _ => ir::types::I64,
         }
     }
 
@@ -368,10 +390,7 @@ impl TypeSpec {
             Int | Uint => arch,
             Bool => ir::types::I8,
             Unit => ir::types::INVALID,
-            Type => unreachable!(),
-            Module => unreachable!(),
-            Unknown => unreachable!(),
-            Integer => unreachable!(),
+            Type | Def | Module | Unknown | Integer | Never => unreachable!(),
         }
     }
 

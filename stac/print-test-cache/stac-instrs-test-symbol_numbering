@@ -1,0 +1,19 @@
+root:
+  foo = const:
+    3
+    inited decl
+    sym2
+    drop
+    2
+    drop scope 1 returns
+    inited decl
+    3
+    inited decl
+    sym3
+    drop
+    sym0
+    drop
+    0
+    drop scope 2 returns
+  soo = const:
+    1

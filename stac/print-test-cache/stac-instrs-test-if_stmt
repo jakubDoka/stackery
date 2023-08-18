@@ -1,11 +1,12 @@
-module root:
-  foo = sig:
-    mod0
-    . i32
-  body:
-    true
-    if 5
-    1
-    else 7
-    2
-    endif
+root:
+  foo = const:
+    func:
+      mod0
+      . i32
+      true
+      if 5
+      1
+      else 7
+      2
+      endif
+

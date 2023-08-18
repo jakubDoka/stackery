@@ -1,12 +1,3 @@
-note: Generated IR for Entry { id: FuncId { module: Ref(1), func: Ref(0) }, ip: 1, inputs: [], ret: BuiltIn(I32) }
-note: function u0:0() -> i32 system_v {
-block0:
-    v0 = iconst.i32 42
-    return v0  ; v0 = 42
-}
-
-note: finished compiling
-note: output: scc-compile-test-multifile
-error: program exited with status code 42
+error: entry point must be a function, found constant `42`
 err: 0, warn: 0
 

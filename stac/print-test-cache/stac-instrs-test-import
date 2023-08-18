@@ -1,7 +1,9 @@
-module root:
-  bi = :{bi}
-  drop = sig:
+root:
+  bi = const:
     mod0
-    . i32
-  body:
-    42
+  drop = const:
+    func:
+      sym0
+      . i32
+      42
+

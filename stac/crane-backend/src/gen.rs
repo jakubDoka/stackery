@@ -4,7 +4,7 @@ use cranelift_codegen::{
 };
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use stac::{Diagnostics, FuncInst, Instrs, Layout, Modules, Ref};
+use stac::{Diagnostics, FuncInst, Instrs, Layout, Modules, Ref, Types};
 use target_lexicon::Triple;
 
 mod emit_impl;
@@ -83,6 +83,7 @@ pub struct Emmiter<'ctx> {
     gen: &'ctx mut Generator,
     modules: &'ctx Modules,
     _instrs: &'ctx Instrs,
+    types: &'ctx Types,
     arch: Layout,
     dump_ir: bool,
 }
@@ -93,6 +94,7 @@ impl<'ctx> Emmiter<'ctx> {
         gen: &'ctx mut Generator,
         modules: &'ctx Modules,
         instrs: &'ctx Instrs,
+        types: &'ctx Types,
         arch: Layout,
         dump_ir: bool,
     ) -> Self {
@@ -101,6 +103,7 @@ impl<'ctx> Emmiter<'ctx> {
             gen,
             modules,
             _instrs: instrs,
+            types,
             arch,
             dump_ir,
         }

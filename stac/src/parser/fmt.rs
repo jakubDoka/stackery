@@ -1,4 +1,4 @@
-use crate::{BinaryAst, BlockAst, ExprAst, LitKindAst, ModItemAst, TokenKind, UnitAst};
+use crate::{BinaryAst, BlockAst, ExprAst, LitKindAst, ModItemAst, RecordKind, TokenKind, UnitAst};
 
 pub fn format_ast(ast: &[ModItemAst], ctx: &mut String, indent: usize) {
     for ast in ast {
@@ -166,6 +166,52 @@ pub fn format_unit(unit: &UnitAst, ctx: &mut String, indent: usize) {
         UnitAst::Rt(e) => {
             ctx.push_str("rt ");
             format_expr(e, ctx, indent);
+        }
+        UnitAst::Return(e) => {
+            ctx.push_str("return ");
+            if let Some(ref e) = e.expr {
+                format_expr(e, ctx, indent);
+            }
+        }
+        UnitAst::Record(r) => {
+            match r.kind {
+                RecordKind::Prod => ctx.push_str("struct "),
+                RecordKind::Sum => ctx.push_str("enum "),
+                RecordKind::Max => ctx.push_str("union "),
+            };
+
+            format_list(
+                r.fields,
+                ctx,
+                indent,
+                [TokenKind::LBrace, TokenKind::Comma, TokenKind::RBrace],
+                true,
+                false,
+                |field, ctx, indent| {
+                    ctx.push_str(field.name.ident.as_str());
+                    ctx.push_str(": ");
+                    format_expr(&field.value, ctx, indent);
+                },
+            );
+        }
+        UnitAst::Ctor(c) => {
+            format_unit(&c.ty, ctx, indent);
+            ctx.push_str(".");
+            format_list(
+                c.fields,
+                ctx,
+                indent,
+                [TokenKind::LBrace, TokenKind::Comma, TokenKind::RBrace],
+                true,
+                false,
+                |field, ctx, indent| {
+                    ctx.push_str(field.name.ident.as_str());
+                    if let Some(value) = &field.value {
+                        ctx.push_str(": ");
+                        format_expr(value, ctx, indent);
+                    }
+                },
+            );
         }
     }
 }

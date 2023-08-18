@@ -27,11 +27,13 @@ fn perform_test(name: &str, sources: &str, ctx: &mut String) {
     command.run(lp, &mut stdout);
     *ctx = String::from_utf8(stdout).unwrap();
 
-    std::fs::remove_file(name).unwrap();
+    _ = std::fs::remove_file(name);
 }
 
 stac::print_cases! { perform_test:
-    minimal "let main = fn(): :{bi}.i32 42";
+    minimal "
+        let main = fn(): :{bi}.i32 42
+    ";
     fib "
         let i32 = :{bi}.i32
         let main = fn(): i32 fib(10)
@@ -61,5 +63,11 @@ stac::print_cases! { perform_test:
             let i32 = :{bi}.i32
             let main = fn(): i32 42
         `
+    ";
+    globals "
+        let i32 = :{bi}.i32
+        let foo = goo() - 9
+        let goo = fn(): i32 43 + 8
+        let main = fn(): i32 foo
     ";
 }

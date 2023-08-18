@@ -1,11 +1,12 @@
-module root:
-  main = sig:
-    mod0
-    . i32
-    decl
-    mod0
-    . i32
-  body:
-    sym0
-    2
-    *
+root:
+  main = const:
+    func:
+      mod0
+      . i32
+      inited decl
+      mod0
+      . i32
+      sym1
+      2
+      *
+

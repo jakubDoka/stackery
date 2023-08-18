@@ -79,6 +79,9 @@ macro_rules! define_lexer {
                 ($($op_name:ident: $op:literal),*) = $prec:literal,
             )*}
         )*}
+        records {$(
+            $record_name:ident = $record_expr:literal
+        )*}
         other {$(
             $(#[$attr:meta])*
             $other_name:ident = $other_repr:literal
@@ -96,6 +99,9 @@ macro_rules! define_lexer {
             $($($(#[$op_type($op, |_| OpCode::$op_name)])*)*)*
             Op(OpCode),
 
+            $(#[token($record_expr, |_| RecordKind::$record_name)])*
+            Record(RecordKind),
+
             $(
                 $(#[$attr])*
                 $other_name,
@@ -109,6 +115,7 @@ macro_rules! define_lexer {
                 $(Self::$token,)*
                 $(Self::$regex,)*
                 $($($(Self::Op(OpCode::$op_name),)*)*)*
+                $(Self::Record(RecordKind::$record_name),)*
                 $(Self::$other_name,)*
             ];
 
@@ -117,6 +124,7 @@ macro_rules! define_lexer {
                     $(Self::$token => $token_repr,)*
                     $(Self::$regex => stringify!($regex),)*
                     Self::Op(o) => o.name(),
+                    Self::Record(r) => r.name(),
                     $(Self::$other_name => $other_repr,)*
                 }
             }
@@ -146,6 +154,19 @@ macro_rules! define_lexer {
                 $($(OpCode::$op_name)|*)|*
             },
         )*}
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        pub enum RecordKind {
+            $($record_name),*
+        }
+
+        impl RecordKind {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$record_name => $record_expr,)*
+                }
+            }
+        }
     };
 
     (@token_repr $token:ident = $token_repr:literal) => {
@@ -175,7 +196,7 @@ define_lexer! {
         //Loop = "loop"
         //Break = "break"
         //Continue = "continue"
-        //Return = "return"
+        Return = "return"
         //For = "for"
         //In = "in"
         Fn = "fn"
@@ -187,7 +208,7 @@ define_lexer! {
         False = "false"
 
         Dot = "."
-        //DoubleDot = ".."
+        DoubleDot = ".."
         Comma = ","
         Semi = ";"
         Colon = ":"
@@ -223,6 +244,12 @@ define_lexer! {
         assign regex {
             (Assign: r"(|\+|-|\*|/|%|<<|>>|&|\||\^)=") = 9,
         }
+    }
+
+    records {
+        Prod = "struct"
+        Sum = "enum"
+        Max = "union"
     }
 
     other {

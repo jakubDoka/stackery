@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::{BuiltInType, Type};
+use crate::{BuiltInType, RecordKind, Type, Types};
 
 type LayoutRepr = u32;
 
@@ -34,7 +34,7 @@ impl Layout {
     }
 
     /// extend this layout with another layout, returns the new layout and appended layout offset
-    fn _extend(self, other: Self) -> (Self, LayoutRepr) {
+    fn extend(self, other: Self) -> (Self, LayoutRepr) {
         let (align, size) = Self::decode(self.repr);
         let (other_align, other_size) = Self::decode(other.repr);
 
@@ -62,14 +62,46 @@ impl Layout {
         1 << align
     }
 
-    fn _compress_align(align: LayoutRepr) -> u8 {
-        align.trailing_zeros() as u8
+    fn max(self, other: Self) -> Self {
+        let (align, size) = Self::decode(self.repr);
+        let (other_align, other_size) = Self::decode(other.repr);
+        let align = align.max(other_align);
+        let size = size.max(other_size);
+        Self::new(align, size)
     }
 
-    pub fn from_ty(ty: &Type, ptr_layout: Self) -> Self {
+    pub fn from_ty(ty: &Type, ptr_layout: Self, types: &Types) -> Self {
         match ty {
             Type::BuiltIn(b) => Self::from_builtin_ty(*b, ptr_layout),
-            Type::Func(_) => todo!(),
+            Type::Record(kind, id) => {
+                let record = &types[*id];
+
+                let layout = match kind {
+                    RecordKind::Prod => {
+                        let mut layout = Self::ZERO;
+                        for field in &record.fields {
+                            let field_layout = Self::from_ty(&field.ty, ptr_layout, types);
+                            (layout, _) = layout.extend(field_layout);
+                        }
+                        layout
+                    }
+                    RecordKind::Sum | RecordKind::Max => {
+                        let mut layout = Self::ZERO;
+                        for varian in &record.fields {
+                            let variant = Self::from_ty(&varian.ty, ptr_layout, types);
+                            layout = layout.max(variant);
+                        }
+                        layout
+                    }
+                };
+
+                let flag = match kind {
+                    RecordKind::Max | RecordKind::Prod => Layout::ZERO,
+                    RecordKind::Sum => Self::sun_flag_layout(record.fields.len()),
+                };
+
+                flag.extend(layout).0
+            }
         }
     }
 
@@ -83,7 +115,7 @@ impl Layout {
             Int | Uint => ptr_layout,
             Bool => Self::new(0, 1),
             Unit => Self::new(0, 0),
-            Type | Integer | Module | Unknown => unreachable!(),
+            Type | Def | Integer | Module | Unknown | Never => unreachable!(),
         }
     }
 
@@ -93,5 +125,35 @@ impl Layout {
 
     pub fn takes_space(&self) -> bool {
         self.size() > 0
+    }
+
+    fn sun_flag_layout(count: usize) -> Self {
+        match count {
+            0 | 1 => Self::ZERO,
+            2..=256 => Self::new(0, 1),
+            257..=65536 => Self::new(1, 2),
+            _ => Self::new(2, 4),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Layout;
+
+    #[test]
+    fn sum_flag_layout_sanity_check() {
+        let [unit, byte, short, int] = [
+            Layout::ZERO,
+            Layout::new(0, 1),
+            Layout::new(1, 2),
+            Layout::new(2, 4),
+        ];
+
+        assert_eq!(Layout::sun_flag_layout(1), unit);
+        assert_eq!(Layout::sun_flag_layout(256), byte);
+        assert_eq!(Layout::sun_flag_layout(257), short);
+        assert_eq!(Layout::sun_flag_layout(65536), short);
+        assert_eq!(Layout::sun_flag_layout(65537), int);
     }
 }

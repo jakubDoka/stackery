@@ -5,10 +5,11 @@ root:
     func:
       sym0
       . i32
-      . f
+      true
+      if 4
+      endif
+      drop
       1
-      1
-      +
 
 function fully folded
-result: 2
+result: 1

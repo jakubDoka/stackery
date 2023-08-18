@@ -1,16 +1,54 @@
 mod interp_impl;
 
 use crate::{
-    BuiltInType, Diagnostics, FrameSize, FuncId, Instrs, IrTypes, Layout, LitKindAst, Modules,
-    OpCode, Ref, Resolved, Resolver, Returns, Span, Sym, Type, TypeRef, TypeRefIndex,
+    BuiltInType, Def, DefId, DefRef, Diagnostics, FrameSize, Instrs, Layout, LitKindAst, ModuleRef,
+    ModuleShadowStore, Modules, OpCode, Ref, Returns, ShadowStore, Span, Sym, Type, Types,
+    VecStore,
 };
 
+use std::fmt;
+
 type SubsRepr = u16;
-pub type SubsRef = Ref<Type, SubsRepr>;
+pub type TypeRef = Ref<Type, SubsRepr>;
 pub type FuncInst = u32;
 pub type FieldIndex = u16;
 pub type InstrIindex = u16;
-pub type LabelRefCount = u16;
+pub type IrTypes = VecStore<Type, SubsRepr>;
+
+pub enum EvalResult {
+    Rt(Ir),
+    Const(Resolved),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolved {
+    Const(LitKindAst),
+    Type(Type),
+    Module(ModuleRef),
+    Def(DefId),
+}
+
+impl Resolved {
+    pub fn ty(&self) -> BuiltInType {
+        match self {
+            Resolved::Type(_) => BuiltInType::Type,
+            Resolved::Module(_) => BuiltInType::Module,
+            Resolved::Const(c) => BuiltInType::from_const(c),
+            Resolved::Def(_) => BuiltInType::Def,
+        }
+    }
+}
+
+impl fmt::Display for Resolved {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Resolved::Const(c) => c.fmt(f),
+            Resolved::Type(t) => t.fmt(f),
+            Resolved::Module(m) => write!(f, "module{}", m.index()),
+            Resolved::Def(d) => write!(f, "def{}#{}", d.ns.index(), d.index.index()),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Local {
@@ -20,6 +58,7 @@ pub enum Local {
 
 #[derive(Clone)]
 pub enum FinstKind {
+    Uninit,
     Const(LitKindAst),
     Sym(Sym),
     Call(FuncInst),
@@ -30,6 +69,7 @@ pub enum FinstKind {
     If,
     Else,
     EndIf,
+    Return(Returns),
 
     Drop,
     DropScope(FrameSize, Returns),
@@ -50,7 +90,10 @@ pub struct Ir {
 
 impl Ir {
     pub fn get_ty(&self, ty: TypeRef) -> Type {
-        self.types.get_ty(ty)
+        match BuiltInType::from_index(ty.index()) {
+            Ok(b) => Type::BuiltIn(b),
+            Err(r) => self.types[TypeRef::from_repr(r as _)].clone(),
+        }
     }
 
     fn intern_ty(&mut self, t: &Type) -> TypeRef {
@@ -65,21 +108,36 @@ impl Ir {
 }
 
 #[derive(Default)]
-pub struct FuncInstances {
+pub struct DeclCache {
+    pub computed: ShadowStore<Def, SubsRepr, Option<Resolved>>,
+}
+
+#[derive(Default)]
+pub struct Instances {
     lookup: Vec<Entry>,
     progress: usize,
     recent: usize,
+    decls: ModuleShadowStore<DeclCache>,
 }
 
-impl FuncInstances {
-    pub fn next(&mut self) -> Option<(FuncInst, Entry)> {
+impl Instances {
+    pub fn new() -> Self {
+        let mut s = Self::default();
+        for (i, ty) in BuiltInType::ALL.into_iter().enumerate() {
+            s.decls[Modules::BUILTIN].computed[DefRef::from_repr(i as _)] =
+                Some(Resolved::Type(Type::BuiltIn(ty)));
+        }
+        s
+    }
+
+    pub fn next_entry(&mut self) -> Option<(FuncInst, Entry)> {
         self.lookup.get(self.progress).map(|e| {
             self.progress += 1;
             ((self.progress - 1) as _, e.clone())
         })
     }
 
-    pub fn project(&mut self, value: Entry) -> FuncInst {
+    pub fn project_entry(&mut self, value: Entry) -> FuncInst {
         if let Some(pos) = self.lookup.iter().position(|e| *e == value) {
             return pos as _;
         }
@@ -88,7 +146,7 @@ impl FuncInstances {
         id
     }
 
-    pub fn recent(&mut self) -> impl IntoIterator<Item = (FuncInst, &Entry)> {
+    pub fn recent_entries(&mut self) -> impl IntoIterator<Item = (FuncInst, &Entry)> {
         let prev = self.recent;
         self.recent = self.lookup.len();
         (prev as FuncInst..).zip(&self.lookup[prev..])
@@ -97,15 +155,16 @@ impl FuncInstances {
 
 pub struct Interpreter<'ctx> {
     arch: Layout,
-    instances: &'ctx mut FuncInstances,
+    instances: &'ctx mut Instances,
     diags: &'ctx mut Diagnostics,
     modules: &'ctx Modules,
     instrs: &'ctx Instrs,
+    types: &'ctx mut Types,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
-    pub id: FuncId,
+    pub id: DefId,
     pub ip: u16,
     pub inputs: Vec<Local>,
     pub ret: Type,
@@ -114,10 +173,11 @@ pub struct Entry {
 impl<'ctx> Interpreter<'ctx> {
     pub fn new(
         arch: Layout,
-        instances: &'ctx mut FuncInstances,
+        instances: &'ctx mut Instances,
         diags: &'ctx mut Diagnostics,
         modules: &'ctx Modules,
         instrs: &'ctx Instrs,
+        types: &'ctx mut Types,
     ) -> Self {
         Self {
             arch,
@@ -125,36 +185,17 @@ impl<'ctx> Interpreter<'ctx> {
             diags,
             modules,
             instrs,
+            types,
         }
     }
-}
-
-pub fn resolver() -> impl Resolver {
-    struct ResolverImpl;
-
-    impl Resolver for ResolverImpl {
-        fn resolve(
-            &mut self,
-            ctx: crate::TyResolverCtx,
-            decls: crate::ModuleDecl,
-            body: crate::InstrBody,
-            span: crate::Span,
-        ) -> Option<Resolved> {
-            let mut instances = crate::FuncInstances::default();
-            let mut interp =
-                Interpreter::new(ctx.arch, &mut instances, ctx.diags, ctx.modules, ctx.instrs);
-            interp.ct_eval(span, ctx.module, body, decls)
-        }
-    }
-
-    ResolverImpl
 }
 
 #[cfg(test)]
 mod test {
+
     use crate::{
-        print_cases, BuiltInType, Diagnostics, Finst, FuncId, Instrs, Interpreter, Layout,
-        LoaderMock, Modules, Type,
+        print_cases, BuiltInType, DefId, Diagnostics, EvalResult, Finst, Instrs, Interpreter,
+        Layout, LoaderMock, Modules, Resolved, Type, Types,
     };
 
     fn perform_test(_: &str, source: &str, ctx: &mut String) -> Option<()> {
@@ -162,9 +203,8 @@ mod test {
         let loader = LoaderMock::new(source);
         let meta = crate::load_modules(&mut mods, loader, ctx)?;
 
-        let mut instrs = Instrs::new();
-        let resolver = crate::resolver();
-        crate::parse_modules(&mods, &meta, &mut instrs, resolver, ctx);
+        let mut instrs = Instrs::new(BuiltInType::ALL.map(|t| t.name()));
+        crate::parse_modules(&mods, &meta, &mut instrs, ctx);
 
         let Some(entry) = instrs.entry_of(meta.root()) else {
             ctx.push_str("no entry point\n");
@@ -172,19 +212,44 @@ mod test {
         };
 
         let mut diags = Diagnostics::default();
-        let mut instances = crate::FuncInstances::default();
-        let mut interp =
-            Interpreter::new(Layout::ARCH_64, &mut instances, &mut diags, &mods, &instrs);
-        let id = FuncId {
-            module: meta.root(),
-            func: entry,
+        let mut instances = crate::Instances::new();
+        let mut types = Types::default();
+        let mut interp = Interpreter::new(
+            Layout::ARCH_64,
+            &mut instances,
+            &mut diags,
+            &mods,
+            &instrs,
+            &mut types,
+        );
+        let id = DefId {
+            ns: meta.root(),
+            index: entry,
         };
-        let ir = interp.eval(&crate::Entry {
+
+        let EvalResult::Const(Resolved::Def(id)) = interp.eval(&crate::Entry {
             id,
-            ip: instrs.func(id).signature_len,
+            ip: instrs.initial_ip_for(id),
             inputs: vec![],
             ret: Type::BuiltIn(BuiltInType::I32),
-        });
+        }) else {
+            ctx.push_str("entry point is not a function\n");
+            return None;
+        };
+
+        let ir = match interp.eval(&crate::Entry {
+            id,
+            ip: instrs.initial_ip_for(id),
+            inputs: vec![],
+            ret: Type::BuiltIn(BuiltInType::I32),
+        }) {
+            EvalResult::Rt(ir) => ir,
+            EvalResult::Const(res) => {
+                ctx.push_str("function fully folded\n");
+                ctx.push_str(format!("result: {res}\n").as_str());
+                return Some(());
+            }
+        };
 
         if !diags.view().is_empty() {
             ctx.push_str("diagnostics:\n");
@@ -192,39 +257,43 @@ mod test {
         }
 
         for Finst { kind, ty, .. } in ir.instrs.iter() {
+            use crate::FinstKind::*;
             match kind {
-                crate::FinstKind::Const(lit) => {
+                Const(lit) => {
                     ctx.push_str("const ");
                     ctx.push_str(lit.to_string().as_str());
                 }
-                crate::FinstKind::Sym(sym) => {
+                Sym(sym) => {
                     ctx.push_str("sym");
                     ctx.push_str(sym.to_string().as_str());
                 }
-                crate::FinstKind::Call(ac) => {
+                Call(ac) => {
                     ctx.push_str("call ");
                     ctx.push_str(ac.to_string().as_str());
                 }
-                crate::FinstKind::BinOp(op) => {
+                BinOp(op) => {
                     ctx.push_str("binop ");
                     ctx.push_str(op.name());
                 }
-                crate::FinstKind::Decl(false) => ctx.push_str("decl"),
-                crate::FinstKind::Decl(true) => ctx.push_str("decl mut"),
-                crate::FinstKind::Field(f) => {
+                Decl(false) => ctx.push_str("decl"),
+                Decl(true) => ctx.push_str("decl mut"),
+                Field(f) => {
                     ctx.push_str(". ");
                     ctx.push_str(f.to_string().as_str());
                 }
-                crate::FinstKind::Drop => ctx.push_str("drop"),
-                crate::FinstKind::DropScope(fs, r) => {
+                Drop => ctx.push_str("drop"),
+                DropScope(fs, r) => {
                     ctx.push_str("drop scope ");
                     ctx.push_str(fs.to_string().as_str());
                     ctx.push_str(" ");
                     ctx.push_str(r.to_string().as_str());
                 }
-                crate::FinstKind::If => ctx.push_str("if"),
-                crate::FinstKind::Else => ctx.push_str("else"),
-                crate::FinstKind::EndIf => ctx.push_str("endif"),
+                If => ctx.push_str("if"),
+                Else => ctx.push_str("else"),
+                EndIf => ctx.push_str("endif"),
+                Return(false) => ctx.push_str("return"),
+                Return(true) => ctx.push_str("return value"),
+                Uninit => ctx.push_str("uninit"),
             }
             ctx.push_str(" : ");
             ctx.push_str(ir.get_ty(*ty).to_string().as_str());
@@ -295,6 +364,58 @@ mod test {
             let bi = :{bi}
             let main = fn(): bi.i32 {
                 if rt true if rt true 0 else 1 else 2
+            }
+        ";
+        early_return "
+            let bi = :{bi}
+            let main = fn(): bi.i32 {
+                if true return 0
+                1
+            }
+        ";
+        dead_branch "
+            let bi = :{bi}
+            let main = fn(): bi.i32 {
+                if true {}
+                1
+            }
+        ";
+        records "
+            let bi = :{bi}
+            let point = struct {
+                x: bi.i32
+                y: bi.i32
+            }
+            let optuion = enum {
+                none: bi.unit
+                some: bi.i32
+            }
+            let field_alias = union {
+                x: bi.i32
+                y: bi.i32
+            }
+            let nested = struct {
+                y: enum {
+                    field: union {
+                        x: bi.i32
+                        y: bi.i32
+                    }
+                }
+            }
+        ";
+        struct_ctor "
+            let i32 = :{bi}.i32
+            let main = fn(): i32 {
+                let Point = struct {
+                    x: i32
+                    y: i32
+                }
+
+                let x = 1
+                let p = Point.{ x, y: 2 }
+                let p = Point.{ x, ..p }
+                let p = Point.{..}
+                p.x
             }
         ";
     }

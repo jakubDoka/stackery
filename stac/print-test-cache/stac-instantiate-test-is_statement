@@ -1,18 +1,21 @@
-module root:
-  bi = :{bi}
-  main = sig:
+root:
+  bi = const:
     mod0
-    . i32
-  body:
-    true
-    if 10
-    false
-    if 7
-    0
-    else 9
-    1
-    endif
-    else 12
-    2
-    endif
-const 1 : i32
+  main = const:
+    func:
+      sym0
+      . i32
+      true
+      if 10
+      false
+      if 7
+      0
+      else 9
+      1
+      endif
+      else 12
+      2
+      endif
+
+function fully folded
+result: 1
