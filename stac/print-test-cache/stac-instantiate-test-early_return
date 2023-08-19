@@ -13,5 +13,5 @@ root:
       drop
       1
 
-const 0 : i32
-return value : never
+function fully folded
+result: 0

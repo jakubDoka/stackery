@@ -1,0 +1,87 @@
+root:
+  uint = const:
+    mod0
+    . uint
+  Point = const:
+    struct:
+      sym0
+      inited decl
+      sym0
+      inited decl
+
+  main = const:
+    func:
+      sym0
+      1
+      inited decl
+      sym1
+      mut typed decl
+      sym4
+      . x
+      sym3
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym4
+      . y
+      2
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym4
+      drop scope 1 returns
+      mut inited decl
+      sym4
+      . x
+      sym1
+      mut typed decl
+      sym5
+      . x
+      3
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym5
+      . y
+      4
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym5
+      drop scope 1 returns
+      . x
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym4
+      . x
+      sym4
+      . y
+      +
+      drop scope 2 returns
+
+uninit : Prod#0
+decl mut : Prod#0
+sym0 : Prod#0
+. 0 : uint
+const 1 : uint
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym0 : Prod#0
+. 1 : uint
+const 2 : uint
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym0 : Prod#0
+drop scope 1 true : unit
+decl mut : Prod#0
+sym0 : Prod#0
+. 0 : uint
+uninit : Prod#0
+decl mut : Prod#0
+sym1 : Prod#0
+. 0 : uint
+const 3 : uint
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym1 : Prod#0
+. 1 : uint
+const 4 : uint
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym1 : Prod#0
+drop scope 1 true : unit
+. 0 : uint
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym0 : Prod#0
+. 0 : uint
+sym0 : Prod#0
+. 1 : uint
+binop + : uint
+drop scope 1 true : unit

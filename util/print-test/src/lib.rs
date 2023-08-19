@@ -14,6 +14,7 @@ pub fn function_name<T>(_: T) -> String {
 struct Config {
     cahce_dir: PathBuf,
     write_changes: bool,
+    accept_filter: Option<String>,
 }
 
 impl Config {
@@ -25,6 +26,7 @@ impl Config {
             write_changes: env::var("PRINT_TEST_WRITE_CHANGES")
                 .map(|s| s == "1")
                 .unwrap_or(false),
+            accept_filter: env::var("PRINT_TEST_ACCEPT_FILTER").ok(),
         }
     }
 }
@@ -140,9 +142,15 @@ pub fn case(name: &str, body: impl FnOnce(&str, &mut String)) {
             }
         }
 
-        write_file(&mut dump, &path, source, config.write_changes);
+        let write_changes = config.write_changes
+            && config
+                .accept_filter
+                .as_ref()
+                .map_or(true, |filter| dump.buffer.contains(filter));
 
-        if !std::thread::panicking() && !config.write_changes {
+        write_file(&mut dump, &path, source, write_changes);
+
+        if !std::thread::panicking() && !write_changes {
             panic!("test '{}' failed", name);
         }
     }

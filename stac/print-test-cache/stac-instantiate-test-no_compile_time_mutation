@@ -15,4 +15,5 @@ root:
       sym2
       drop scope 1 returns
 
-const 2 : i32
+function fully folded
+result: 2

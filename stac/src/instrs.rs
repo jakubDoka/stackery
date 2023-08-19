@@ -46,10 +46,6 @@ pub enum InstrKind {
     Call(ArgCount),
     Field(CtxSym),
 
-    // TODO: make flags for this
-    Ctor(FieldCount, CtorMode, HasType),
-    CtorField(CtxSym, HasValue),
-
     If(InstrRef),
     Else(InstrRef),
     EndIf,
@@ -197,6 +193,10 @@ impl Instrs {
     pub fn initial_ip_for(&self, id: DefId) -> InstrRepr {
         self.get_def(id).kind.initial_ip()
     }
+
+    pub fn get_fields(&self, inside: ModuleRef, fields: Fields) -> &[IdentStr] {
+        &self.decls_of(inside).idents[fields]
+    }
 }
 
 #[must_use]
@@ -306,18 +306,6 @@ pub mod instr_test_util {
             InstrKind::Return(true) => ctx.push_str("return value"),
             InstrKind::Return(false) => ctx.push_str("return"),
             InstrKind::Def(def) => display_def(&module.defs[def], instrs, module, indent + 1, ctx),
-            InstrKind::Ctor(field_count, spread, has_type) => {
-                ctx.push_str("ctor ");
-                ctx.push_str(field_count.to_string().as_str());
-                ctx.push(' ');
-                ctx.push_str(spread.to_string().as_str());
-                ctx.push_str(if has_type { " typed" } else { "" });
-            }
-            InstrKind::CtorField(name, is_inline) => {
-                ctx.push_str("ctor field ");
-                ctx.push_str(module.idents[name].as_str());
-                ctx.push_str(if is_inline { " inline" } else { "" });
-            }
         }
     }
 

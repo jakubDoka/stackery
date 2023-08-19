@@ -36,4 +36,5 @@ root:
       +
       drop scope 2 returns
 
-const 24 : i32
+function fully folded
+result: 24

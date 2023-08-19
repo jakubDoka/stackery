@@ -4,8 +4,10 @@ members = [
 	#"backend",
 	#"bf-shared",
 	"stac",
-	"stac/crane-backend",
 	"util/*",
+	"stac/crane-backend",
+]
+exclude = [
 ]
 resolver = "2"
 

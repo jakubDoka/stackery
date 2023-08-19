@@ -12,8 +12,8 @@ use pollster::FutureExt;
 
 use stac::{
     mini_alloc::{ArenaBase, DiverBase, IdentStr},
-    BuiltInType, Diagnostics, FileRef, Files, Instances, Instrs, Interpreter, LoaderFut, LoaderRes,
-    ModuleLoader, ModuleMeta, Modules, Resolved, Type, Types,
+    BuiltInType, DefKind, Diagnostics, FileRef, Files, Instances, Instrs, Interpreter, LoaderFut,
+    LoaderRes, ModuleLoader, ModuleMeta, Modules, Resolved, Span, Types,
 };
 use target_lexicon::PointerWidth;
 
@@ -24,8 +24,6 @@ mod test;
 pub struct Command {
     #[clap(long, short, default_value = "main.stac")]
     input: PathBuf,
-    #[clap(long, short)]
-    target: Option<String>,
     #[clap(long, short, default_value = "a")]
     output: String,
     #[clap(long, short = 'O')]
@@ -34,6 +32,10 @@ pub struct Command {
     dump_ir: bool,
     #[clap(long, short, default_value = "false")]
     run: bool,
+    #[clap(long, short)]
+    target: Option<String>,
+    #[clap(long, short, default_value = "")]
+    isa_params: String,
 }
 
 impl Command {
@@ -73,36 +75,39 @@ impl Command {
         };
 
         let mut instances = Instances::new();
-        let Resolved::Def(id) = Interpreter::new(
-            arch,
-            &mut instances,
-            &mut diags,
-            &modules,
-            &instrs,
-            &mut types,
-        )
-        .access_module_decl(meta.root(), entry) else {
-            todo!("error handling")
-        };
-
-        instances.project_entry(stac::Entry {
-            id,
-            inputs: Vec::new(),
-            ip: instrs.initial_ip_for(id),
-            ret: Type::BuiltIn(BuiltInType::I32),
-        });
-
-        let mut gen = Generator::new(target.clone());
-
-        while let Some((eid, entry)) = instances.next_entry() {
-            let mut interp = Interpreter::new(
+        macro interp() {
+            Interpreter::new(
                 arch,
                 &mut instances,
                 &mut diags,
                 &modules,
                 &instrs,
                 &mut types,
-            );
+            )
+        }
+
+        let Resolved::Def(id) = interp!().access_module_decl(meta.root(), entry) else {
+            todo!("error handling")
+        };
+
+        let def = instrs.get_def(id);
+        let body = instrs.body_of(id);
+        let DefKind::Func { signature_len, .. } = def.kind else {
+            todo!("error handling")
+        };
+        let (_, ret) = interp!().eval_signature(id, signature_len, body, Span::new(0, 0, id.ns));
+
+        instances.project_entry(stac::Entry {
+            id,
+            inputs: Vec::new(),
+            ip: instrs.initial_ip_for(id),
+            ret,
+        });
+
+        let mut gen = Generator::new(target.clone(), self.isa_params);
+
+        while let Some((eid, entry)) = instances.next_entry() {
+            let mut interp = interp!();
 
             let ir = match interp.eval(&entry) {
                 stac::EvalResult::Rt(ir) => ir,

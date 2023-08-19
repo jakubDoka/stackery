@@ -115,7 +115,7 @@ pub struct Span {
 }
 
 impl Span {
-    pub(crate) fn new(row: usize, col: usize, file_ref: FileRef) -> Self {
+    pub fn new(row: usize, col: usize, file_ref: FileRef) -> Self {
         Self {
             row: row as _,
             col: col as _,

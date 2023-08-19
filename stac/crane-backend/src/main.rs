@@ -1,4 +1,9 @@
-#![feature(return_position_impl_trait_in_trait, never_type, option_as_slice)]
+#![feature(
+    return_position_impl_trait_in_trait,
+    never_type,
+    option_as_slice,
+    decl_macro
+)]
 
 use clap::Parser;
 

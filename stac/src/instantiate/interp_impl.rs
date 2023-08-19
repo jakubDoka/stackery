@@ -1,10 +1,10 @@
-use std::{mem, ops::Deref};
+use std::{fmt::Display, mem, ops::Deref};
 
 use crate::{
-    lexer, ArgCount, BuiltInType, CtorMode, CtxSym, Def, DefId, DefKind, DefRef, EvalResult,
-    FieldCount, Finst, FinstKind, FrameSize, InstrBody, InstrKind, InstrRef, IntLit, LitKindAst,
-    ModuleDecl, ModuleRef, OpCode, Resolved, Returns, Severty, ShadowStore, Span, SubsTable, Sym,
-    Type, TypeRef, UnificationError,
+    lexer, ArgCount, BuiltInType, CtxSym, Def, DefId, DefKind, DefRef, EvalResult, Finst,
+    FinstKind, FrameSize, InstrBody, InstrKind, InstrRef, IntLit, LitKindAst, ModuleDecl,
+    ModuleRef, OpCode, Record, RecordKind, Resolved, Returns, Severty, ShadowStore, Span,
+    SubsTable, Sym, Type, TypeRef, UnificationError,
 };
 
 use super::{Entry, Interpreter, Ir, Layout, Local, SubsRepr};
@@ -45,7 +45,7 @@ impl<'ctx> Interpreter<'ctx> {
         EvalResult::Rt(res.remap_types())
     }
 
-    fn eval_signature(
+    pub fn eval_signature(
         &mut self,
         def: DefId,
         len: u16,
@@ -107,39 +107,41 @@ impl<'ctx> Interpreter<'ctx> {
             InstrKind::If(e) => self.eval_if(e, span, res),
             InstrKind::Rt => self.eval_rt(span, res),
             InstrKind::Return(r) => self.eval_return(r, span, res),
-            InstrKind::Def(def) => res.push_const_op(
-                Resolved::Def(DefId {
-                    ns: res.module,
-                    index: def,
-                }),
-                span,
-            ),
-            InstrKind::Ctor(field_count, mode, typed) => {
-                self.eval_ctor(field_count, mode, typed, span, res)
-            }
-            InstrKind::CtorField(name, inline) => self.eval_ctor_field(name, inline, span, res),
+            InstrKind::Def(def) => self.eval_def(def, span, res),
         }
     }
 
-    fn eval_ctor(
-        &mut self,
-        field_count: FieldCount,
-        mode: CtorMode,
-        typed: bool,
-        span: Span,
-        res: &mut Res,
-    ) {
-        if !typed {
-            todo!("support anon constructors");
-        }
+    fn eval_def(&mut self, id: DefRef, span: Span, res: &mut Res) {
+        let id = DefId {
+            ns: res.module,
+            index: id,
+        };
+        let def = self.instrs.get_def(id);
+        let DefKind::Record { kind, fields } = def.kind else {
+            res.push_const_op(Resolved::Def(id), span);
+            return;
+        };
+        let body = self.instrs.body_of(id);
+        let (field_types, _) = self.eval_signature(id, body.instrs.len() as _, body, span);
+        let rec = Record {
+            fields: self
+                .instrs
+                .get_fields(id.ns, fields)
+                .iter()
+                .cloned()
+                .zip(field_types)
+                .map(|(name, ty)| crate::RecordField { name, ty })
+                .collect(),
+        };
+        let rec_id = self.types.create_record();
+        self.types[rec_id] = rec;
+        res.push_const_op(Resolved::Type(Type::Record(kind, rec_id)), span);
     }
-
-    fn eval_ctor_field(&mut self, name: CtxSym, inline: bool, span: Span, res: &mut Res) {}
 
     fn eval_return(&mut self, r: Returns, span: Span, res: &mut Res) {
         let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Never));
         if r {
-            let ret_ty = res.copy_last_op();
+            let ret_ty = res.copy_last_op(false);
             self.unify_subs(ret_ty, res.return_ty, span, res);
         } else {
             let ret_ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Uint));
@@ -180,7 +182,7 @@ impl<'ctx> Interpreter<'ctx> {
             return;
         };
 
-        res.push_rt_op_and_instr(FinstKind::Const(value), dbg!(op.ty), op.span);
+        res.push_rt_op_and_instr(FinstKind::Const(value), op.ty, op.span);
 
         res.is_runtime = true;
     }
@@ -285,17 +287,23 @@ impl<'ctx> Interpreter<'ctx> {
     }
 
     fn eval_binop(&mut self, op: OpCode, span: Span, res: &mut Res) {
+        //self.log_stack("binop", span, res);log_sta
+
         let [mut rhs, mut lhs] = [res.stack.pop().unwrap(), res.stack.pop().unwrap()];
 
         match (rhs.value, lhs.value) {
             (Some(a), Some(b)) => self.fold_binop(op, span, rhs.ty, [b, a], res),
-            (l, r) => {
+            (r, l) => {
                 rhs.value = r;
                 lhs.value = l;
-                res.emmit_op_const(&rhs);
                 res.emmit_op_const(&lhs);
-                let ty = self.infer_binop_type(op, span, rhs.ty, lhs.ty, res);
-                res.push_rt_op_and_instr(FinstKind::BinOp(op), ty, span)
+                res.emmit_op_const(&rhs);
+                let ty = self.infer_binop_type(op, span, lhs.ty, rhs.ty, res);
+                if op == OpCode::Assign {
+                    res.push_rt_instr(FinstKind::BinOp(op), ty, span)
+                } else {
+                    res.push_rt_op_and_instr(FinstKind::BinOp(op), ty, span)
+                }
             }
         }
     }
@@ -492,23 +500,36 @@ impl<'ctx> Interpreter<'ctx> {
                     )
                     .annotation(Severty::Error, span, "of this")
                     .terminate();
-                res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unknown))
+                res.builtin_group(BuiltInType::Unknown)
             }
         }
     }
 
     fn eval_field(&mut self, field: CtxSym, span: Span, res: &mut Res) {
+        let field = &res.defs.idents[field];
+
         let operand = res.stack.pop().unwrap();
         let Some(value) = operand.value else {
-            self.diags.todo_error(
-                self.modules.files(),
-                span,
-                "runtime field access not supported yet",
-            );
+            let Type::Record(kind, id) = res.get_subs(operand.ty) else {
+                todo!(
+                    "error handling, {} is not a record",
+                    res.get_subs(operand.ty)
+                );
+            };
+
+            if kind != RecordKind::Prod {
+                todo!("handle other record types");
+            }
+
+            let record = &self.types[id];
+            let Some(field) = record.field_id_of(field.as_str()) else {
+                todo!("error handling");
+            };
+
+            let ty = res.intern_and_create_group(&record.fields[field as usize].ty);
+            res.push_rt_op_and_instr(FinstKind::Field(field), ty, span);
             return;
         };
-
-        let field = &res.defs.idents[field];
 
         match res.root_value(value) {
             Resolved::Type(t) => {
@@ -579,25 +600,35 @@ impl<'ctx> Interpreter<'ctx> {
 
     fn eval_decl(
         &mut self,
-        _decl_span: Span,
+        decl_span: Span,
         mutable: bool,
         inited: bool,
         typed: bool,
         res: &mut Res,
     ) {
-        if !inited {
-            todo!("uninited decls")
-        }
+        let provided_ty = if typed {
+            let Operand { value, .. } = res.stack.pop().unwrap();
+            let value = match value.map(|v| res.root_value(v)) {
+                Some(Resolved::Type(ty)) => ty,
+                v => todo!("error handling {v:?}"),
+            };
+            res.intern_and_create_group(&value)
+        } else {
+            res.builtin_group(BuiltInType::Unknown)
+        };
 
-        if typed {
-            todo!("typed decls")
-        }
+        let (value, ty, span) = if inited {
+            let Operand {
+                value, ty, span, ..
+            } = res.stack.pop().unwrap();
+            let ty = self.unify_subs(ty, provided_ty, span, res);
+            (value, ty, span)
+        } else {
+            res.push_rt_instr(FinstKind::Uninit, provided_ty, decl_span);
+            (None, provided_ty, decl_span)
+        };
 
-        let Operand {
-            value, ty, span, ..
-        } = res.stack.pop().unwrap();
-
-        let decl_value = if let Some(resolved) = value {
+        let value = if let Some(resolved) = value {
             DeclValue::Const(res.root_value(resolved))
         } else {
             res.ir.instrs.push(Finst {
@@ -620,7 +651,7 @@ impl<'ctx> Interpreter<'ctx> {
         };
 
         res.decls.push(Decl {
-            value: decl_value,
+            value,
             mutable,
             ty,
             span,
@@ -629,7 +660,7 @@ impl<'ctx> Interpreter<'ctx> {
 
     fn eval_drop(&mut self, span: Span, res: &mut Res) {
         if res.stack.pop().map_or(false, |o| o.value.is_none()) {
-            let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+            let ty = res.builtin_group(BuiltInType::Unit);
             res.ir.instrs.push(Finst {
                 kind: FinstKind::Drop,
                 ty,
@@ -640,7 +671,7 @@ impl<'ctx> Interpreter<'ctx> {
 
     fn eval_drop_scope(&mut self, size: FrameSize, ret: Returns, span: Span, res: &mut Res) {
         if ret {
-            res.copy_last_op();
+            res.copy_last_op(false);
         }
 
         let final_drop_size = res
@@ -653,21 +684,39 @@ impl<'ctx> Interpreter<'ctx> {
             return;
         }
 
-        let ty = res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Unit));
+        let ty = res.builtin_group(BuiltInType::Unit);
         res.ir.instrs.push(Finst {
             kind: FinstKind::DropScope(final_drop_size as FrameSize, ret),
             ty,
             span,
         });
+
+        //self.log_stack("drop scope", span, res);
     }
 
     fn end_control_flow(&mut self, ty: TypeRef, span: Span, res: &mut Res) -> TypeRef {
         if mem::take(&mut res.terminated) {
             res.intern_and_create_group(&Type::BuiltIn(BuiltInType::Never))
         } else {
-            let last_instr = res.copy_last_op();
+            let last_instr = res.copy_last_op(true);
             self.unify_subs(last_instr, ty, span, res)
         }
+    }
+
+    #[allow(unused)]
+    fn log_stack(&mut self, arg: impl Display, span: Span, res: &mut Res) {
+        let stack = res
+            .stack
+            .clone()
+            .into_iter()
+            .map(|op| res.get_subs(op.ty))
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>();
+        self.diags
+            .builder(self.modules.files())
+            .footer(Severty::Note, arg)
+            .annotation(Severty::Note, span, "here")
+            .footer(Severty::Note, format_args!("stack: {stack:?}"));
     }
 }
 
@@ -682,7 +731,6 @@ struct Res<'a> {
 
     decls: Vec<Decl>,
     stack: Vec<Operand>,
-    fields: Vec<CtxSym>,
     subs_table: SubsTable<SubsRepr>,
     type_mapping: ShadowStore<Type, SubsRepr, TypeRef>,
     ip: usize,
@@ -767,12 +815,14 @@ impl<'a> Res<'a> {
         }
     }
 
-    fn copy_last_op(&mut self) -> TypeRef {
+    fn copy_last_op(&mut self, no_const: bool) -> TypeRef {
         let mut op = self.stack.pop().unwrap();
         op.value = op.value.map(|v| OperandValue::Const(self.root_value(v)));
         self.emmit_op_const(&op);
         let ty = op.ty;
-        op.value = None;
+        if no_const {
+            op.value = None;
+        }
         self.stack.push(op);
         ty
     }
@@ -812,6 +862,10 @@ impl<'a> Res<'a> {
             ty,
             span,
         });
+    }
+
+    fn push_rt_instr(&mut self, kind: FinstKind, ty: TypeRef, span: Span) {
+        self.ir.instrs.push(Finst { kind, ty, span });
     }
 }
 

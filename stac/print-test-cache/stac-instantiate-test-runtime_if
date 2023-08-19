@@ -20,13 +20,13 @@ root:
       endif
 
 const true : bool
-if : unit
+if : i32
 const true : bool
-if : unit
+if : i32
 const 0 : i32
-else : unit
+else : i32
 const 1 : i32
-endif : unit
-else : unit
+endif : i32
+else : i32
 const 2 : i32
-endif : unit
+endif : i32

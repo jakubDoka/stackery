@@ -2,14 +2,14 @@ use mini_alloc::IdentStr;
 
 use crate::{
     parser::expr::{CallAst, DeclAst, FuncAst, IdentAst, LitAst},
-    ArgCount, BinaryAst, BlockAst, CtorAst, DefKind, DefRef, ExprAst, FieldAst, FrameSize,
-    FuncArgAst, IfAst, ModItemAst, ModuleRef, OpAst, OpCode, RecordAst, RecordItemAst, ReturnAst,
-    Severty, Span, Sym, UnaryAst, UnitAst,
+    ArgCount, BinaryAst, BlockAst, CtorAst, CtorField, DefKind, DefRef, ExprAst, FieldAst,
+    FrameSize, FuncArgAst, IfAst, ModItemAst, ModuleRef, OpAst, OpCode, RecordAst, RecordItemAst,
+    ReturnAst, Severty, Span, Sym, UnaryAst, UnitAst,
 };
 
 use super::{
-    CtorMode, CtxSym, Def, Instr, InstrBodyBuilder, InstrKind, InstrRef, InstrRepr,
-    ModuleDeclBuilder, ScopeFrame,
+    CtxSym, Def, Instr, InstrBodyBuilder, InstrKind, InstrRef, InstrRepr, ModuleDeclBuilder,
+    ScopeFrame,
 };
 
 pub enum DefAst<'arena> {
@@ -116,6 +116,7 @@ impl<'ctx> super::InstrBuilder<'ctx> {
         let base_frame = ScopeFrame::new(&mut res.scope);
 
         let names = ast.fields.iter().map(|f| f.name.ident.clone());
+        // TODO: this can cause nasty issues
         let fields = res.module.idents.extend(names);
 
         for RecordItemAst { name, value, .. } in ast.fields {
@@ -198,34 +199,50 @@ impl<'ctx> super::InstrBuilder<'ctx> {
     fn build_ctor<'arena>(
         &mut self,
         CtorAst {
-            brace: _,
+            brace,
             ty,
             fill,
             fields,
         }: &CtorAst<'arena>,
         res: &mut Res<'arena>,
     ) -> Option<()> {
-        for field in fields.iter() {
-            if let Some(expr) = &field.value {
-                self.build_expr(expr, res)?;
-            }
-            let name = res.intern_ident(&field.name.ident);
-            res.push_instr(
-                InstrKind::CtorField(name, field.value.is_none()),
-                field.name.span,
-            );
-        }
-
-        if let Some(Some(expr)) = fill {
-            self.build_expr(expr, res)?;
-        }
-
-        let fill_mode = CtorMode::from(fill);
         self.build_unit(ty, res)?;
         res.push_instr(
-            InstrKind::Ctor(fields.len() as _, fill_mode, true),
-            ty.span(),
+            InstrKind::Decl {
+                mutable: true,
+                inited: false,
+                typed: true,
+            },
+            *brace,
         );
+
+        let sym = res.scope.len() as Sym;
+        res.scope.push(IdentAst {
+            ident: Default::default(),
+            span: *brace,
+        });
+
+        if fill.is_some() {
+            todo!("handle filling");
+        }
+
+        for CtorField { name, value } in *fields {
+            res.push_instr(InstrKind::Sym(sym), name.span);
+            let field_name = res.intern_ident(&name.ident);
+            res.push_instr(InstrKind::Field(field_name), name.span);
+
+            if let Some(value) = value {
+                self.build_expr(value, res)?;
+            } else {
+                self.build_ident(name, res)?;
+            }
+
+            res.push_instr(InstrKind::BinOp(OpCode::Assign), name.span);
+        }
+
+        res.scope.pop().unwrap();
+        res.push_instr(InstrKind::Sym(sym), *brace);
+        res.push_instr(InstrKind::DropScope(1, true), *brace);
 
         Some(())
     }

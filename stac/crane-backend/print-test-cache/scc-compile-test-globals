@@ -1,0 +1,3 @@
+error: entry point must be a function, found constant `42`
+err: 0, warn: 0
+

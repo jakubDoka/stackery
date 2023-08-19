@@ -5,7 +5,7 @@ use std::{
 
 use mini_alloc::IdentStr;
 
-use crate::{Const, DefaultRef, RecordKind, Ref, VecStore};
+use crate::{Const, DefaultRef, FieldIndex, RecordKind, Ref, VecStore};
 
 mod unify_impl;
 
@@ -14,6 +14,14 @@ pub type RecordInst = Ref<Record, RecordRepr>;
 
 pub struct Record {
     pub fields: Vec<RecordField>,
+}
+impl Record {
+    pub fn field_id_of(&self, name_ident: &str) -> Option<FieldIndex> {
+        self.fields
+            .iter()
+            .position(|field| field.name.as_str() == name_ident)
+            .map(|index| index as _)
+    }
 }
 
 pub struct RecordField {
@@ -82,7 +90,7 @@ pub enum UnificationError {
     Incompatible,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
     BuiltIn(BuiltInType),
     Record(RecordKind, RecordInst),
@@ -100,6 +108,12 @@ impl Type {
     pub fn unify(&self, other: &Self) -> Result<Self, UnificationError> {
         match (self, other) {
             (&Self::BuiltIn(lhs), &Self::BuiltIn(rhs)) => lhs.unify(rhs).map(Self::BuiltIn),
+            (Self::BuiltIn(BuiltInType::Unknown), a) | (a, Self::BuiltIn(BuiltInType::Unknown)) => {
+                Ok(a.clone())
+            }
+            (&Self::Record(_, lhs), &Self::Record(_, rhs)) if lhs == rhs => {
+                Err(UnificationError::Equal)
+            }
             _ => Err(UnificationError::Incompatible),
         }
     }

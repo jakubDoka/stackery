@@ -28,7 +28,7 @@ block2:
     v6 = iconst.i32 2
     v7 = isub.i32 v0, v6  ; v6 = 2
     v8 = call fn0(v7)
-    v9 = iadd v8, v5
+    v9 = iadd v5, v8
     jump block3(v9)
 
 block3(v10: i32):
@@ -45,7 +45,7 @@ block0:
     v1 = call fn0(v0)  ; v0 = 9
     v2 = iconst.i32 8
     v3 = call fn0(v2)  ; v2 = 8
-    v4 = iadd v3, v1
+    v4 = iadd v1, v3
     return v4
 }
 

@@ -21,6 +21,7 @@ fn perform_test(name: &str, sources: &str, ctx: &mut String) {
         object_only: false,
         dump_ir: true,
         run: true,
+        isa_params: "".into(),
     };
     let mut stdout = Vec::<u8>::new();
 
@@ -69,5 +70,43 @@ stac::print_cases! { perform_test:
         let foo = goo() - 9
         let goo = fn(): i32 43 + 8
         let main = fn(): i32 foo
+    ";
+
+    bit_struct "
+        let i32 = :{bi}.i32
+        let Point = struct { x: i32 y: i32 }
+        let main = fn(): i32 {
+            let x = 1
+            let p = Point.{ x, y: 2 }
+            p.y + p.x
+        }
+    ";
+    stack_struct "
+        let uint = :{bi}.uint
+        let Point = struct { x: uint y: uint }
+        let main = fn(): uint {
+            let x = 1
+            let p = Point.{ x, y: 2 }
+            p.x + p.y
+        }
+    ";
+    assign_stack "
+        let uint = :{bi}.uint
+        let Point = struct { x: uint y: uint }
+        let main = fn(): uint {
+            let x = 1
+            let mut p = Point.{ x, y: 2 }
+            p.x = Point.{ x: 3, y: 4 }.x
+            p.x + p.y
+        }
+    ";
+    copy_stack "
+        let uint = :{bi}.uint
+        let Point = struct { x: uint y: uint }
+        let main = fn(): uint {
+            let mut p = Point.{ x: 1, y: 2 }
+            p = Point.{ x: 3, y: 4 }
+            p.x + p.y
+        }
     ";
 }

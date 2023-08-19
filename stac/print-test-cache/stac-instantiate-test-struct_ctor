@@ -1,0 +1,55 @@
+root:
+  i32 = const:
+    mod0
+    . i32
+  main = const:
+    func:
+      sym0
+      struct:
+        sym0
+        inited decl
+        sym0
+        inited decl
+
+      inited decl
+      1
+      inited decl
+      sym2
+      mut typed decl
+      sym4
+      . x
+      sym3
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym4
+      . y
+      2
+      (|\+|-|\*|/|%|<<|>>|&|\||\^)=
+      sym4
+      drop scope 1 returns
+      inited decl
+      sym4
+      . x
+      sym4
+      . y
+      +
+      drop scope 3 returns
+
+uninit : Prod#0
+decl mut : Prod#0
+sym0 : Prod#0
+. 0 : i32
+const 1 : i32
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym0 : Prod#0
+. 1 : i32
+const 2 : i32
+binop (|\+|-|\*|/|%|<<|>>|&|\||\^)= : unit
+sym0 : Prod#0
+drop scope 1 true : unit
+decl : Prod#0
+sym0 : Prod#0
+. 0 : i32
+sym0 : Prod#0
+. 1 : i32
+binop + : i32
+drop scope 1 true : unit

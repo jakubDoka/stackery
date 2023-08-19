@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::{BuiltInType, RecordKind, Type, Types};
+use crate::{BuiltInType, FieldIndex, RecordKind, Type, Types};
 
 type LayoutRepr = u32;
 
@@ -33,6 +33,39 @@ impl Layout {
         Self::decode(self.repr).1
     }
 
+    #[track_caller]
+    pub fn field_offset(
+        field: FieldIndex,
+        ty: Type,
+        ptr_layout: Self,
+        types: &Types,
+    ) -> LayoutRepr {
+        let Type::Record(kind, id) = ty else {
+            unreachable!("field_offset called on non-record type {ty:?}")
+        };
+
+        let record = &types[id];
+
+        let layout = match kind {
+            RecordKind::Prod => {
+                let mut layout = Self::ZERO;
+                for field in record.fields.iter().take(field as usize) {
+                    let field_layout = Self::from_ty(&field.ty, ptr_layout, types);
+                    (layout, _) = layout.extend(field_layout);
+                }
+                layout
+            }
+            RecordKind::Sum | RecordKind::Max => Self::ZERO,
+        };
+
+        let flag = match kind {
+            RecordKind::Max | RecordKind::Prod => Layout::ZERO,
+            RecordKind::Sum => Self::sun_flag_layout(record.fields.len()),
+        };
+
+        flag.extend(layout).0.size()
+    }
+
     /// extend this layout with another layout, returns the new layout and appended layout offset
     fn extend(self, other: Self) -> (Self, LayoutRepr) {
         let (align, size) = Self::decode(self.repr);
@@ -41,7 +74,7 @@ impl Layout {
         let align = align.max(other_align);
 
         let exp_other_align = Self::expand_align(other_align);
-        let padding = exp_other_align - (size & exp_other_align - 1);
+        let padding = exp_other_align - (size & exp_other_align - 1) & exp_other_align - 1;
         let offset = size + padding;
         let size = offset + other_size;
 
@@ -134,6 +167,10 @@ impl Layout {
             257..=65536 => Self::new(1, 2),
             _ => Self::new(2, 4),
         }
+    }
+
+    pub fn fits_register(&self, arch: Layout) -> bool {
+        self.size() <= arch.size()
     }
 }
 

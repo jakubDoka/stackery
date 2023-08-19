@@ -194,8 +194,8 @@ impl<'ctx> Interpreter<'ctx> {
 mod test {
 
     use crate::{
-        print_cases, BuiltInType, DefId, Diagnostics, EvalResult, Finst, Instrs, Interpreter,
-        Layout, LoaderMock, Modules, Resolved, Type, Types,
+        print_cases, BuiltInType, DefId, DefKind, Diagnostics, EvalResult, Finst, Instrs,
+        Interpreter, Layout, LoaderMock, Modules, Resolved, Span, Type, Types,
     };
 
     fn perform_test(_: &str, source: &str, ctx: &mut String) -> Option<()> {
@@ -237,11 +237,18 @@ mod test {
             return None;
         };
 
+        let def = instrs.get_def(id);
+        let body = instrs.body_of(id);
+        let DefKind::Func { signature_len, .. } = def.kind else {
+            todo!("error handling")
+        };
+        let (_, ret) = interp.eval_signature(id, signature_len, body, Span::new(0, 0, id.ns));
+
         let ir = match interp.eval(&crate::Entry {
             id,
             ip: instrs.initial_ip_for(id),
             inputs: vec![],
-            ret: Type::BuiltIn(BuiltInType::I32),
+            ret,
         }) {
             EvalResult::Rt(ir) => ir,
             EvalResult::Const(res) => {
@@ -413,9 +420,17 @@ mod test {
 
                 let x = 1
                 let p = Point.{ x, y: 2 }
-                let p = Point.{ x, ..p }
-                let p = Point.{..}
-                p.x
+                p.x + p.y
+            }
+        ";
+        assign_stack "
+            let uint = :{bi}.uint
+            let Point = struct { x: uint y: uint }
+            let main = fn(): uint {
+                let x = 1
+                let mut p = Point.{ x, y: 2 }
+                p.x = Point.{ x: 3, y: 4 }.x
+                p.x + p.y
             }
         ";
     }

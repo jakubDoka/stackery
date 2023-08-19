@@ -1,6 +1,6 @@
 use cranelift_codegen::{
     ir,
-    settings::{self, Flags},
+    settings::{self, Configurable, Flags},
 };
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -18,10 +18,17 @@ pub struct Generator {
 }
 
 impl Generator {
-    pub fn new(target: Triple) -> Self {
+    pub fn new(target: Triple, isa_params: String) -> Self {
+        let mut builder = settings::builder();
+        for param in isa_params.split_whitespace() {
+            match param.split_once("=") {
+                Some((key, value)) => builder.set(key, value).unwrap(),
+                None => builder.enable(param).unwrap(),
+            }
+        }
         let isa = cranelift_codegen::isa::lookup(target.clone())
             .unwrap()
-            .finish(Flags::new(settings::builder()))
+            .finish(Flags::new(builder))
             .unwrap();
         let module = ObjectModule::new(
             ObjectBuilder::new(
